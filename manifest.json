@@ -1,0 +1,21 @@
+{
+  "name": "Cash Country Studio Mobile",
+  "short_name": "Studio Cash",
+  "description": "Enregistrement vocal hors-ligne pour Cash Country Live",
+  "start_url": "/?mode=studio",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='80' fill='%23000'/><rect x='40' y='40' width='432' height='432' rx='60' fill='%23dc2626'/><text y='330' x='256' text-anchor='middle' font-size='260' fill='white'>🎤</text></svg>",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["music", "productivity"],
+  "lang": "fr"
+}
