@@ -10,7 +10,7 @@
  * - MODULE_OFFLINE : erreur claire si module absent hors-ligne (pas de loop)
  */
 
-const CACHE = 'studio-v32-fix'; // v32: fix install Babel — vide cache corrompu v31
+const CACHE = 'studio-v33-explicit-libs'; // v32: fix install Babel — vide cache corrompu v31
 
 const CRITICAL = [
   '/index-pwa.html',  // PWA iOS — fichier principal pour iPhone
@@ -116,7 +116,7 @@ async function cacheOneWithRetry(cache, url, mode, retries = 3) {
 }
 
 self.addEventListener('install', event => {
-  console.log('[SW v32] Installation...');
+  console.log('[SW v33] Installation...');
   event.waitUntil(
     caches.open(CACHE).then(async cache => {
       // Libs critiques avec retry — Railway peut être lent au démarrage
@@ -125,7 +125,7 @@ self.addEventListener('install', event => {
       await Promise.allSettled(USEFUL.map(u => cacheOne(cache, u)));
       // Vérifier que babel est bien caché
       const babelCached = await cache.match('/libs/babel.min.js');
-      console.log('[SW v32] Install terminé — Babel:', babelCached ? '✅' : '❌ ABSENT');
+      console.log('[SW v33] Install terminé — Babel:', babelCached ? '✅' : '❌ ABSENT');
     }).then(() => self.skipWaiting())
   );
 });

@@ -15,18 +15,44 @@ app.use((req, res, next) => {
   next();
 });
 
-// Libs locales React/Babel avec cache long
-app.use('/libs', (req, res, next) => {
-  res.setHeader('Cache-Control', 'public, max-age=86400');
-  next();
-}, express.static(path.join(ROOT, 'public/libs')));
+// ── Libs locales — routes EXPLICITES (évite le wildcard SPA) ─────────────────
+// Servi avec bon Content-Type JS garanti — plus fiable qu'express.static
+const LIBS = {
+  'babel.min.js':          'application/javascript',
+  'react.esm.js':          'application/javascript',
+  'react-dom.esm.js':      'application/javascript',
+  'react-dom-client.esm.js': 'application/javascript',
+  'lucide-react.esm.js':   'application/javascript',
+  'scheduler.esm.js':      'application/javascript',
+};
+
+Object.entries(LIBS).forEach(([filename, mime]) => {
+  app.get(`/libs/${filename}`, (req, res) => {
+    const filePath = path.join(ROOT, 'public', 'libs', filename);
+    if (!fs.existsSync(filePath)) {
+      console.error(`[LIBS] ❌ Fichier manquant: ${filePath}`);
+      return res.status(404).json({ error: `${filename} not found`, path: filePath });
+    }
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('X-Served-By', 'explicit-route');
+    res.sendFile(filePath);
+  });
+});
+
+// Diagnostic — liste les libs disponibles
+app.get('/libs/', (req, res) => {
+  const libsDir = path.join(ROOT, 'public', 'libs');
+  const exists = fs.existsSync(libsDir);
+  const files = exists ? fs.readdirSync(libsDir) : [];
+  res.json({ libsDir, exists, files });
+});
 
 // Fichiers statiques (sw-studio.js, manifest.json, recorder-worklet.js, env_config.js)
 app.use(express.static(ROOT, {
-  index: false, // on gère / manuellement
+  index: false,
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('sw-studio.js')) {
-      // Service worker : pas de cache pour qu'il se mette à jour
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Service-Worker-Allowed', '/');
     }
@@ -38,7 +64,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(ROOT, 'index-pwa.html'));
 });
 
-// API songs — retourne le songs.json local (snapshot)
+// API songs
 app.get('/api/songs', (req, res) => {
   const songsPath = path.join(ROOT, 'cashcountry-data/json/songs.json');
   if (fs.existsSync(songsPath)) {
@@ -53,19 +79,12 @@ app.get('/api/songs', (req, res) => {
   }
 });
 
-// API local-ip — retourne null (pas de Mac connecté)
-// La PWA l'utilise juste pour savoir si le Mac est dispo
+// API local-ip
 app.get('/api/local-ip', (req, res) => {
-  res.json({
-    ip: null,
-    port: null,
-    url: null,
-    httpsUrl: null,
-    studioUrl: null
-  });
+  res.json({ ip: null, port: null, url: null, httpsUrl: null, studioUrl: null });
 });
 
-// HEAD /api/songs — ping pour tester la connexion
+// HEAD /api/songs — ping
 app.head('/api/songs', (req, res) => {
   res.sendStatus(200);
 });
@@ -76,5 +95,15 @@ app.get('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Cash Country Studio Mobile — serveur démarré sur port ${PORT}`);
+  // Diagnostic au démarrage — vérifie que les libs sont bien là
+  const libsDir = path.join(ROOT, 'public', 'libs');
+  const libsExist = fs.existsSync(libsDir);
+  const libFiles = libsExist ? fs.readdirSync(libsDir) : [];
+  console.log(`Cash Country Studio Mobile — port ${PORT}`);
+  console.log(`[LIBS] Dossier: ${libsDir}`);
+  console.log(`[LIBS] Fichiers: ${libsExist ? libFiles.join(', ') : '❌ DOSSIER MANQUANT'}`);
+  if (!libsExist || !libFiles.includes('babel.min.js')) {
+    console.error('[LIBS] ❌ CRITIQUE: babel.min.js absent — la PWA ne fonctionnera pas');
+    console.error('[LIBS] Vérifier que public/libs/ est commité dans le repo GitHub');
+  }
 });
