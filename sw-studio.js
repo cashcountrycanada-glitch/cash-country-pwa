@@ -1,17 +1,16 @@
 /**
- * sw-studio.js v34 — fix cacheOne bypass SW interceptor
+ * sw-studio.js v35 — fix libs ESM : esm.sh au lieu de /libs/*.esm.js locaux
+ * Correctif: "Identifier 'X' has already been declared" causé par dynamic import()
+ * sur des fichiers ESM locaux qui s'exécutent dans le scope global de la page.
+ * Solution: toutes les libs React/lucide/scheduler passent maintenant par esm.sh
+ * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v34-bypass-sw'; // v34: cacheOne utilise URL absolue + no-store pour bypasser l'ancien SW
+const CACHE = 'studio-v35-esm-fix'; // v35: LIB_MAP pointe vers esm.sh — fix "Identifier already declared"
 
 const CRITICAL = [
   '/index-pwa.html',
   '/libs/babel.min.js',
-  '/libs/react.esm.js',
-  '/libs/react-dom.esm.js',
-  '/libs/react-dom-client.esm.js',
-  '/libs/lucide-react.esm.js',
-  '/libs/scheduler.esm.js',
   '/manifest.json',
   '/sw-studio.js',
   '/recorder-worklet.js',
@@ -29,6 +28,7 @@ const EXTERNAL_LIBS = [
   'https://esm.sh/react-dom@19.0.0',
   'https://esm.sh/react-dom@19.0.0/client',
   'https://esm.sh/lucide-react@0.462.0',
+  'https://esm.sh/scheduler@0.23.2',
   'https://esm.sh/@google/genai@1.35.0',
   'https://esm.sh/jszip@3.10.1',
   'https://esm.sh/pixi.js@8.1.0',
@@ -51,11 +51,8 @@ const NO_CORS_PASSTHROUGH = [
 
 const LOCAL_LIBS = [
   '/libs/babel.min.js',
-  '/libs/react.esm.js',
-  '/libs/react-dom.esm.js',
-  '/libs/react-dom-client.esm.js',
-  '/libs/lucide-react.esm.js',
-  '/libs/scheduler.esm.js',
+  // Note v35: react/react-dom/lucide-react/scheduler servis par esm.sh — pas depuis /libs/
+  // Les fichiers /libs/*.esm.js restent présents mais ne sont plus chargés dynamiquement
 ];
 
 const SOURCE_EXTENSIONS = /\.(tsx|ts|js|css|json)$/i;
