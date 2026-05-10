@@ -85,6 +85,8 @@ const EXTERNAL_DOMAINS = [
 // On ne peut pas mettre en cache proprement, on laisse passer sans interception.
 const NO_CORS_PASSTHROUGH = [
   'cdn.tailwindcss.com',
+  'fonts.googleapis.com',
+  'fonts.gstatic.com',
 ];
 
 // Libs locales — servis par le Mac, cachés comme assets critiques

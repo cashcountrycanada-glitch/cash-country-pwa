@@ -266,6 +266,8 @@
 
         async function bootstrap() {
             const _bootStart = Date.now();
+            // macOnline est résolu en Phase 3 — false par défaut (Railway = pas de Mac)
+            let macOnline = false;
             try {
                 diag("INITIALIZING_CORE");
                 if (typeof Babel === 'undefined') throw new Error("Babel indisponible.");
@@ -665,7 +667,7 @@ const depRegex = /import[\s\S]*?from\s+['"](.*?)['"]|require\s*\(\s*['"](.*?)['"
             // ── PHASE 3 : Détecter le Mac ─────────────────────────────────
             diag('── Détection Mac...');
             diag('MAC_DETECT_START');
-            const macOnline = await detectMac();
+            macOnline = await detectMac();
             diag(macOnline ? '✅ MAC_ONLINE — mode connecté' : '📵 MAC_OFFLINE — mode autonome');
             if (isIOSDevice) {
               showMacBanner(macOnline ? 'online' : 'offline');
