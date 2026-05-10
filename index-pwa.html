@@ -298,7 +298,13 @@
                     diag('✅ Toutes les libs chargées');
                 }
                 
-                window.React = moduleCache["react"].exports.default;
+                // ESM depuis esm.sh : exports = le module complet, .default peut être absent
+                const _reactMod = moduleCache["react"].exports;
+                window.React = _reactMod.default ?? _reactMod;
+                // Assurer que les hooks sont accessibles globalement
+                if (!window.React.useState && _reactMod.useState) {
+                    Object.assign(window.React, _reactMod);
+                }
                 
                 diag("STARTING_BOOT_SEQUENCE");
 
