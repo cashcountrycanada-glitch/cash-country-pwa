@@ -1,30 +1,17 @@
 /**
- * sw-studio.js v11 — Service Worker auto-réparant Cash Country Studio Mobile
- *
- * ARCHITECTURE v11 :
- * - Install NON-BLOQUANT : skipWaiting même si cache incomplet (Mac éteint OK)
- * - Lazy Cache : chaque fetch réseau réussi est mis en cache automatiquement
- * - CHECK_CACHE : le kernel peut demander quels fichiers CRITICAL manquent
- * - REPAIR_CACHE : re-télécharge les manquants quand Mac disponible
- * - ?mode=studio : pathname "/" → toujours index.html (SPA routing correct)
- * - MODULE_OFFLINE : erreur claire si module absent hors-ligne (pas de loop)
+ * sw-studio.js v34 — fix cacheOne bypass SW interceptor
  */
 
-const CACHE = 'studio-v33-explicit-libs'; // v32: fix install Babel — vide cache corrompu v31
+const CACHE = 'studio-v34-bypass-sw'; // v34: cacheOne utilise URL absolue + no-store pour bypasser l'ancien SW
 
 const CRITICAL = [
-  '/index-pwa.html',  // PWA iOS — fichier principal pour iPhone
-  // ── Libs locales — autonomie complète sans CDN ─────────────────────────
+  '/index-pwa.html',
   '/libs/babel.min.js',
   '/libs/react.esm.js',
   '/libs/react-dom.esm.js',
   '/libs/react-dom-client.esm.js',
   '/libs/lucide-react.esm.js',
   '/libs/scheduler.esm.js',
-  // ── Fichiers Railway uniquement ─────────────────────────────────────────
-  // NOTE: Les fichiers .tsx/.ts des composants StudioMobile sont embarqués
-  // dans index-pwa.html (système de fichiers virtuel Babel).
-  // Ils n'existent PAS comme fichiers séparés sur Railway — ne pas les lister ici.
   '/manifest.json',
   '/sw-studio.js',
   '/recorder-worklet.js',
@@ -32,12 +19,10 @@ const CRITICAL = [
 ];
 
 const USEFUL = [
-  '/lame.min.js',  // encodeur MP3 pour export (optionnel)
+  '/lame.min.js',
 ];
 
 const EXTERNAL_LIBS = [
-  // Babel/React/Lucide sont maintenant servis localement via /libs/
-  // Ces CDN restent en cache comme FALLBACK si /libs/ est indisponible.
   'https://unpkg.com/@babel/standalone@7.23.10/babel.min.js',
   'https://cdn.tailwindcss.com',
   'https://esm.sh/react@19.0.0',
@@ -58,15 +43,12 @@ const EXTERNAL_DOMAINS = [
   'fonts.gstatic.com',
 ];
 
-// CDN qui ne supportent PAS CORS — fetch en mode 'no-cors' (réponse opaque)
-// On ne peut pas mettre en cache proprement, on laisse passer sans interception.
 const NO_CORS_PASSTHROUGH = [
   'cdn.tailwindcss.com',
   'fonts.googleapis.com',
   'fonts.gstatic.com',
 ];
 
-// Libs locales — servis par le Mac, cachés comme assets critiques
 const LOCAL_LIBS = [
   '/libs/babel.min.js',
   '/libs/react.esm.js',
@@ -78,19 +60,20 @@ const LOCAL_LIBS = [
 
 const SOURCE_EXTENSIONS = /\.(tsx|ts|js|css|json)$/i;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
 async function broadcast(msg) {
   const clients = await self.clients.matchAll({ includeUncontrolled: true });
   clients.forEach(c => c.postMessage(msg));
 }
 
+// ── cacheOne — bypasse l'ancien SW avec URL absolue + no-store ────────────────
+// CRITIQUE: sans ça, un ancien SW intercepte les fetch et retourne MODULE_OFFLINE
 async function cacheOne(cache, url, mode) {
   try {
-    const res = await fetch(url, mode ? { mode } : undefined);
+    const absoluteUrl = url.startsWith('http') ? url : (self.location.origin + url);
+    const fetchOpts = { cache: 'no-store' };
+    if (mode) fetchOpts.mode = mode;
+    const res = await fetch(absoluteUrl, fetchOpts);
     if (res.ok) {
-      // Ne jamais cacher du HTML à la place d'un fichier JS/TS/CSS
-      // (Mac éteint → Express Railway retourne 404 HTML pour /libs/)
       const ct = res.headers.get('content-type') || '';
       const isScript = url.match(/\.(js|ts|tsx|css|json)$/i);
       if (isScript && ct.includes('text/html')) {
@@ -100,32 +83,32 @@ async function cacheOne(cache, url, mode) {
       await cache.put(url, res);
       return true;
     }
-  } catch {}
+  } catch(e) {
+    console.warn('[SW] fetch échoué pour', url, ':', e.message);
+  }
   return false;
 }
 
-// ── Install — NON-BLOQUANT ────────────────────────────────────────────────────
+// ── Install ───────────────────────────────────────────────────────────────────
 async function cacheOneWithRetry(cache, url, mode, retries = 3) {
   for (let i = 0; i < retries; i++) {
     const ok = await cacheOne(cache, url, mode);
     if (ok) return true;
     if (i < retries - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)));
   }
-  console.warn('[SW] Échec après', retries, 'tentatives:', url);
+  console.warn('[SW v34] Échec après', retries, 'tentatives:', url);
   return false;
 }
 
 self.addEventListener('install', event => {
-  console.log('[SW v33] Installation...');
+  console.log('[SW v34] Installation — URL absolue + no-store pour bypasser ancien SW');
   event.waitUntil(
     caches.open(CACHE).then(async cache => {
-      // Libs critiques avec retry — Railway peut être lent au démarrage
       await Promise.allSettled(CRITICAL.map(u => cacheOneWithRetry(cache, u)));
       await Promise.allSettled(EXTERNAL_LIBS.map(u => cacheOne(cache, u, 'cors')));
       await Promise.allSettled(USEFUL.map(u => cacheOne(cache, u)));
-      // Vérifier que babel est bien caché
       const babelCached = await cache.match('/libs/babel.min.js');
-      console.log('[SW v33] Install terminé — Babel:', babelCached ? '✅' : '❌ ABSENT');
+      console.log('[SW v34] Install terminé — Babel:', babelCached ? '✅' : '❌ ABSENT');
     }).then(() => self.skipWaiting())
   );
 });
@@ -151,13 +134,10 @@ self.addEventListener('fetch', event => {
   if (url.pathname.startsWith('/api/studio/upload') ||
       url.pathname.startsWith('/api/studio/recording')) return;
 
-  // CDN no-cors (Tailwind CDN etc.) — laisser passer sans interception SW
-  // Ces CDN ne supportent pas CORS, le SW ne peut pas les mettre en cache proprement.
   if (NO_CORS_PASSTHROUGH.some(d => url.hostname === d || url.hostname.endsWith('.' + d))) {
-    return; // le navigateur gère directement
+    return;
   }
 
-  // CDN externes — Cache First + lazy cache
   if (EXTERNAL_DOMAINS.some(d => url.hostname === d || url.hostname.endsWith('.' + d))) {
     event.respondWith(
       caches.match(req).then(cached => {
@@ -176,7 +156,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // /api/media — Cache First pour les fichiers audio
   if (url.pathname.startsWith('/api/media')) {
     event.respondWith(
       caches.match(req).then(cached => {
@@ -197,7 +176,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // /api/songs — Network First avec timeout 3s + fallback cache
   if (url.pathname === '/api/songs') {
     event.respondWith(
       Promise.race([
@@ -213,7 +191,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Autres /api/ — Network Only
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(
       fetch(req).catch(() => new Response(
@@ -224,7 +201,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Page principale PWA — sert index-pwa.html en cache-first
   if (url.pathname === '/' || url.pathname === '/index-pwa.html' || url.pathname === '/index.html') {
     event.respondWith(
       caches.match('/index-pwa.html').then(cached => {
@@ -241,12 +217,10 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Fichiers source — Cache First + lazy cache + erreur claire si absent hors-ligne
   if (SOURCE_EXTENSIONS.test(url.pathname)) {
     event.respondWith(
       caches.match(req).then(async cached => {
         if (cached) {
-          // Lazy update en arrière-plan — mais rejeter si le serveur retourne du HTML (404 Mac)
           fetch(req).then(res => {
             if (res.ok) {
               const ct = res.headers.get('content-type') || '';
@@ -261,7 +235,6 @@ self.addEventListener('fetch', event => {
           const res = await fetch(req);
           if (res.ok) {
             const ct = res.headers.get('content-type') || '';
-            // Ne pas cacher du HTML pour un fichier JS/TS/CSS (Mac éteint → 404 HTML)
             if (!ct.includes('text/html')) {
               caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
               return res;
@@ -269,7 +242,6 @@ self.addEventListener('fetch', event => {
             console.warn('[SW] HTML reçu pour', url.pathname, '— ignoré');
           }
         } catch {}
-        // Fallback .tsx → .ts : si le fichier .tsx n'existe pas, essayer .ts
         if (url.pathname.endsWith('.tsx')) {
           const tsUrl = url.origin + url.pathname.replace(/\.tsx$/, '.ts');
           try {
@@ -286,8 +258,7 @@ self.addEventListener('fetch', event => {
             }
           } catch {}
         }
-        // Module absent du cache ET hors-ligne — erreur JS claire pour le kernel
-        console.warn('[SW v29] Module absent hors-ligne:', url.pathname);
+        console.warn('[SW v34] Module absent hors-ligne:', url.pathname);
         return new Response(
           `throw new Error("MODULE_OFFLINE:${url.pathname}");`,
           { status: 200, headers: { 'Content-Type': 'application/javascript' } }
@@ -297,7 +268,6 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // Tout le reste — Cache First, fallback index.html
   event.respondWith(
     caches.match(req).then(cached => {
       const update = fetch(req).then(res => {
@@ -316,7 +286,6 @@ self.addEventListener('message', async event => {
 
   if (type === 'SKIP_WAITING') { self.skipWaiting(); return; }
 
-  // CHECK_CACHE — liste les fichiers CRITICAL absents
   if (type === 'CHECK_CACHE') {
     const cache = await caches.open(CACHE);
     const missing = [];
@@ -333,7 +302,6 @@ self.addEventListener('message', async event => {
     return;
   }
 
-  // REPAIR_CACHE — re-télécharge les manquants (appeler quand Mac disponible)
   if (type === 'REPAIR_CACHE') {
     const cache = await caches.open(CACHE);
     const missing = [];
@@ -363,7 +331,6 @@ self.addEventListener('message', async event => {
     return;
   }
 
-  // CACHE_SONG — mise en cache d'une chanson
   if (type === 'CACHE_SONG') {
     const { songId, songTitle, urls = [] } = event.data;
     const cache = await caches.open(CACHE);
