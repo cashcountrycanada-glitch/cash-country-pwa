@@ -10,7 +10,7 @@
  * - MODULE_OFFLINE : erreur claire si module absent hors-ligne (pas de loop)
  */
 
-const CACHE = 'studio-v30-cors'; // v30: garde content-type — rejette HTML pour JS (Mac éteint)
+const CACHE = 'studio-v31-clean'; // v31: CRITICAL épuré — seuls les fichiers Railway réels
 
 const CRITICAL = [
   '/index-pwa.html',  // PWA iOS — fichier principal pour iPhone
@@ -21,41 +21,18 @@ const CRITICAL = [
   '/libs/react-dom-client.esm.js',
   '/libs/lucide-react.esm.js',
   '/libs/scheduler.esm.js',
-  '/index.html',      // Electron — servi par loadFile()
-  '/index.css',
-  '/env_config.js',
+  // ── Fichiers Railway uniquement ─────────────────────────────────────────
+  // NOTE: Les fichiers .tsx/.ts des composants StudioMobile sont embarqués
+  // dans index-pwa.html (système de fichiers virtuel Babel).
+  // Ils n'existent PAS comme fichiers séparés sur Railway — ne pas les lister ici.
   '/manifest.json',
-  '/index.tsx',
-  '/types.ts',
-  '/services/StudioService.ts',
-  '/services/StudioOfflineDB.ts',
-  '/services/db.ts',
-  '/components/StudioMobile.tsx',
-  '/components/MasteringEngine.tsx',        // copie originale (Mac)
-  '/components/CompEditor.tsx',             // copie originale (Mac)
-  '/components/StudioMobile/CompEditor.tsx',      // copie locale StudioMobile (iPhone)
-  '/components/StudioMobile/MasteringEngine.tsx', // copie locale StudioMobile (iPhone)
-  '/components/StudioMobile/studio.types.ts',
-  '/components/StudioMobile/useStudioAudio.ts',
-  '/components/StudioMobile/useStudioOffline.ts',
-  '/components/StudioMobile/useStudioRecorder.ts',
-  '/components/StudioMobile/RecordScreen.tsx',
-  '/components/StudioMobile/MixerScreen.tsx',
-  '/components/StudioMobile/SongSelector.tsx',
-  '/components/StudioMobile/RecordingsList.tsx',
-  '/components/StudioMobile/RecordingCard.tsx',
-  '/components/StudioMobile/TrackCard.tsx',
-  '/components/StudioMobile/VUMeter.tsx',
-  '/components/StudioMobile/WaveformBar.tsx',
+  '/sw-studio.js',
   '/recorder-worklet.js',
+  '/env_config.js',
 ];
 
 const USEFUL = [
-  '/index-pwa.html',  // alias pour / sur PWA
-  '/lame.min.js',
-  '/services/ai.ts',
-  '/services/environment.ts',
-  '/components/StudioInbox.tsx',
+  '/lame.min.js',  // encodeur MP3 pour export (optionnel)
 ];
 
 const EXTERNAL_LIBS = [
