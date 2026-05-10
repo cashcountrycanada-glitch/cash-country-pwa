@@ -10,7 +10,7 @@
  * - MODULE_OFFLINE : erreur claire si module absent hors-ligne (pas de loop)
  */
 
-const CACHE = 'studio-v28-cors'; // v28: force invalidation cache iPhone — fix React moduleCache
+const CACHE = 'studio-v30-cors'; // v30: garde content-type — rejette HTML pour JS (Mac éteint)
 
 const CRITICAL = [
   '/index-pwa.html',  // PWA iOS — fichier principal pour iPhone
@@ -111,7 +111,18 @@ async function broadcast(msg) {
 async function cacheOne(cache, url, mode) {
   try {
     const res = await fetch(url, mode ? { mode } : undefined);
-    if (res.ok) { await cache.put(url, res); return true; }
+    if (res.ok) {
+      // Ne jamais cacher du HTML à la place d'un fichier JS/TS/CSS
+      // (Mac éteint → Express Railway retourne 404 HTML pour /libs/)
+      const ct = res.headers.get('content-type') || '';
+      const isScript = url.match(/\.(js|ts|tsx|css|json)$/i);
+      if (isScript && ct.includes('text/html')) {
+        console.warn('[SW] Rejeté HTML pour', url, '— Mac éteint ou 404');
+        return false;
+      }
+      await cache.put(url, res);
+      return true;
+    }
   } catch {}
   return false;
 }
@@ -245,16 +256,27 @@ self.addEventListener('fetch', event => {
     event.respondWith(
       caches.match(req).then(async cached => {
         if (cached) {
+          // Lazy update en arrière-plan — mais rejeter si le serveur retourne du HTML (404 Mac)
           fetch(req).then(res => {
-            if (res.ok) caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
+            if (res.ok) {
+              const ct = res.headers.get('content-type') || '';
+              if (!ct.includes('text/html')) {
+                caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
+              }
+            }
           }).catch(() => {});
           return cached;
         }
         try {
           const res = await fetch(req);
           if (res.ok) {
-            caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
-            return res;
+            const ct = res.headers.get('content-type') || '';
+            // Ne pas cacher du HTML pour un fichier JS/TS/CSS (Mac éteint → 404 HTML)
+            if (!ct.includes('text/html')) {
+              caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
+              return res;
+            }
+            console.warn('[SW] HTML reçu pour', url.pathname, '— ignoré');
           }
         } catch {}
         // Fallback .tsx → .ts : si le fichier .tsx n'existe pas, essayer .ts
@@ -263,16 +285,19 @@ self.addEventListener('fetch', event => {
           try {
             const res = await fetch(tsUrl);
             if (res.ok) {
-              caches.open(CACHE).then(c => {
-                c.put(req, res.clone());   // cacher aussi sous l'URL .tsx
-                c.put(tsUrl, res.clone());
-              }).catch(() => {});
-              return res;
+              const ct = res.headers.get('content-type') || '';
+              if (!ct.includes('text/html')) {
+                caches.open(CACHE).then(c => {
+                  c.put(req, res.clone());
+                  c.put(tsUrl, res.clone());
+                }).catch(() => {});
+                return res;
+              }
             }
           } catch {}
         }
         // Module absent du cache ET hors-ligne — erreur JS claire pour le kernel
-        console.warn('[SW v12] Module absent hors-ligne:', url.pathname);
+        console.warn('[SW v29] Module absent hors-ligne:', url.pathname);
         return new Response(
           `throw new Error("MODULE_OFFLINE:${url.pathname}");`,
           { status: 200, headers: { 'Content-Type': 'application/javascript' } }

@@ -273,27 +273,43 @@
                 if (typeof Babel === 'undefined') throw new Error("Babel indisponible.");
 
                 diag("── Chargement libs système...");
-                // Chargement parallèle de toutes les libs du LIB_MAP
+                // Chargement SÉQUENTIEL dans l'ordre des dépendances
+                // (Safari iOS peut échouer avec des imports ESM parallèles qui se croisent)
                 const libErrors = [];
-                await Promise.all(Object.keys(LIB_MAP).map(async (key) => {
+                const LIB_ORDER = [
+                    'scheduler',          // aucune dépendance
+                    'react',              // dépend de scheduler
+                    'react-dom',          // dépend de react
+                    'react-dom/client',   // dépend de react + react-dom
+                    'lucide-react',       // dépend de react
+                    '@google/genai',      // optionnel CDN
+                    'jszip',              // optionnel CDN
+                    'pixi.js',            // optionnel CDN
+                ];
+                for (const key of LIB_ORDER) {
                     const url = LIB_MAP[key];
+                    if (!url) continue;
                     diag(`⏳ ${key}...`);
                     const t0 = Date.now();
                     try {
                         const mod = await import(url);
                         moduleCache[key] = { exports: mod };
-                        const fromCache = !navigator.onLine || !macOnline;
-                        diag(`✅ ${key} (${Date.now()-t0}ms${fromCache ? ' — cache' : ''})`);
+                        diag(`✅ ${key} (${Date.now()-t0}ms)`);
                     } catch(e) {
                         libErrors.push(key);
                         diag(`❌ ${key} ÉCHEC: ${e.message}`);
                     }
-                }));
+                }
                 if (libErrors.length > 0) {
                     diag(`⚠️ ${libErrors.length} libs échouées: ${libErrors.join(', ')}`);
-                    if (!macOnline && !navigator.onLine) {
-                        throw new Error(`Libs manquantes hors-ligne: ${libErrors.join(', ')}`);
+                    // Libs critiques — si React ou react-dom manque, rien ne peut fonctionner
+                    const CRITICAL_LIBS = ['react', 'react-dom', 'react-dom/client'];
+                    const criticalFailed = libErrors.filter(k => CRITICAL_LIBS.includes(k));
+                    if (criticalFailed.length > 0) {
+                        throw new Error(`Libs critiques manquantes: ${criticalFailed.join(', ')} — vide cache SW (bouton RESET) et recharge`);
                     }
+                    // Libs optionnelles (genai, jszip, pixi) — on continue sans elles
+                    diag(`⚠️ Libs optionnelles absentes, on continue: ${libErrors.join(', ')}`);
                 } else {
                     diag('✅ Toutes les libs chargées');
                 }
