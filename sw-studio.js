@@ -10,17 +10,17 @@
  * - MODULE_OFFLINE : erreur claire si module absent hors-ligne (pas de loop)
  */
 
-const CACHE = 'studio-v26-cdn'; // v26: CDN pour Netlify/Railway — pas de /libs/ local
+const CACHE = 'studio-v27-cors'; // v27: bypass no-cors CDN (Tailwind), fix MODULE_OFFLINE App
 
 const CRITICAL = [
   '/index-pwa.html',  // PWA iOS — fichier principal pour iPhone
-  // ── Libs CDN — Railway/Netlify (pas de /libs/ local) ───────────────────
-  'https://unpkg.com/@babel/standalone@7.23.10/babel.min.js',
-  'https://esm.sh/react@19.1.0',
-  'https://esm.sh/react-dom@19.1.0',
-  'https://esm.sh/react-dom@19.1.0/client',
-  'https://esm.sh/lucide-react@0.383.0',
-  'https://esm.sh/scheduler@0.23.2',
+  // ── Libs locales — autonomie complète sans CDN ─────────────────────────
+  '/libs/babel.min.js',
+  '/libs/react.esm.js',
+  '/libs/react-dom.esm.js',
+  '/libs/react-dom-client.esm.js',
+  '/libs/lucide-react.esm.js',
+  '/libs/scheduler.esm.js',
   '/index.html',      // Electron — servi par loadFile()
   '/index.css',
   '/env_config.js',
@@ -81,14 +81,20 @@ const EXTERNAL_DOMAINS = [
   'fonts.gstatic.com',
 ];
 
+// CDN qui ne supportent PAS CORS — fetch en mode 'no-cors' (réponse opaque)
+// On ne peut pas mettre en cache proprement, on laisse passer sans interception.
+const NO_CORS_PASSTHROUGH = [
+  'cdn.tailwindcss.com',
+];
+
 // Libs locales — servis par le Mac, cachés comme assets critiques
 const LOCAL_LIBS = [
-  'https://unpkg.com/@babel/standalone@7.23.10/babel.min.js',
-  'https://esm.sh/react@19.1.0',
-  'https://esm.sh/react-dom@19.1.0',
-  'https://esm.sh/react-dom@19.1.0/client',
-  'https://esm.sh/lucide-react@0.383.0',
-  'https://esm.sh/scheduler@0.23.2',
+  '/libs/babel.min.js',
+  '/libs/react.esm.js',
+  '/libs/react-dom.esm.js',
+  '/libs/react-dom-client.esm.js',
+  '/libs/lucide-react.esm.js',
+  '/libs/scheduler.esm.js',
 ];
 
 const SOURCE_EXTENSIONS = /\.(tsx|ts|js|css|json)$/i;
@@ -141,6 +147,12 @@ self.addEventListener('fetch', event => {
 
   if (url.pathname.startsWith('/api/studio/upload') ||
       url.pathname.startsWith('/api/studio/recording')) return;
+
+  // CDN no-cors (Tailwind CDN etc.) — laisser passer sans interception SW
+  // Ces CDN ne supportent pas CORS, le SW ne peut pas les mettre en cache proprement.
+  if (NO_CORS_PASSTHROUGH.some(d => url.hostname === d || url.hostname.endsWith('.' + d))) {
+    return; // le navigateur gère directement
+  }
 
   // CDN externes — Cache First + lazy cache
   if (EXTERNAL_DOMAINS.some(d => url.hostname === d || url.hostname.endsWith('.' + d))) {
