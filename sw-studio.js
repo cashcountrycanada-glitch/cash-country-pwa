@@ -10,7 +10,7 @@
  * - MODULE_OFFLINE : erreur claire si module absent hors-ligne (pas de loop)
  */
 
-const CACHE = 'studio-v31-clean'; // v31: CRITICAL épuré — seuls les fichiers Railway réels
+const CACHE = 'studio-v32-fix'; // v32: fix install Babel — vide cache corrompu v31
 
 const CRITICAL = [
   '/index-pwa.html',  // PWA iOS — fichier principal pour iPhone
@@ -105,14 +105,27 @@ async function cacheOne(cache, url, mode) {
 }
 
 // ── Install — NON-BLOQUANT ────────────────────────────────────────────────────
+async function cacheOneWithRetry(cache, url, mode, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    const ok = await cacheOne(cache, url, mode);
+    if (ok) return true;
+    if (i < retries - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)));
+  }
+  console.warn('[SW] Échec après', retries, 'tentatives:', url);
+  return false;
+}
+
 self.addEventListener('install', event => {
-  console.log('[SW v11] Installation...');
+  console.log('[SW v32] Installation...');
   event.waitUntil(
     caches.open(CACHE).then(async cache => {
-      await Promise.allSettled(CRITICAL.map(u => cacheOne(cache, u)));
+      // Libs critiques avec retry — Railway peut être lent au démarrage
+      await Promise.allSettled(CRITICAL.map(u => cacheOneWithRetry(cache, u)));
       await Promise.allSettled(EXTERNAL_LIBS.map(u => cacheOne(cache, u, 'cors')));
       await Promise.allSettled(USEFUL.map(u => cacheOne(cache, u)));
-      console.log('[SW v11] Install terminé (partiel OK si Mac éteint)');
+      // Vérifier que babel est bien caché
+      const babelCached = await cache.match('/libs/babel.min.js');
+      console.log('[SW v32] Install terminé — Babel:', babelCached ? '✅' : '❌ ABSENT');
     }).then(() => self.skipWaiting())
   );
 });
