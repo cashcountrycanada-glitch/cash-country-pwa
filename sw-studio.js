@@ -10,7 +10,7 @@
  * - MODULE_OFFLINE : erreur claire si module absent hors-ligne (pas de loop)
  */
 
-const CACHE = 'studio-v27-cors'; // v27: bypass no-cors CDN (Tailwind), fix MODULE_OFFLINE App
+const CACHE = 'studio-v28-cors'; // v28: force invalidation cache iPhone — fix React moduleCache
 
 const CRITICAL = [
   '/index-pwa.html',  // PWA iOS — fichier principal pour iPhone

@@ -299,6 +299,9 @@
                 }
                 
                 // ESM depuis esm.sh : exports = le module complet, .default peut être absent
+                if (!moduleCache["react"]) {
+                    throw new Error("React non chargé — vide cache SW et recharge");
+                }
                 const _reactMod = moduleCache["react"].exports;
                 window.React = _reactMod.default ?? _reactMod;
                 // Assurer que les hooks sont accessibles globalement
