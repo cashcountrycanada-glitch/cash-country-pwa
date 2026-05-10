@@ -10,17 +10,17 @@
  * - MODULE_OFFLINE : erreur claire si module absent hors-ligne (pas de loop)
  */
 
-const CACHE = 'studio-v25'; // v25: libs locales /libs/ pour autonomie complète
+const CACHE = 'studio-v26-cdn'; // v26: CDN pour Netlify/Railway — pas de /libs/ local
 
 const CRITICAL = [
   '/index-pwa.html',  // PWA iOS — fichier principal pour iPhone
-  // ── Libs locales — autonomie complète sans CDN ─────────────────────────
-  '/libs/babel.min.js',
-  '/libs/react.esm.js',
-  '/libs/react-dom.esm.js',
-  '/libs/react-dom-client.esm.js',
-  '/libs/lucide-react.esm.js',
-  '/libs/scheduler.esm.js',
+  // ── Libs CDN — Railway/Netlify (pas de /libs/ local) ───────────────────
+  'https://unpkg.com/@babel/standalone@7.23.10/babel.min.js',
+  'https://esm.sh/react@19.1.0',
+  'https://esm.sh/react-dom@19.1.0',
+  'https://esm.sh/react-dom@19.1.0/client',
+  'https://esm.sh/lucide-react@0.383.0',
+  'https://esm.sh/scheduler@0.23.2',
   '/index.html',      // Electron — servi par loadFile()
   '/index.css',
   '/env_config.js',
@@ -83,12 +83,12 @@ const EXTERNAL_DOMAINS = [
 
 // Libs locales — servis par le Mac, cachés comme assets critiques
 const LOCAL_LIBS = [
-  '/libs/babel.min.js',
-  '/libs/react.esm.js',
-  '/libs/react-dom.esm.js',
-  '/libs/react-dom-client.esm.js',
-  '/libs/lucide-react.esm.js',
-  '/libs/scheduler.esm.js',
+  'https://unpkg.com/@babel/standalone@7.23.10/babel.min.js',
+  'https://esm.sh/react@19.1.0',
+  'https://esm.sh/react-dom@19.1.0',
+  'https://esm.sh/react-dom@19.1.0/client',
+  'https://esm.sh/lucide-react@0.383.0',
+  'https://esm.sh/scheduler@0.23.2',
 ];
 
 const SOURCE_EXTENSIONS = /\.(tsx|ts|js|css|json)$/i;
