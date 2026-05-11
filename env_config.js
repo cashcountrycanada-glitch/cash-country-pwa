@@ -45,6 +45,17 @@ window.switchGeminiKey = function(keyNum) {
 // ─── OPENROUTER (Qwen3) ─────────────────────────────────────────────────────
 window.process.env.OPENROUTER_API_KEY = "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";
 
+// ─── MAC BASE URL ───────────────────────────────────────────────────────────
+// URL de base du Mac Cash Country Live pour télécharger les stems.
+// Exemple : "https://192.168.1.10:8443"
+// Vide = pas de Mac configuré → le bouton vert demande la saisie.
+// Peut être surchargé par l'utilisateur via localStorage('cc_mac_url').
+window.__CC_MAC_URL = (function() {
+  const stored = localStorage.getItem('cc_mac_url');
+  if (stored && stored.startsWith('http')) return stored.replace(/\/$/, '');
+  return '';
+})();
+
 // ─── LOG ────────────────────────────────────────────────────────────────────
 const _activeKey = window.GEMINI_KEYS[window.GEMINI_ACTIVE_KEY];
 const _totalKeys = Object.values(window.GEMINI_KEYS).filter(k => k.key).length;
