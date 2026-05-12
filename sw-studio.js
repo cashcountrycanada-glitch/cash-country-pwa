@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v36-syntax-fix'; // v36: fix \\U escape + double-brace useStudioOffline
+const CACHE = 'studio-v39-volume-fix'; // v36: fix \\U escape + double-brace useStudioOffline
 
 const CRITICAL = [
   '/index-pwa.html',
@@ -92,19 +92,19 @@ async function cacheOneWithRetry(cache, url, mode, retries = 3) {
     if (ok) return true;
     if (i < retries - 1) await new Promise(r => setTimeout(r, 500 * (i + 1)));
   }
-  console.warn('[SW v35] Échec après', retries, 'tentatives:', url);
+  console.warn('[SW v39] Échec après', retries, 'tentatives:', url);
   return false;
 }
 
 self.addEventListener('install', event => {
-  console.log('[SW v35] Installation — esm.sh pour react/lucide/scheduler — fix Identifier already declared');
+  console.log('[SW v39] Installation — esm.sh pour react/lucide/scheduler — fix Identifier already declared');
   event.waitUntil(
     caches.open(CACHE).then(async cache => {
       await Promise.allSettled(CRITICAL.map(u => cacheOneWithRetry(cache, u)));
       await Promise.allSettled(EXTERNAL_LIBS.map(u => cacheOne(cache, u, 'cors')));
       await Promise.allSettled(USEFUL.map(u => cacheOne(cache, u)));
       const babelCached = await cache.match('/libs/babel.min.js');
-      console.log('[SW v35] Install terminé — Babel:', babelCached ? '✅' : '❌ ABSENT');
+      console.log('[SW v39] Install terminé — Babel:', babelCached ? '✅' : '❌ ABSENT');
     }).then(() => self.skipWaiting())
   );
 });
@@ -254,7 +254,7 @@ self.addEventListener('fetch', event => {
             }
           } catch {}
         }
-        console.warn('[SW v35] Module absent hors-ligne:', url.pathname);
+        console.warn('[SW v39] Module absent hors-ligne:', url.pathname);
         return new Response(
           `throw new Error("MODULE_OFFLINE:${url.pathname}");`,
           { status: 200, headers: { 'Content-Type': 'application/javascript' } }
