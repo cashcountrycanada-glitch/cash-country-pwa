@@ -52,7 +52,12 @@ window.process.env.OPENROUTER_API_KEY = "sk-or-v1-5302694d6bf3d0a5cc6225ab414c4f
 // Peut être surchargé par l'utilisateur via localStorage('cc_mac_url').
 window.__CC_MAC_URL = (function() {
   const stored = localStorage.getItem('cc_mac_url');
-  if (stored && stored.startsWith('http')) return stored.replace(/\/$/, '');
+  if (stored && stored.startsWith('http')) {
+    const clean = stored.replace(/\/$/, '');
+    // Aussi exposer la version HTTP pour les téléchargements (pas besoin SSL)
+    window.__CC_MAC_HTTP_URL = clean.replace('https://', 'http://').replace(':8443', ':8080');
+    return clean;
+  }
   return '';
 })();
 
