@@ -1,0 +1,749 @@
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>CashCountry Live v2.2.8 - GOLD MASTER</title>
+
+    <!-- ── PWA / Standalone iOS — supprime la barre Safari quand lancé depuis l'écran d'accueil ── -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Studio Cash">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#000000">
+    <!-- Manifest PWA -->
+    <link rel="manifest" href="/manifest.json">
+    <!-- Icône PWA pour "Ajouter à l'écran d'accueil" -->
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23dc2626'/><text y='70' x='50' text-anchor='middle' font-size='60'>🎤</text></svg>">
+
+    <script>
+      // Service Worker — toujours enregistré pour que la PWA fonctionne hors-ligne
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', async () => {
+          try {
+            const reg = await navigator.serviceWorker.register('/sw-studio.js', { scope: '/' });
+            console.log('[PWA] SW actif:', reg.scope);
+            if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+            reg.addEventListener('updatefound', () => {
+              const newSW = reg.installing;
+              if (!newSW) return;
+              newSW.addEventListener('statechange', () => {
+                if (newSW.state === 'installed') newSW.postMessage({ type: 'SKIP_WAITING' });
+              });
+            });
+            // Recharger automatiquement quand le nouveau SW prend le contrôle
+            // ⚠️ Seulement sur iOS (PWA) — sur Mac ce reload crée une boucle infinie
+            const _isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            if (_isIOS) {
+              let refreshing = false;
+              navigator.serviceWorker.addEventListener('controllerchange', () => {
+                if (!refreshing) { refreshing = true; window.location.reload(); }
+              });
+            }
+            reg.update().catch(() => {});
+          } catch (e) { console.warn('[PWA] SW non disponible:', e.message); }
+        });
+      }
+    </script>
+    
+    <script src="env_config.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Babel depuis le Mac local (autonomie) avec fallback CDN -->
+    <script>
+    (function() {
+      // Tenter de charger Babel depuis le Mac local d'abord
+      // Si le Mac n'est pas disponible, le SW a normalement déjà le CDN en cache
+      const localUrl = '/libs/babel.min.js';
+      const cdnUrl   = 'https://unpkg.com/@babel/standalone@7.23.10/babel.min.js';
+      const s = document.createElement('script');
+      s.src = localUrl;
+      s.onerror = function() {
+        console.warn('[PWA] Babel local indisponible, fallback CDN...');
+        const s2 = document.createElement('script');
+        s2.src = cdnUrl;
+        s2.onerror = () => console.error('[PWA] Babel CDN aussi indisponible!');
+        document.head.appendChild(s2);
+      };
+      document.currentScript.parentNode.insertBefore(s, document.currentScript);
+    })();
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    
+    <style>
+        body { background-color: #000; color: #fff; font-family: 'Inter', sans-serif; margin: 0; overflow: hidden; }
+        /* PWA standalone — couvre toute la surface écran iPhone (encoche + barre home) */
+        @supports (padding-top: env(safe-area-inset-top)) {
+          body {
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
+          }
+        }
+        .font-bebas { font-family: 'Bebas Neue', cursive; }
+        
+        #kernel-loader { 
+            height: 100vh; display: flex; flex-direction: column; 
+            align-items: center; justify-content: center; background: #000; 
+            transition: opacity 0.5s; z-index: 1000; position: relative;
+        }
+
+        #diagnostic-console {
+            position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+            width: 80%; max-width: 600px; font-family: monospace; font-size: 9px;
+            color: #444; text-transform: uppercase; letter-spacing: 2px;
+            text-align: center; pointer-events: none;
+            opacity: 1; transition: opacity 0.5s;
+        }
+
+        .error-screen {
+            position: fixed; inset: 0; background: #1a0505; z-index: 99999;
+            display: none; flex-direction: column; align-items: center; justify-content: center;
+            padding: 40px; border: 10px solid #ef4444;
+        }
+
+        .loading-ring {
+            width: 80px; height: 80px; border: 4px solid #111;
+            border-top: 4px solid #ef4444; border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+    "react-dom/": "https://esm.sh/react-dom@19.0.0/",
+    "react/": "https://esm.sh/react@19.0.0/",
+    "lucide-react": "https://esm.sh/lucide-react@0.462.0",
+    "scheduler": "https://esm.sh/scheduler@0.23.2",
+    "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
+    "jszip": "https://esm.sh/jszip@^3.10.1",
+    "pixi.js": "https://esm.sh/pixi.js@^8.1.0"
+  }
+}
+</script>
+<!-- index.css supprimé — styles via Tailwind CDN + <style> inline -->
+</head>
+<body>
+    <div id="root"></div>
+
+    <div id="kernel-loader">
+        <div class="loading-ring shadow-[0_0_50px_rgba(239,68,68,0.3)]"></div>
+        <h1 class="font-bebas text-4xl mt-10 tracking-[0.3em]">CASHCOUNTRY <span class="text-red-600">LIVE</span></h1>
+        <p id="boot-status" class="text-[9px] font-black text-zinc-600 uppercase tracking-[0.5em] mt-4">S6_LINKER_ACTIVE</p>
+    </div>
+
+    <div id="diagnostic-console"></div>
+
+    <div id="error-display" class="error-screen">
+        <div class="text-red-600 mb-8 animate-pulse">
+            <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+        </div>
+        <h2 id="error-title" class="font-bebas text-5xl tracking-widest text-white mb-2 uppercase">MISE À JOUR REQUISE</h2>
+        <p id="error-msg" class="font-mono text-red-500 text-xs uppercase mb-3 text-center max-w-xl"></p>
+        <p id="error-hint" class="font-mono text-zinc-500 text-[10px] uppercase mb-8 text-center max-w-xl">Connectez l'iPhone au WiFi du Mac et appuyez sur Réparer</p>
+        <div id="repair-progress" style="display:none" class="mb-6 text-center">
+            <div class="text-zinc-400 text-xs font-mono uppercase tracking-widest mb-2" id="repair-status">Réparation en cours...</div>
+            <div style="width:200px;height:4px;background:#222;border-radius:2px;margin:0 auto">
+                <div id="repair-bar" style="height:4px;width:0%;background:#ef4444;border-radius:2px;transition:width 0.3s"></div>
+            </div>
+        </div>
+        <div id="error-buttons" class="flex gap-3 flex-wrap justify-center">
+            <button onclick="repairCache()" id="btn-repair" class="bg-red-600 text-white px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-red-500 transition-all">🔧 Réparer</button>
+            <button onclick="window.location.reload()" class="bg-white text-black px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-zinc-200 transition-all">↺ Relancer</button>
+            <button onclick="hardReset()" class="bg-zinc-900 text-zinc-500 border border-zinc-700 px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all">Reset</button>
+        </div>
+    </div>
+
+    <script>
+        const diag = (msg) => {
+            console.log(`[S6_KERNEL] ${msg}`);
+            document.getElementById('boot-status').textContent = msg;
+            const logLine = document.createElement('div');
+            logLine.textContent = `> ${msg}`;
+            const consoleEl = document.getElementById('diagnostic-console');
+            consoleEl.appendChild(logLine);
+            if (consoleEl.children.length > 5) consoleEl.removeChild(consoleEl.firstChild);
+        };
+
+        const showError = (err, isOfflineModule) => {
+            document.getElementById('kernel-loader').style.display = 'none';
+            document.getElementById('error-display').style.display = 'flex';
+            document.getElementById('error-msg').textContent = err;
+            if (isOfflineModule) {
+                document.getElementById('error-title').textContent = 'MISE À JOUR REQUISE';
+                document.getElementById('error-hint').textContent = 'Connectez l\'iPhone au WiFi du Mac et appuyez sur Réparer';
+                document.getElementById('btn-repair').style.display = '';
+            } else {
+                document.getElementById('error-title').textContent = 'ERREUR KERNEL';
+                document.getElementById('error-hint').textContent = 'Appuyez sur Relancer, ou Réparer si vous êtes sur le WiFi du Mac';
+                document.getElementById('btn-repair').style.display = '';
+            }
+        };
+
+        async function repairCache() {
+            const btn = document.getElementById('btn-repair');
+            btn.disabled = true;
+            btn.textContent = '⏳ Réparation...';
+            document.getElementById('repair-progress').style.display = 'block';
+
+            // Écouter les messages du SW
+            navigator.serviceWorker.addEventListener('message', function handler(e) {
+                if (e.data.type === 'REPAIR_PROGRESS') {
+                    const pct = Math.round((e.data.repaired / e.data.total) * 100);
+                    document.getElementById('repair-bar').style.width = pct + '%';
+                    document.getElementById('repair-status').textContent = `Réparation ${e.data.repaired}/${e.data.total}...`;
+                }
+                if (e.data.type === 'REPAIR_DONE') {
+                    navigator.serviceWorker.removeEventListener('message', handler);
+                    if (e.data.complete) {
+                        document.getElementById('repair-status').textContent = '✅ Réparation complète — rechargement...';
+                        document.getElementById('repair-bar').style.width = '100%';
+                        document.getElementById('repair-bar').style.background = '#22c55e';
+                        setTimeout(() => window.location.reload(), 1200);
+                    } else {
+                        document.getElementById('repair-status').textContent = `⚠️ ${e.data.failed} fichier(s) inaccessible(s) — Mac allumé ?`;
+                        document.getElementById('repair-bar').style.background = '#f59e0b';
+                        btn.disabled = false;
+                        btn.textContent = '🔧 Réessayer';
+                    }
+                }
+            });
+
+            const sw = navigator.serviceWorker.controller;
+            if (sw) {
+                sw.postMessage({ type: 'REPAIR_CACHE' });
+            } else {
+                // SW pas encore actif — recharger pour l'activer
+                window.location.reload();
+            }
+        }
+
+        async function hardReset() {
+            // Hard Reset PRÉSERVE IndexedDB (chansons en cache) — vide seulement le SW et localStorage
+            try {
+                // Vider localStorage SAUF les clés IndexedDB liées aux stems
+                const keysToKeep = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && (k.startsWith('stem_') || k.startsWith('song_'))) keysToKeep.push(k);
+                }
+                const saved = {};
+                keysToKeep.forEach(k => { saved[k] = localStorage.getItem(k); });
+                localStorage.clear();
+                keysToKeep.forEach(k => { localStorage.setItem(k, saved[k]); });
+
+                // Déregistrer le SW
+                if ('serviceWorker' in navigator) {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    for (const reg of regs) await reg.unregister();
+                }
+                // Vider le cache SW (pas IndexedDB)
+                if ('caches' in window) {
+                    const keys = await caches.keys();
+                    for (const key of keys) await caches.delete(key);
+                }
+            } catch (e) { console.warn('[HardReset]', e.message); }
+            window.location.reload(true);
+        }
+
+        const moduleCache = {};
+        // v35 FIX: utilise esm.sh pour toutes les libs — les fichiers /libs/*.esm.js locaux
+        // causent "Identifier 'X' has already been declared" quand dynamic import() les exécute
+        // dans un scope global déjà pollué. esm.sh fonctionne comme module isolé.
+        const LIB_MAP = {
+            "react": "https://esm.sh/react@19.0.0",
+            "react-dom": "https://esm.sh/react-dom@19.0.0",
+            "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+            "lucide-react": "https://esm.sh/lucide-react@0.462.0",
+            "scheduler": "https://esm.sh/scheduler@0.23.2",
+            "@google/genai": "https://esm.sh/@google/genai@1.35.0",
+            "jszip": "https://esm.sh/jszip@3.10.1",
+            "pixi.js": "https://esm.sh/pixi.js@8.1.0"
+        };
+
+        async function bootstrap() {
+            const _bootStart = Date.now();
+            // macOnline est résolu en Phase 3 — false par défaut (Railway = pas de Mac)
+            let macOnline = false;
+            try {
+                diag("INITIALIZING_CORE");
+                if (typeof Babel === 'undefined') throw new Error("Babel indisponible.");
+
+                diag("── Chargement libs système...");
+                // Chargement SÉQUENTIEL dans l'ordre des dépendances
+                // (Safari iOS peut échouer avec des imports ESM parallèles qui se croisent)
+                const libErrors = [];
+                const LIB_ORDER = [
+                    'scheduler',          // aucune dépendance
+                    'react',              // dépend de scheduler
+                    'react-dom',          // dépend de react
+                    'react-dom/client',   // dépend de react + react-dom
+                    'lucide-react',       // dépend de react
+                    '@google/genai',      // optionnel CDN
+                    'jszip',              // optionnel CDN
+                    'pixi.js',            // optionnel CDN
+                ];
+                for (const key of LIB_ORDER) {
+                    const url = LIB_MAP[key];
+                    if (!url) continue;
+                    diag(`⏳ ${key}...`);
+                    const t0 = Date.now();
+                    try {
+                        const mod = await import(url);
+                        moduleCache[key] = { exports: mod };
+                        diag(`✅ ${key} (${Date.now()-t0}ms)`);
+                    } catch(e) {
+                        libErrors.push(key);
+                        diag(`❌ ${key} ÉCHEC: ${e.message}`);
+                    }
+                }
+                if (libErrors.length > 0) {
+                    diag(`⚠️ ${libErrors.length} libs échouées: ${libErrors.join(', ')}`);
+                    // Libs critiques — si React ou react-dom manque, rien ne peut fonctionner
+                    const CRITICAL_LIBS = ['react', 'react-dom', 'react-dom/client'];
+                    const criticalFailed = libErrors.filter(k => CRITICAL_LIBS.includes(k));
+                    if (criticalFailed.length > 0) {
+                        throw new Error(`Libs critiques manquantes: ${criticalFailed.join(', ')} — vide cache SW (bouton RESET) et recharge`);
+                    }
+                    // Libs optionnelles (genai, jszip, pixi) — on continue sans elles
+                    diag(`⚠️ Libs optionnelles absentes, on continue: ${libErrors.join(', ')}`);
+                } else {
+                    diag('✅ Toutes les libs chargées');
+                }
+                
+                // ESM depuis esm.sh : exports = le module complet, .default peut être absent
+                if (!moduleCache["react"]) {
+                    throw new Error("React non chargé — vide cache SW et recharge");
+                }
+                const _reactMod = moduleCache["react"].exports;
+                window.React = _reactMod.default ?? _reactMod;
+                // Assurer que les hooks sont accessibles globalement
+                if (!window.React.useState && _reactMod.useState) {
+                    Object.assign(window.React, _reactMod);
+                }
+                
+                diag("STARTING_BOOT_SEQUENCE");
+
+                // ── Logs diagnostic autonomie PWA ─────────────────────────
+                diag(`📱 iOS: ${/iPad|iPhone|iPod/.test(navigator.userAgent)}`);
+                diag(`🌐 Protocol: ${window.location.protocol}`);
+                diag(`🔌 SW actif: ${!!navigator.serviceWorker?.controller}`);
+                try {
+                    const libsToCheck = Object.values(LIB_MAP);
+                    let libsCached = 0;
+                    for (const url of libsToCheck) {
+                        const cached = await caches.match(url).catch(() => null);
+                        if (cached) libsCached++;
+                    }
+                    diag(`📚 Libs cache: ${libsCached}/${libsToCheck.length} ${libsCached === libsToCheck.length ? '✅' : '⚠️'}`);
+                } catch(e) { diag(`📚 Cache vérif impossible: ${e.message}`); }
+                await s6_require('index.tsx');
+                
+                diag("KERNEL_STABLE_V2.2.8");
+                diag('✅ App React montée avec succès');
+                diag(`⏱️ Démarrage total: ${((Date.now() - _bootStart) / 1000).toFixed(1)}s`);
+                document.getElementById('kernel-loader').style.opacity = '0';
+                setTimeout(() => {
+                    document.getElementById('kernel-loader').style.display = 'none';
+                    // Masquer le diagnostic console — ne doit pas flotter sur l'app
+                    const dc = document.getElementById('diagnostic-console');
+                    if (dc) { dc.style.opacity = '0'; setTimeout(() => dc.style.display = 'none', 500); }
+                }, 500);
+            } catch (err) {
+                const isOffline = err.message && err.message.startsWith('MODULE_OFFLINE:');
+                showError(isOffline
+                    ? `Module hors-ligne : ${err.message.replace('MODULE_OFFLINE:', '')}`
+                    : err.message,
+                  isOffline
+                );
+            }
+        }
+
+        async function s6_require(relativePath, fromDir = "") {
+            const absolutePath = normalizePath(fromDir ? `${fromDir}/${relativePath}` : relativePath);
+            const extensions = ['', '.tsx', '.ts', '.js'];
+            let code = null;
+            let finalPath = null;
+
+            if (moduleCache[absolutePath]) return moduleCache[absolutePath].exports;
+            for (const ext of extensions) {
+                const test = absolutePath.endsWith(ext) && ext !== '' ? absolutePath : absolutePath + ext;
+                if (moduleCache[test]) return moduleCache[test].exports;
+            }
+
+            // ── Lookup 1 : modules inlinés dans index-pwa.html (100% offline) ──────
+            const _inlineStore = window.__INLINE_MODULES__ || {};
+            for (const ext of extensions) {
+                const testPath = absolutePath.endsWith(ext) && ext !== '' ? absolutePath : absolutePath + ext;
+                if (_inlineStore[testPath] !== undefined) {
+                    code = _inlineStore[testPath];
+                    finalPath = testPath;
+                    console.log(`[S6] 📄 inline: ${testPath.split('/').pop()}`);
+                    break;
+                }
+            }
+
+            // ── Lookup 2 : SW cache + réseau (quand Mac disponible) ──────────────
+            if (!code) {
+            for (const ext of extensions) {
+                const testPath = absolutePath.endsWith(ext) && ext !== '' ? absolutePath : absolutePath + ext;
+                try {
+                    const res = await fetch(`${testPath}`);
+                    if (res.ok) {
+                        const _text = await res.text();
+                        if (_text.trimStart().startsWith('<!DOCTYPE') || _text.trimStart().startsWith('<html')) {
+                            console.warn('[S6] HTML reçu pour ' + testPath + ' — SW obsolète, ignoré');
+                            diag(`⚠️ SW retourne HTML pour ${testPath.split('/').pop()} — cache corrompu`);
+                            continue;
+                        }
+                        // v35 FIX: le SW retourne throw new Error("MODULE_OFFLINE:...") pour les modules absents
+                        // Il faut ignorer cette réponse et continuer vers l'inline ou échouer proprement
+                        if (_text.trimStart().startsWith('throw new Error("MODULE_OFFLINE')) {
+                            console.warn('[S6] MODULE_OFFLINE reçu pour ' + testPath + ' — module absent du SW, cherche inline');
+                            continue;
+                        }
+                        // Log source : SW cache ou réseau
+                        const fromSW = res.headers.get('x-sw-cache') === 'true' ||
+                                       res.url.startsWith('http') && navigator.serviceWorker?.controller;
+                        console.log(`[S6] ${fromSW ? '📦' : '🌐'} ${testPath.split('/').pop()}`);
+                        code = _text;
+                        finalPath = testPath;
+                        break;
+                    }
+                } catch (e) {
+                    diag(`❌ fetch échoué: ${testPath.split('/').pop()} (${e.message})`);
+                }
+            }
+            }
+
+            if (!code) {
+                diag(`❌ Module introuvable: ${absolutePath.split('/').pop()} — Mac requis ou cache incomplet`);
+                throw new Error(`Missing module: ${absolutePath}`);
+            }
+
+            // Scan récursif pour pré-charger les dépendances
+const depRegex = /import[\s\S]*?from\s+['"](.*?)['"]|require\s*\(\s*['"](.*?)['"]\s*\)/g;            
+// const depRegex = /import\s+.*?from\s+['"](.*?)['"]|require\s*\(\s*['"](.*?)['"]\s*\)/g;
+            let match;
+            const currentDir = getDir(finalPath);
+            
+            while ((match = depRegex.exec(code)) !== null) {
+                const depPath = match[1] || match[2];
+                // Ne charger récursivement que si ce n'est pas une lib système déjà mappée
+                if (depPath.startsWith('.') && !LIB_MAP[depPath]) {
+                    await s6_require(depPath, currentDir);
+                }
+            }
+
+            try {
+                const transformed = Babel.transform(code, {
+                    presets: [['typescript', { isTSX: true, allExtensions: true }], ['react']],
+                    plugins: [[Babel.availablePlugins['transform-modules-commonjs']]]
+                }).code;
+
+                const module = { exports: {} };
+                moduleCache[finalPath] = module;
+                moduleCache[absolutePath] = module;
+
+                const func = new Function('require', 'module', 'exports', 'React', transformed);
+                
+                const syncRequire = (p) => {
+    if (LIB_MAP[p]) return moduleCache[p]?.exports;
+    if (moduleCache[p]) return moduleCache[p].exports;
+    
+    const resolved = normalizePath(currentDir + '/' + p);
+    if (moduleCache[resolved]) return moduleCache[resolved].exports;
+    
+    // Cherche avec toutes les extensions ET les variantes de chemin
+    for (const ext of extensions) {
+        const pExt = resolved + ext;
+        if (moduleCache[pExt]) return moduleCache[pExt].exports;
+        // Aussi chercher sans le leading slash
+        const pAlt = normalizePath(p) + ext;
+        if (moduleCache[pAlt]) return moduleCache[pAlt].exports;
+    }
+    
+    // Debug: log ce qui est dans le cache pour aider
+    console.error('[S6_SYNC] Cache keys:', Object.keys(moduleCache));
+    console.error('[S6_SYNC] Cherche:', resolved, '| currentDir:', currentDir, '| p:', p);
+    throw new Error(`MODULE INTROUVABLE EN SYNCHRONE : ${p}`);
+};
+
+                func(syncRequire, module, module.exports, window.React);
+                return module.exports.__esModule ? module.exports.default : module.exports;
+            } catch(e) {
+                throw new Error(`SYNTAX_ERROR [${finalPath}]: ${e.message}`);
+            }
+        }
+
+        function normalizePath(p) {
+            const parts = p.split(/[\\/]/);
+            const stack = [];
+            for (const part of parts) {
+                if (part === '' || part === '.') continue;
+                if (part === '..') stack.pop();
+                else stack.push(part);
+            }
+            return stack.join('/');
+        }
+        function getDir(p) {
+            const parts = p.split('/');
+            return parts.length <= 1 ? "" : parts.slice(0, -1).join('/');
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        // DÉTECTION MAC — avant le bootstrap
+        //
+        // Ping rapide sur /api/songs (timeout 3s).
+        // window.MAC_MODE = 'online' | 'offline'
+        // L'app React peut lire window.MAC_MODE à tout moment.
+        // ══════════════════════════════════════════════════════════════════════
+
+        // Bannière Mac — iOS seulement, jamais sur desktop/Mac
+        const isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+        window.MAC_MODE = 'unknown';
+
+        async function detectMac() {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3000);
+            try {
+                await fetch('/api/songs', { method: 'HEAD', signal: controller.signal, cache: 'no-store' });
+                clearTimeout(timeout);
+                window.MAC_MODE = 'online';
+                return true;
+            } catch {
+                clearTimeout(timeout);
+                window.MAC_MODE = 'offline';
+                return false;
+            }
+        }
+
+        function showMacBanner(mode) {
+            const old = document.getElementById('mac-mode-banner');
+            if (old) old.remove();
+
+            const banner = document.createElement('div');
+            banner.id = 'mac-mode-banner';
+            const isOnline = mode === 'online';
+            banner.style.cssText = [
+                'position:fixed',
+                'top:env(safe-area-inset-top,0px)',
+                'left:0','right:0',
+                'z-index:99999',
+                'display:flex','align-items:center','justify-content:center','gap:8px',
+                'padding:8px 16px',
+                'font-family:monospace','font-size:9px','font-weight:900',
+                'letter-spacing:0.15em','text-transform:uppercase',
+                'transition:opacity 0.5s',
+                isOnline
+                    ? 'background:#052e16;color:#4ade80;border-bottom:1px solid #166534'
+                    : 'background:#1c0a0a;color:#f87171;border-bottom:1px solid #7f1d1d',
+            ].join(';');
+
+            const dot = document.createElement('span');
+            dot.style.cssText = 'width:6px;height:6px;border-radius:50%;display:inline-block;flex-shrink:0;background:'
+                + (isOnline ? '#22c55e' : '#ef4444');
+            banner.appendChild(dot);
+
+            const label = document.createElement('span');
+            label.textContent = isOnline
+                ? 'Mac accessible — synchronisation active'
+                : 'Mac non accessible — mode autonome';
+            banner.appendChild(label);
+
+            if (!isOnline) {
+                const btn = document.createElement('button');
+                btn.textContent = 'Réparer quand Mac dispo';
+                btn.style.cssText = 'margin-left:12px;padding:2px 10px;background:#7f1d1d;color:#fca5a5;border:1px solid #ef444440;border-radius:6px;font-size:8px;font-weight:900;cursor:pointer;font-family:monospace';
+                btn.onclick = () => repairCache();
+                banner.appendChild(btn);
+            }
+
+            document.body.appendChild(banner);
+
+            // Bannière online disparaît après 4s
+            if (isOnline) {
+                setTimeout(() => {
+                    banner.style.opacity = '0';
+                    setTimeout(() => banner.remove(), 500);
+                }, 4000);
+            }
+        }
+
+        // ── Indicateur de cache ───────────────────────────────────────────────
+        // Interroge le SW via CHECK_CACHE, affiche le % dans la bannière iOS.
+        async function checkCacheStatus() {
+          return new Promise(resolve => {
+            if (!navigator.serviceWorker || !navigator.serviceWorker.controller) {
+              resolve({ percent: 0, complete: false, missing: 0, total: 0 });
+              return;
+            }
+
+            const timeout = setTimeout(() => resolve({ percent: 0, complete: false, missing: 0, total: 0 }), 3000);
+
+            navigator.serviceWorker.addEventListener('message', function handler(e) {
+              if (e.data && e.data.type === 'CACHE_STATUS') {
+                clearTimeout(timeout);
+                navigator.serviceWorker.removeEventListener('message', handler);
+                const { missing, total, complete } = e.data;
+                const cached = total - missing.length;
+                const percent = total > 0 ? Math.round((cached / total) * 100) : 0;
+                resolve({ percent, complete, missing: missing.length, total });
+              }
+            });
+
+            navigator.serviceWorker.controller.postMessage({ type: 'CHECK_CACHE' });
+          });
+        }
+
+        function updateCacheBadge(percent, complete) {
+          const banner = document.getElementById('mac-mode-banner');
+          if (!banner) return;
+
+          // Supprimer ancien badge
+          const old = banner.querySelector('#cache-badge');
+          if (old) old.remove();
+
+          const badge = document.createElement('span');
+          badge.id = 'cache-badge';
+          const color = complete ? '#22c55e' : percent > 50 ? '#eab308' : '#ef4444';
+          badge.style.cssText = [
+            'margin-left:8px',
+            'padding:1px 7px',
+            `background:${color}22`,
+            `color:${color}`,
+            `border:1px solid ${color}44`,
+            'border-radius:10px',
+            'font-size:8px',
+            'font-weight:900',
+            'font-family:monospace',
+            'letter-spacing:0.05em',
+          ].join(';');
+          badge.textContent = complete ? '✓ CACHE 100%' : `CACHE ${percent}%`;
+          banner.appendChild(badge);
+        }
+
+        // Surveillance connectivité toutes les 30s pendant l'utilisation
+        function watchConnectivity() {
+            let lastMode = window.MAC_MODE;
+            setInterval(async () => {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 2000);
+                let current;
+                try {
+                    await fetch('/api/songs', { method: 'HEAD', signal: controller.signal, cache: 'no-store' });
+                    clearTimeout(timeout);
+                    current = 'online';
+                } catch {
+                    clearTimeout(timeout);
+                    current = 'offline';
+                }
+                if (current !== lastMode) {
+                    lastMode = current;
+                    window.MAC_MODE = current;
+                    if (isIOSDevice) {
+                      showMacBanner(current);
+                      // Rafraîchir le badge cache après changement d'état
+                      if (navigator.serviceWorker) {
+                        navigator.serviceWorker.ready.then(async () => {
+                          const status = await checkCacheStatus();
+                          updateCacheBadge(status.percent, status.complete);
+                        });
+                      }
+                    }
+                    // Mac revenu en ligne → repair silencieux du cache SW
+                    if (current === 'online') {
+                        const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+                        if (sw) sw.postMessage({ type: 'REPAIR_CACHE' });
+                    }
+                    // Notifie l'app React si elle écoute
+                    window.dispatchEvent(new CustomEvent('mac-mode-change', { detail: { mode: current } }));
+                }
+            }, 30000);
+        }
+
+        window.addEventListener('load', async () => {
+            // ── PHASE 1 : Diagnostic environnement ───────────────────────
+            diag('══ PWA DÉMARRAGE ══');
+            diag(`📱 iOS: ${/iPad|iPhone|iPod/.test(navigator.userAgent)}`);
+            diag(`🌐 URL: ${window.location.href}`);
+            diag(`🔌 SW: ${'serviceWorker' in navigator ? 'supporté' : 'NON supporté'}`);
+            diag(`🔌 SW controller: ${navigator.serviceWorker?.controller ? '✅ actif' : '⚠️ absent'}`);
+            diag(`📦 Cache API: ${'caches' in window ? '✅' : '❌'}`);
+            diag(`📡 navigator.onLine: ${navigator.onLine}`);
+
+            // ── PHASE 2 : Vérifier le cache SW ───────────────────────────
+            diag('── Vérification cache...');
+            try {
+                const cacheKeys = await caches.keys();
+                diag(`🗄️ Caches: ${cacheKeys.join(', ') || 'aucun'}`);
+                if (cacheKeys.length > 0) {
+                    const cache = await caches.open(cacheKeys[0]);
+                    const cachedReqs = await cache.keys();
+                    diag(`📦 Entrées cache: ${cachedReqs.length}`);
+                    // Vérifier Babel spécifiquement
+                    const babelCached = cachedReqs.some(r => r.url.includes('babel'));
+                    const reactCached = cachedReqs.some(r => r.url.includes('react'));
+                    diag(`⚙️ Babel: ${babelCached ? '✅ cache' : '⚠️ absent'}`);
+                    diag(`⚛️ React: ${reactCached ? '✅ cache' : '⚠️ absent'}`);
+                } else {
+                    diag('⚠️ Aucun cache SW — premier lancement ou cache vidé');
+                }
+            } catch(e) { diag(`❌ Cache erreur: ${e.message}`); }
+
+            // ── PHASE 3 : Détecter le Mac ─────────────────────────────────
+            diag('── Détection Mac...');
+            diag('MAC_DETECT_START');
+            macOnline = await detectMac();
+            diag(macOnline ? '✅ MAC_ONLINE — mode connecté' : '📵 MAC_OFFLINE — mode autonome');
+            if (isIOSDevice) {
+              showMacBanner(macOnline ? 'online' : 'offline');
+              // Vérifier le cache après que le SW soit prêt
+              if (navigator.serviceWorker) {
+                navigator.serviceWorker.ready.then(async () => {
+                  const status = await checkCacheStatus();
+                  updateCacheBadge(status.percent, status.complete);
+
+                  // Si cache incomplet et Mac accessible → repair automatique
+                  if (!status.complete && macOnline) {
+                    const sw = navigator.serviceWorker.controller;
+                    if (sw) sw.postMessage({ type: 'REPAIR_CACHE' });
+                  }
+
+                  // Écouter la progression du repair
+                  navigator.serviceWorker.addEventListener('message', async (e) => {
+                    if (e.data && e.data.type === 'REPAIR_DONE') {
+                      const refreshed = await checkCacheStatus();
+                      updateCacheBadge(refreshed.percent, refreshed.complete);
+                    }
+                    if (e.data && e.data.type === 'REPAIR_PROGRESS') {
+                      const p = Math.round((e.data.repaired / e.data.total) * 100);
+                      updateCacheBadge(p, false);
+                    }
+                  });
+                });
+              }
+            }
+            watchConnectivity();
+            bootstrap(); // démarre TOUJOURS — cache ou réseau
+        });
+    </script>
+</script>
+
+    <!-- ═══════════════════════════════════════════════════════════════════
+         MODULES INLINÉS — Autonomie PWA complète sans Mac
+         Tous les modules critiques StudioMobile sont embarqués ici.
+         s6_require les trouve dans __INLINE_MODULES__ AVANT tout fetch réseau.
+         ═══════════════════════════════════════════════════════════════════ -->
+    <script>
+    /* %%INLINE_MODULES%% */
+    </script>
+</body>
+</html>
