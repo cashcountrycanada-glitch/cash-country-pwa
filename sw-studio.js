@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v35-esm-fix'; // v35: LIB_MAP pointe vers esm.sh — fix "Identifier already declared"
+const CACHE = 'studio-v36-syntax-fix'; // v36: fix \\U escape + double-brace useStudioOffline
 
 const CRITICAL = [
   '/index-pwa.html',
@@ -23,7 +23,6 @@ const USEFUL = [
 
 const EXTERNAL_LIBS = [
   'https://unpkg.com/@babel/standalone@7.23.10/babel.min.js',
-  'https://cdn.tailwindcss.com',
   'https://esm.sh/react@19.0.0',
   'https://esm.sh/react-dom@19.0.0',
   'https://esm.sh/react-dom@19.0.0/client',
