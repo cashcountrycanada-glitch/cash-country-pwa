@@ -161,9 +161,9 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       studioOfflineDB.getAudio(`inst_${selected.id}`).then(blob => {
         if (blob) {
           setInstUrl(URL.createObjectURL(fixBlobType(blob)));
-          console.log(`[Audio] ✅ inst depuis cache IndexedDB: ${(blob.size/1024/1024).toFixed(1)} MB`);
+          console.log(`[Audio] inst depuis cache IndexedDB: ${(blob.size/1024/1024).toFixed(1)} MB`);
         } else {
-          console.warn('[Audio] ⚠️ inst non en cache — télécharger d'abord via le bouton ▼ vert');
+          console.warn('[Audio] inst non en cache - telecharger via le bouton vert');
           setInstUrl(getMediaUrl(inst.fileName!));
         }
         if (!blob) fetch(getMediaUrl(inst.fileName!)).then(r => r.ok ? r.blob() : null)
@@ -183,9 +183,9 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       studioOfflineDB.getAudio(`vocal_${selected.id}`).then(blob => {
         if (blob) {
           setVocalGuideUrl(URL.createObjectURL(fixBlobType(blob)));
-          console.log(`[Audio] ✅ vocal depuis cache IndexedDB: ${(blob.size/1024/1024).toFixed(1)} MB`);
+          console.log(`[Audio] vocal depuis cache IndexedDB: ${(blob.size/1024/1024).toFixed(1)} MB`);
         } else {
-          console.warn('[Audio] ⚠️ vocal non en cache — tél\u00u00e9charger d'abord via le bouton ▼ vert');
+          console.warn('[Audio] vocal non en cache - telecharger via le bouton vert');
           setVocalGuideUrl(getMediaUrl(vocal.fileName!));
         }
         if (!blob) fetch(getMediaUrl(vocal.fileName!)).then(r => r.ok ? r.blob() : null)
@@ -239,7 +239,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     playRef.current.load();
     try {
       await playRef.current.play();
-      console.log('[Play] Lecture démarrée ✅');
+      console.log('[Play] Lecture demarree');
     } catch(e: any) {
       console.error('[Play] Erreur play():', e.name, e.message);
       alert(`Erreur lecture: ${e.message}`);
