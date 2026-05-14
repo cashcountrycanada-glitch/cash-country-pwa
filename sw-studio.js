@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v59-songselector-fix'; // v59: fix TrackType import + s6_require esModule + upload stems nav bug
+const CACHE = 'studio-v60-div-card-fix'; // v60: carte chanson div+onPointerDown — fix bouton 📁 → RecordScreen sur iOS
 
 const CRITICAL = [
   '/index-pwa.html',
