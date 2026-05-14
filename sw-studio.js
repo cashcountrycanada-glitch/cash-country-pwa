@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v46-debug-songs'; // v36: fix \\U escape + double-brace useStudioOffline
+const CACHE = 'studio-v47-no-settimeout'; // v36: fix \\U escape + double-brace useStudioOffline
 
 const CRITICAL = [
   '/index-pwa.html',
