@@ -228,7 +228,7 @@ export const studioService = {
       try { prevNodes.analyser?.disconnect(); } catch {}
       try { prevNodes.source?.disconnect(); } catch {}
       (window as any).__warmNodes = null;
-      log('\ud83d\udd27 Nodes précédents déconnectés');
+      log('🔧 Nodes précédents déconnectés');
     }
 
     // Contraintes micro : DSP désactivé = capture brute haute qualité
@@ -442,10 +442,10 @@ export const studioService = {
     let srcBuffer: AudioBuffer;
     try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); } finally { tmpCtx.close(); }
     const layers = [
-      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0, gain: 0.85, pan: -0.3, emoji: '\ud83c\udfb5', isDouble: true, suggestedFxId: 'double_epic' },
-      { trackIndex: 2, trackLabel: 'Harmonie +3', pitch: 3, gain: 0.75, pan: 0.4, emoji: '\ud83c\udfb6', isDouble: false, suggestedFxId: 'harmony' },
-      { trackIndex: 3, trackLabel: 'Harmonie +7', pitch: 7, gain: 0.70, pan: -0.4, emoji: '\ud83c\udfbc', isDouble: false, suggestedFxId: 'harmony' },
-      { trackIndex: 4, trackLabel: 'Octave bas', pitch: -12, gain: 0.80, pan: 0.0, emoji: '\ud83d\udd09', isDouble: false, suggestedFxId: 'octave_deep' },
+      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0, gain: 0.85, pan: -0.3, emoji: '🎵', isDouble: true, suggestedFxId: 'double_epic' },
+      { trackIndex: 2, trackLabel: 'Harmonie +3', pitch: 3, gain: 0.75, pan: 0.4, emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 3, trackLabel: 'Harmonie +7', pitch: 7, gain: 0.70, pan: -0.4, emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 4, trackLabel: 'Octave bas', pitch: -12, gain: 0.80, pan: 0.0, emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
       { trackIndex: 5, trackLabel: 'Harmonie +5', pitch: 5, gain: 0.72, pan: 0.3, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
     ];
     const generated: MobileRecording[] = []; const mimeType = getBestMimeType();
