@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v54-closest-v2'; // v36: fix \\U escape + double-brace useStudioOffline
+const CACHE = 'studio-v55-ref-fix'; // v36: fix \\U escape + double-brace useStudioOffline
 
 const CRITICAL = [
   '/index-pwa.html',
