@@ -43,7 +43,7 @@ function DebugPanel({ debugLog, onClear }: { debugLog: string[]; onClear: () => 
         <div style={{ display:'flex', gap:10, alignItems:'center' }}>
           {ctxRate && (
             <span style={{ color: rateColor, fontSize: 9, fontWeight: 900, fontFamily: 'monospace' }}>
-              \ud83c\udfb5 {ctxRate}Hz{ctxState === 'suspended' ? ' ⏸' : ''}
+              🎵 {ctxRate}Hz{ctxState === 'suspended' ? ' ⏸' : ''}
             </span>
           )}
           <span style={{ color:'#facc15', fontSize:9, fontWeight:900, textTransform:'uppercase' }}>
