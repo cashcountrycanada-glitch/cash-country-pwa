@@ -24,9 +24,9 @@ import { Song } from '../../types';
 import { TrackPreset } from './studio.types';
 
 function labelFromDeviceId(deviceId: string): string {
-  if (deviceId === 'default') return '\ud83c\udf99 Micro par défaut';
-  if (deviceId === 'communications') return '\ud83c\udf99 Micro communications';
-  return `\ud83c\udf99 Micro ${deviceId.slice(0, 6)}...`;
+  if (deviceId === 'default') return '🎙 Micro par défaut';
+  if (deviceId === 'communications') return '🎙 Micro communications';
+  return `🎙 Micro ${deviceId.slice(0, 6)}...`;
 }
 
 function classifyDevice(label: string): 'bluetooth' | 'external' | 'builtin' | 'unknown' {
@@ -102,11 +102,11 @@ function resolveAutoDevice(
   // Priorité 2 : Bluetooth détecté → forcer builtin pour garder A2DP
   if (hasBT) {
     if (builtin) {
-      log(`\ud83d\udee1 AUTO → Builtin forcé (${builtin.label}) — A2DP protégé`);
+      log(`🛡 AUTO → Builtin forcé (${builtin.label}) — A2DP protégé`);
       return { deviceId: builtin.deviceId, reason: 'builtin_hfp', label: builtin.label };
     }
     // BT sans builtin identifiable → undefined, iOS prend intégré par défaut
-    log('\ud83d\udee1 AUTO → Défaut iOS (BT présent — builtin introuvable)');
+    log('🛡 AUTO → Défaut iOS (BT présent — builtin introuvable)');
     return { deviceId: undefined, reason: 'builtin_hfp', label: 'Micro iPhone' };
   }
 
@@ -152,8 +152,8 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       audioDevicesRef.current = mics;
       const ext = mics.find(m => m.category === 'external');
       const bt  = mics.find(m => m.category === 'bluetooth');
-      if (ext) opts.onLog?.(`\ud83c\udf99 Externe détecté : ${ext.label}`);
-      if (bt)  opts.onLog?.(`\ud83c\udfa7 Bluetooth : ${bt.label}`);
+      if (ext) opts.onLog?.(`🎙 Externe détecté : ${ext.label}`);
+      if (bt)  opts.onLog?.(`🎧 Bluetooth : ${bt.label}`);
     } catch {}
   }, []);
 
@@ -250,7 +250,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         reason = 'manual';
         const found = currentDevices.find(d => d.deviceId === selectedDevice);
         deviceLabel = found?.label ?? `Device ${selectedDevice.slice(0, 8)}`;
-        opts.onLog?.(`\ud83c\udf99 MANUEL → "${deviceLabel}"`);
+        opts.onLog?.(`🎙 MANUEL → "${deviceLabel}"`);
         // Avertissement si l'utilisateur a sélectionné un micro BT manuellement
         if (found?.category === 'bluetooth') {
           opts.onLog?.('⚠️ Micro BT sélectionné manuellement — iOS peut basculer en HFP (son téléphonie). Préférer "Micro int." si qualité dégradée.');
@@ -266,7 +266,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       setActiveDeviceLabel(deviceLabel);
 
       // 3. Capture DRY
-      opts.onLog?.(`\ud83c\udfa4 Capture DRY → "${deviceLabel}"`);
+      opts.onLog?.(`🎤 Capture DRY → "${deviceLabel}"`);
       const result = await studioService.startRecordingPro({
         reverb: 'none' as any, saturation: 0, compression: false, gainL: 1.0, gainR: 1.0,
         deviceId: effectiveDeviceId,
@@ -277,9 +277,9 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
 
       if (stream) {
         const track = stream.getAudioTracks()[0]; const s = track.getSettings();
-        opts.onLog?.(`\ud83c\udfb5 Stream : ${s.sampleRate ?? '?'}Hz · ${s.channelCount ?? '?'}ch`);
+        opts.onLog?.(`🎵 Stream : ${s.sampleRate ?? '?'}Hz · ${s.channelCount ?? '?'}ch`);
       }
-      if (context) opts.onLog?.(`\ud83c\udfb5 AudioContext : ${context.sampleRate}Hz ${context.sampleRate >= 44000 ? '✅' : '⚠️'}`);
+      if (context) opts.onLog?.(`🎵 AudioContext : ${context.sampleRate}Hz ${context.sampleRate >= 44000 ? '✅' : '⚠️'}`);
 
       stopWorkletRef.current      = stopWorklet ?? null;
       recorderRef.current         = recorder;
@@ -347,7 +347,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     }
     vocalGainNodeRef.current = null;
     setAnalyser(null);
-    opts.onLog?.('\ud83d\udd13 Session micro fermée — stems restaurés');
+    opts.onLog?.('🔓 Session micro fermée — stems restaurés');
 
     const handleSave = async (workletBlob?: Blob) => {
       setIsRecording(false); setIsSaving(true);
@@ -356,10 +356,10 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         let blob: Blob;
         if (workletBlob && workletBlob.size > 0) {
           blob = workletBlob;
-          opts.onLog?.(`\ud83d\udcbe Blob AudioWorklet: ${(workletBlob.size / 1024).toFixed(0)} Ko WAV`);
+          opts.onLog?.(`💾 Blob AudioWorklet: ${(workletBlob.size / 1024).toFixed(0)} Ko WAV`);
         } else if (chunksRef.current.length > 0) {
           blob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || 'audio/mp4' });
-          opts.onLog?.(`\ud83d\udcbe Blob MediaRecorder: ${(blob.size / 1024).toFixed(0)} Ko | chunks=${chunksRef.current.length}`);
+          opts.onLog?.(`💾 Blob MediaRecorder: ${(blob.size / 1024).toFixed(0)} Ko | chunks=${chunksRef.current.length}`);
         } else {
           // Aucune donnée — enregistrement trop court ou erreur capture
           opts.onLog?.('❌ Blob vide — aucune donnée capturée. Durée suffisante?');
@@ -377,7 +377,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         const ext = workletBlob ? 'wav' : (chunksRef.current[0]?.type?.includes('mp4') ? 'mp4' : 'webm');
         const fileName = `${safeTitle}_T${opts.currentPreset.index}_${Date.now()}.${ext}`;
 
-        opts.onLog?.(`\ud83d\udcbe Sauvegarde: ${fileName}`);
+        opts.onLog?.(`💾 Sauvegarde: ${fileName}`);
         const dataUrl = await studioService.blobToDataUrl(blob);
         opts.onLog?.(`✅ dataUrl: ${(dataUrl.length / 1024).toFixed(0)} Ko`);
 

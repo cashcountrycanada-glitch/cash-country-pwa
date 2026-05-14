@@ -48,7 +48,7 @@ export const FX_PRESETS: FxPreset[] = [
   {
     id: 'clean',
     label: 'Clean',
-    emoji: '\ud83c\udf99',
+    emoji: '🎙',
     description: 'Signal propre sans traitement',
     color: '#71717a',
     lowGain: 0, midGain: 0, highGain: 0,
@@ -58,7 +58,7 @@ export const FX_PRESETS: FxPreset[] = [
   {
     id: 'studio_vocal',
     label: 'Studio Vocal',
-    emoji: '\ud83c\udfa4',
+    emoji: '🎤',
     description: 'Voix chaude et présente, compression douce',
     color: '#ef4444',
     lowGain: 1.0, midGain: 2.5, highGain: 1.5,
@@ -68,7 +68,7 @@ export const FX_PRESETS: FxPreset[] = [
   {
     id: 'country_warm',
     label: 'Country Warm',
-    emoji: '\ud83e\udd20',
+    emoji: '🤠',
     description: 'Son country chaleureux, graves riches',
     color: '#f97316',
     lowGain: 3.0, midGain: -0.5, highGain: 1.0,
@@ -78,7 +78,7 @@ export const FX_PRESETS: FxPreset[] = [
   {
     id: 'punchy',
     label: 'Punchy',
-    emoji: '\ud83d\udca5',
+    emoji: '💥',
     description: 'Attaque forte, présence dans le mix',
     color: '#eab308',
     lowGain: 0.5, midGain: 3.5, highGain: 2.0,
@@ -98,7 +98,7 @@ export const FX_PRESETS: FxPreset[] = [
   {
     id: 'harmony',
     label: 'Harmony',
-    emoji: '\ud83c\udfb6',
+    emoji: '🎶',
     description: 'Idéal pour harmonies et layers vocaux',
     color: '#a855f7',
     lowGain: -2.0, midGain: 1.0, highGain: 2.5,
@@ -108,7 +108,7 @@ export const FX_PRESETS: FxPreset[] = [
   {
     id: 'double_epic',
     label: 'Double Epic',
-    emoji: '\ud83c\udfb5',
+    emoji: '🎵',
     description: 'Double tracking épais et large',
     color: '#3b82f6',
     lowGain: 1.5, midGain: -1.0, highGain: 1.5,
@@ -118,7 +118,7 @@ export const FX_PRESETS: FxPreset[] = [
   {
     id: 'octave_deep',
     label: 'Octave Deep',
-    emoji: '\ud83d\udd09',
+    emoji: '🔉',
     description: 'Octave grave profonde et puissante',
     color: '#06b6d4',
     lowGain: 5.0, midGain: -2.0, highGain: -1.0,
@@ -138,7 +138,7 @@ export const FX_PRESETS: FxPreset[] = [
   {
     id: 'velvet',
     label: 'Velvet',
-    emoji: '\ud83c\udfbc',
+    emoji: '🎼',
     description: 'Son doux et velouté, voix soul/R&B',
     color: '#d946ef',
     lowGain: 2.5, midGain: -0.5, highGain: -1.0,
@@ -150,11 +150,11 @@ export const FX_PRESETS: FxPreset[] = [
 export const FX_PRESET_DEFAULT = FX_PRESETS[0]; // Clean
 
 export const TRACK_PRESETS: TrackPreset[] = [
-  { index: 0, label: 'Voix principale', pitch: 0,   pan: 0,    gain: 1.0,  color: '#ef4444', emoji: '\ud83c\udfa4' },
-  { index: 1, label: 'Double tracking', pitch: 0,   pan: -0.4, gain: 0.6,  color: '#f97316', emoji: '\ud83c\udfb5' },
-  { index: 2, label: 'Harmonie +3',     pitch: 3,   pan: 0.5,  gain: 0.5,  color: '#eab308', emoji: '\ud83c\udfb6' },
-  { index: 3, label: 'Harmonie +7',     pitch: 7,   pan: -0.5, gain: 0.45, color: '#22c55e', emoji: '\ud83c\udfbc' },
-  { index: 4, label: 'Octave bas',      pitch: -12, pan: 0,    gain: 0.35, color: '#3b82f6', emoji: '\ud83d\udd09' },
+  { index: 0, label: 'Voix principale', pitch: 0,   pan: 0,    gain: 1.0,  color: '#ef4444', emoji: '🎤' },
+  { index: 1, label: 'Double tracking', pitch: 0,   pan: -0.4, gain: 0.6,  color: '#f97316', emoji: '🎵' },
+  { index: 2, label: 'Harmonie +3',     pitch: 3,   pan: 0.5,  gain: 0.5,  color: '#eab308', emoji: '🎶' },
+  { index: 3, label: 'Harmonie +7',     pitch: 7,   pan: -0.5, gain: 0.45, color: '#22c55e', emoji: '🎼' },
+  { index: 4, label: 'Octave bas',      pitch: -12, pan: 0,    gain: 0.35, color: '#3b82f6', emoji: '🔉' },
   { index: 5, label: 'Harmonie +5',     pitch: 5,   pan: 0.3,  gain: 0.4,  color: '#a855f7', emoji: '✨' },
 ];
 

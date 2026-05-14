@@ -51,10 +51,10 @@ interface Props {
 
 // Définition des harmonies avec info musicale
 const HARMONY_DEFS = [
-  { trackIndex: 1, label: 'Double',    pitch:  0,  color: '#f97316', emoji: '\ud83c\udfb5', musicNote: 'Unisson',   desc: 'Épaissit la voix' },
-  { trackIndex: 2, label: '+3',        pitch:  3,  color: '#eab308', emoji: '\ud83c\udfb6', musicNote: 'Tierce m.', desc: 'Harmonie douce' },
-  { trackIndex: 3, label: '+7',        pitch:  7,  color: '#22c55e', emoji: '\ud83c\udfbc', musicNote: 'Quinte',    desc: 'Harmonie forte' },
-  { trackIndex: 4, label: 'Oct ↓',    pitch: -12, color: '#3b82f6', emoji: '\ud83d\udd09', musicNote: 'Octave -1', desc: 'Voix grave' },
+  { trackIndex: 1, label: 'Double',    pitch:  0,  color: '#f97316', emoji: '🎵', musicNote: 'Unisson',   desc: 'Épaissit la voix' },
+  { trackIndex: 2, label: '+3',        pitch:  3,  color: '#eab308', emoji: '🎶', musicNote: 'Tierce m.', desc: 'Harmonie douce' },
+  { trackIndex: 3, label: '+7',        pitch:  7,  color: '#22c55e', emoji: '🎼', musicNote: 'Quinte',    desc: 'Harmonie forte' },
+  { trackIndex: 4, label: 'Oct ↓',    pitch: -12, color: '#3b82f6', emoji: '🔉', musicNote: 'Octave -1', desc: 'Voix grave' },
   { trackIndex: 5, label: '+5',        pitch:  5,  color: '#a855f7', emoji: '✨', musicNote: 'Quarte',    desc: 'Harmonie riche' },
 ];
 
@@ -285,7 +285,7 @@ export default function MixerScreen({
               {(project as any).suggestedKey && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-xl mb-3"
                   style={{ background: '#a855f720', border: '1px solid #a855f730' }}>
-                  <span className="text-base">\ud83c\udfb5</span>
+                  <span className="text-base">🎵</span>
                   <div className="flex-1">
                     <p className="text-[10px] font-black text-purple-300">Tonalité détectée : {(project as any).suggestedKey}</p>
                     <p className="text-[9px] text-zinc-500">Les harmonies sont optimisées pour cette clé</p>
@@ -301,7 +301,7 @@ export default function MixerScreen({
                     className="w-full flex items-center justify-between px-3 py-2 rounded-xl mb-2 active:scale-[0.98] transition-all"
                     style={{ background: showSections ? '#1e1e2e' : '#0f0f0f', border: '1px solid #2a2a2a' }}>
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px]">\ud83d\uddfa</span>
+                      <span className="text-[10px]">🗺</span>
                       <span className="text-[10px] font-black text-zinc-300 uppercase tracking-wider">Harmonies par section</span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -595,7 +595,7 @@ export default function MixerScreen({
           <div className="space-y-2">
             {tracks.filter(t => !(t as any).isGenerated).length > 0 && (
               <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest px-1">
-                \ud83c\udfa4 Pistes enregistrées
+                🎤 Pistes enregistrées
               </p>
             )}
             {tracks.filter(t => !(t as any).isGenerated).map(track => (
@@ -671,7 +671,7 @@ export default function MixerScreen({
                 <div className="border-t border-white/5 divide-y divide-white/5">
                   <button onClick={handleMasterize}
                     className="w-full py-3.5 font-black text-[12px] uppercase tracking-widest flex items-center justify-center gap-2 text-purple-400 active:bg-zinc-900 transition-all">
-                    \ud83c\udf9b️ Masteriser & Exporter
+                    🎛️ Masteriser & Exporter
                     <span className="text-[10px] opacity-60">{instBlob ? '+ instrumental' : 'voix seule'}</span>
                   </button>
 

@@ -122,7 +122,7 @@ function MacUrlConfig() {
 
   if (autoDetecting) return (
     <div className="mx-5 mt-4 bg-zinc-900/40 border border-zinc-800 rounded-2xl px-4 py-2 flex items-center gap-3">
-      <span className="text-lg animate-pulse">\ud83d\udcbb</span>
+      <span className="text-lg animate-pulse">💻</span>
       <p className="text-[11px] font-black text-zinc-500 uppercase tracking-widest">Détection Mac...</p>
     </div>
   );
@@ -130,7 +130,7 @@ function MacUrlConfig() {
   if (macUrl) return (
     <div className="mx-5 mt-4 bg-zinc-900/40 border border-zinc-800 rounded-2xl px-3 py-2">
       <div className="flex items-center gap-2">
-        <span className="text-emerald-400 text-[11px]">\ud83d\udcbb</span>
+        <span className="text-emerald-400 text-[11px]">💻</span>
         <div className="flex-1 min-w-0">
           <p className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">Mac connecté</p>
           <p className="text-[9px] text-zinc-600 font-mono truncate">{macUrl}</p>
@@ -140,14 +140,14 @@ function MacUrlConfig() {
       </div>
       <a href={`${macUrl}/api/songs`} target="_blank" rel="noopener noreferrer"
         className="block mt-2 text-center py-1.5 bg-blue-900/40 border border-blue-700/40 rounded-xl text-[10px] font-black text-blue-300 active:scale-95">
-        \ud83d\udd12 Approuver le certificat SSL (1 fois requis)
+        🔒 Approuver le certificat SSL (1 fois requis)
       </a>
     </div>
   );
 
   return (
     <div className="mx-5 mt-4 bg-amber-950/30 border border-amber-600/30 rounded-2xl px-4 py-3 flex items-center gap-3">
-      <span className="text-xl shrink-0">\ud83d\udcbb</span>
+      <span className="text-xl shrink-0">💻</span>
       <div className="flex-1 min-w-0">
         <p className="text-[12px] font-black text-amber-300">Mac non configuré</p>
         <p className="text-[10px] text-zinc-500 leading-relaxed">Même WiFi que ton Mac requis.</p>
@@ -224,7 +224,7 @@ export default function SongSelector({
             )}
             {cacheHealth === 'repairing' && (
               <div className="flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: '#1e3a5f' }}>
-                <span className="text-[9px]">\ud83d\udd27</span>
+                <span className="text-[9px]">🔧</span>
                 <span className="text-[9px] font-black text-blue-400 uppercase">Réparation {repairProgress}%</span>
               </div>
             )}
@@ -252,7 +252,7 @@ export default function SongSelector({
         <div className="mx-5 mt-4 bg-amber-950/30 border border-amber-600/40 rounded-2xl px-4 py-3">
           <p className="text-[12px] font-black text-amber-400 mb-1">⚠️ Micro bloqué — Safari exige HTTPS</p>
           <a href={httpsUrl} className="block text-center py-2 bg-amber-600 rounded-xl font-black text-[12px] text-white uppercase tracking-widest">
-            \ud83d\udd12 Ouvrir en HTTPS
+            🔒 Ouvrir en HTTPS
           </a>
           <p className="text-[10px] text-zinc-600 mt-1.5 text-center">Accepte le certificat → "Continuer quand même"</p>
         </div>
@@ -261,7 +261,7 @@ export default function SongSelector({
       {/* Bannière PWA */}
       {!isInstalled ? (
         <div className="mx-5 mt-4 bg-red-950/30 border border-red-600/30 rounded-2xl px-4 py-3 flex items-center gap-3">
-          <div className="w-10 h-10 bg-red-600 rounded-xl flex items-center justify-center shrink-0"><span className="text-xl">\ud83c\udfa4</span></div>
+          <div className="w-10 h-10 bg-red-600 rounded-xl flex items-center justify-center shrink-0"><span className="text-xl">🎤</span></div>
           <div className="flex-1 min-w-0">
             <p className="text-[12px] font-black text-white">Installer l'app sur iPhone</p>
             <p className="text-[10px] text-zinc-400 mt-0.5">Hors-ligne, micro, enregistrements</p>
@@ -356,7 +356,7 @@ export default function SongSelector({
                       {/* État normal */}
                       {!isCaching && !hasError && (
                         <div className="flex items-center gap-2 mt-1">
-                          {hasProject && <p className="text-[10px] text-red-400 font-black">\ud83c\udf9b Projet en cours</p>}
+                          {hasProject && <p className="text-[10px] text-red-400 font-black">🎛 Projet en cours</p>}
                           {isCached   && <p className="text-[10px] text-emerald-500 font-black">✓ Hors-ligne</p>}
                         </div>
                       )}
@@ -479,7 +479,7 @@ export default function SongSelector({
                           <button
                             onClick={e => { e.stopPropagation(); setShowImport(v => v === s.id ? null : s.id); }}
                           className="w-10 h-10 rounded-full flex items-center justify-center active:scale-90 border bg-zinc-900 border-zinc-800">
-                          <span className="text-[15px]">\ud83d\udcc1</span>
+                          <span className="text-[15px]">📁</span>
                           </button>
                         </div>
                       )}
@@ -495,26 +495,26 @@ export default function SongSelector({
                     return (
                       <div className="mx-1 mb-2 bg-zinc-900/80 border border-zinc-700 rounded-2xl px-4 py-3" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-3">
-                          <p className="text-[11px] font-black text-zinc-300 uppercase tracking-widest">\ud83d\udcc1 Importer depuis Fichiers</p>
+                          <p className="text-[11px] font-black text-zinc-300 uppercase tracking-widest">📁 Importer depuis Fichiers</p>
                           <button onClick={() => setShowImport(null)} className="text-[10px] text-zinc-600 font-black active:text-zinc-400">✕ Fermer</button>
                         </div>
                         {_iName && <div className="mb-3">
-                          <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mb-1">\ud83c\udfb8 Instrumental</p>
+                          <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mb-1">🎸 Instrumental</p>
                           <p className="text-[10px] font-mono text-zinc-400 bg-zinc-800 rounded-lg px-2 py-1 mb-2 truncate">{_iName}</p>
                           <label className="block">
                             <input type="file" accept="audio/*,.flac,.wav,.mp3,.m4a,.mp4" className="hidden" onChange={e => handleFileImport(s, 'inst', e)}/>
                             <span className={`flex items-center justify-center gap-2 py-2 rounded-xl font-black text-[11px] uppercase active:scale-95 cursor-pointer ${importing === s.id+':inst' ? 'bg-zinc-700 text-zinc-400' : 'bg-blue-700 text-white'}`}>
-                              {importing === s.id+':inst' ? '⏳ Import...' : '\ud83d\udcc2 Choisir'}
+                              {importing === s.id+':inst' ? '⏳ Import...' : '📂 Choisir'}
                             </span>
                           </label>
                         </div>}
                         {_vName && <div>
-                          <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mb-1">\ud83c\udfa4 Vocal stem</p>
+                          <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mb-1">🎤 Vocal stem</p>
                           <p className="text-[10px] font-mono text-zinc-400 bg-zinc-800 rounded-lg px-2 py-1 mb-2 truncate">{_vName}</p>
                           <label className="block">
                             <input type="file" accept="audio/*,.flac,.wav,.mp3,.m4a,.mp4" className="hidden" onChange={e => handleFileImport(s, 'vocal', e)}/>
                             <span className={`flex items-center justify-center gap-2 py-2 rounded-xl font-black text-[11px] uppercase active:scale-95 cursor-pointer ${importing === s.id+':vocal' ? 'bg-zinc-700 text-zinc-400' : 'bg-emerald-700 text-white'}`}>
-                              {importing === s.id+':vocal' ? '⏳ Import...' : '\ud83d\udcc2 Choisir'}
+                              {importing === s.id+':vocal' ? '⏳ Import...' : '📂 Choisir'}
                             </span>
                           </label>
                         </div>}

@@ -274,14 +274,14 @@ export function useStudioOffline(): OfflineResult {
     const alreadyCached = !force && await studioOfflineDB.hasAudio(key);
 
     if (alreadyCached) {
-      const label = type === 'instrumental' ? '\ud83c\udfb8 Instrumental — déjà en cache ✓' : '\ud83c\udfa4 Guide vocal — déjà en cache ✓';
+      const label = type === 'instrumental' ? '🎸 Instrumental — déjà en cache ✓' : '🎤 Guide vocal — déjà en cache ✓';
       setCacheProgress({ step: `${baseStep}_download` as any, label, pct: basePct + 47 });
       await new Promise(r => setTimeout(r, 300));
       return true;
     }
 
     const converting = needsConversion(fileName);
-    const emoji = type === 'instrumental' ? '\ud83c\udfb8' : '\ud83c\udfa4';
+    const emoji = type === 'instrumental' ? '🎸' : '🎤';
     const name  = type === 'instrumental' ? 'Instrumental' : 'Guide vocal';
 
     if (converting) {

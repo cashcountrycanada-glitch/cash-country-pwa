@@ -318,16 +318,16 @@ Pour le sauvegarder :\
 // ── Presets de masterisation ─────────────────────────────────────────────────
 // Catégories : Distribution, Country, Style vocal, Live
 const PRESET_CATEGORIES: { id: string; label: string; keys: string[] }[] = [
-  { id: 'distrib',  label: '\ud83c\udf10 Distribution', keys: ['spotify', 'youtube', 'podcast'] },
-  { id: 'country',  label: '\ud83e\udd20 Country',       keys: ['country', 'country_live', 'country_bright'] },
-  { id: 'vocal',    label: '\ud83c\udfa4 Vocal',          keys: ['studio_vocal', 'velvet', 'airy'] },
-  { id: 'impact',   label: '\ud83d\udca5 Impact',         keys: ['radio', 'punchy', 'vintage'] },
+  { id: 'distrib',  label: '🌐 Distribution', keys: ['spotify', 'youtube', 'podcast'] },
+  { id: 'country',  label: '🤠 Country',       keys: ['country', 'country_live', 'country_bright'] },
+  { id: 'vocal',    label: '🎤 Vocal',          keys: ['studio_vocal', 'velvet', 'airy'] },
+  { id: 'impact',   label: '💥 Impact',         keys: ['radio', 'punchy', 'vintage'] },
 ];
 
 const PRESETS: Record<string, { label: string; emoji: string; description: string; settings: MasterSettings }> = {
   // ── Distribution ──
   spotify: {
-    label: 'Spotify / Apple Music', emoji: '\ud83c\udfb5',
+    label: 'Spotify / Apple Music', emoji: '🎵',
     description: '-14 LUFS · Streaming standard',
     settings: { lowGain: 1.5, midGain: 0.5, highGain: 1.0, threshold: -18, ratio: 3, attack: 10, release: 150, ceiling: -1.0, targetLufs: -14 },
   },
@@ -337,18 +337,18 @@ const PRESETS: Record<string, { label: string; emoji: string; description: strin
     settings: { lowGain: 2.0, midGain: 0.0, highGain: 1.5, threshold: -16, ratio: 4, attack: 8, release: 120, ceiling: -1.0, targetLufs: -13 },
   },
   podcast: {
-    label: 'Podcast / Voix', emoji: '\ud83c\udf99',
+    label: 'Podcast / Voix', emoji: '🎙',
     description: '-16 LUFS · Clarté maximale voix',
     settings: { lowGain: -1.0, midGain: 3.0, highGain: 1.5, threshold: -20, ratio: 3, attack: 15, release: 200, ceiling: -1.5, targetLufs: -16 },
   },
   // ── Country ──
   country: {
-    label: 'Country Warm', emoji: '\ud83e\udd20',
+    label: 'Country Warm', emoji: '🤠',
     description: 'Son chaleureux, graves riches',
     settings: { lowGain: 3.0, midGain: -1.0, highGain: 0.5, threshold: -20, ratio: 3.5, attack: 15, release: 200, ceiling: -1.5, targetLufs: -14 },
   },
   country_live: {
-    label: 'Country Live', emoji: '\ud83c\udfb8',
+    label: 'Country Live', emoji: '🎸',
     description: 'Energie scène, présence naturelle',
     settings: { lowGain: 2.0, midGain: 1.5, highGain: 1.0, threshold: -16, ratio: 4, attack: 8, release: 120, ceiling: -1.0, targetLufs: -12 },
   },
@@ -359,12 +359,12 @@ const PRESETS: Record<string, { label: string; emoji: string; description: strin
   },
   // ── Vocal ──
   studio_vocal: {
-    label: 'Studio Vocal', emoji: '\ud83c\udfa4',
+    label: 'Studio Vocal', emoji: '🎤',
     description: 'Voix présente, son pro',
     settings: { lowGain: 1.0, midGain: 2.5, highGain: 1.5, threshold: -18, ratio: 3, attack: 10, release: 150, ceiling: -1.0, targetLufs: -14 },
   },
   velvet: {
-    label: 'Velvet', emoji: '\ud83c\udfbc',
+    label: 'Velvet', emoji: '🎼',
     description: 'Son velouté, chaleureux',
     settings: { lowGain: 2.5, midGain: -0.5, highGain: -1.0, threshold: -22, ratio: 3, attack: 15, release: 250, ceiling: -1.5, targetLufs: -14 },
   },
@@ -375,17 +375,17 @@ const PRESETS: Record<string, { label: string; emoji: string; description: strin
   },
   // ── Impact ──
   radio: {
-    label: 'Radio / Loud', emoji: '\ud83d\udcfb',
+    label: 'Radio / Loud', emoji: '📻',
     description: '-13 LUFS · Fort et percutant',
     settings: { lowGain: 0.0, midGain: 1.5, highGain: 3.0, threshold: -15, ratio: 5, attack: 5, release: 100, ceiling: -1.0, targetLufs: -13 },
   },
   punchy: {
-    label: 'Punchy', emoji: '\ud83d\udca5',
+    label: 'Punchy', emoji: '💥',
     description: 'Attaque forte, présence mix',
     settings: { lowGain: 0.5, midGain: 3.5, highGain: 2.0, threshold: -15, ratio: 5, attack: 3, release: 80, ceiling: -1.0, targetLufs: -13 },
   },
   vintage: {
-    label: 'Vintage', emoji: '\ud83d\udcef',
+    label: 'Vintage', emoji: '📯',
     description: 'Chaleur analogique, son rétro',
     settings: { lowGain: 4.0, midGain: -2.0, highGain: -1.5, threshold: -22, ratio: 2.5, attack: 20, release: 300, ceiling: -2.0, targetLufs: -16 },
   },
