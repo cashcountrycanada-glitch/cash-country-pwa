@@ -1,12 +1,12 @@
 /**
- * sw-studio.js v37 — fix libs ESM : esm.sh au lieu de /libs/*.esm.js locaux
+ * sw-studio.js v35 — fix libs ESM : esm.sh au lieu de /libs/*.esm.js locaux
  * Correctif: "Identifier 'X' has already been declared" causé par dynamic import()
  * sur des fichiers ESM locaux qui s'exécutent dans le scope global de la page.
  * Solution: toutes les libs React/lucide/scheduler passent maintenant par esm.sh
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v45-blobtype-fix'; // v36: fix \\U escape + double-brace useStudioOffline
+const CACHE = 'studio-v39-volume-fix'; // v36: fix \\U escape + double-brace useStudioOffline
 
 const CRITICAL = [
   '/index-pwa.html',
