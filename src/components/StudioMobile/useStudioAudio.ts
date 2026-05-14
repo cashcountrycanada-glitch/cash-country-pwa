@@ -209,7 +209,6 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       setVocalCached(false);
     }).finally(() => setVocalLoading(false));
   }, [selected?.id]);
-  }, [selected?.id]);
 
   const playRecording = useCallback(async (rec: MobileRecording) => {
     if (!playRef.current) return;
