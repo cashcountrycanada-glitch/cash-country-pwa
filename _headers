@@ -1,0 +1,13 @@
+/sw-studio.js
+  Content-Type: application/javascript
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /
+
+/index.html
+  Cache-Control: no-cache
+
+/libs/*
+  Cache-Control: public, max-age=604800
+
+/*
+  Access-Control-Allow-Origin: *
