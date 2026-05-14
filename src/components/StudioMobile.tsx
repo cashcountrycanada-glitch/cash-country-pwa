@@ -43,7 +43,7 @@ function DebugPanel({ debugLog, onClear }: { debugLog: string[]; onClear: () => 
         <div style={{ display:'flex', gap:10, alignItems:'center' }}>
           {ctxRate && (
             <span style={{ color: rateColor, fontSize: 9, fontWeight: 900, fontFamily: 'monospace' }}>
-              🎵 {ctxRate}Hz{ctxState === 'suspended' ? ' ⏸' : ''}
+              \ud83c\udfb5 {ctxRate}Hz{ctxState === 'suspended' ? ' ⏸' : ''}
             </span>
           )}
           <span style={{ color:'#facc15', fontSize:9, fontWeight:900, textTransform:'uppercase' }}>
@@ -216,40 +216,70 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const handlePanTrack = (i: number, v: number) => updateProject(p => ({ ...p, tracks: p.tracks.map(t => t.trackIndex === i ? { ...t, pan: v } : t) }));
   const handleDeleteTrack = (i: number) => updateProject(p => ({ ...p, tracks: p.tracks.filter(t => t.trackIndex !== i) }));
 
-  const handlePreviewStems = async () => {
-    const inst = audio.instRef.current;
+  const handlePreviewStems = () => {
+    const inst  = audio.instRef.current;
     const vocal = audio.vocalGuideRef.current;
     addLog(`PREVIEW tap | instUrl=${audio.instUrl ? audio.instUrl.slice(0,30) : 'NULL'}`);
+
     if (isPreviewing) {
       inst?.pause(); vocal?.pause(); setIsPreviewing(false);
-    } else {
-      const waitReady = (el: HTMLAudioElement): Promise<void> => new Promise(resolve => {
-        if (el.readyState >= 3) { resolve(); return; }
-        const onReady = () => { el.removeEventListener('canplay', onReady); resolve(); };
-        el.addEventListener('canplay', onReady);
-        setTimeout(resolve, 3000);
-      });
-      const toWait: Promise<void>[] = [];
-      if (inst && audio.instUrl) toWait.push(waitReady(inst));
-      if (vocal && audio.vocalGuideUrl) toWait.push(waitReady(vocal));
-      await Promise.all(toWait);
-      if (inst && audio.instUrl) inst.currentTime = 0;
-      if (vocal && audio.vocalGuideUrl) vocal.currentTime = 0;
-      const plays: Promise<void>[] = [];
-      if (inst && audio.instUrl) plays.push(inst.play().then(() => addLog('inst.play() SUCCÈS')).catch(e => addLog(`inst.play() ERREUR: ${e.name}`)));
-      if (vocal && audio.vocalGuideUrl) {
-        // Forcer le volume avant play — GainNode peut être absent si AudioContext pas encore actif
-        try { vocal.volume = audio.vocalVolRef.current; } catch {}
-        plays.push(vocal.play().then(() => {
-          addLog('vocal.play() SUCCÈS');
-          // Appliquer GainNode maintenant que l'AudioContext est actif
-          audio.setVocalGuideVol(audio.vocalGuideVol);
-        }).catch(e => addLog(`vocal.play() ERREUR: ${e.name}`)));
-      }
-      Promise.all(plays).catch(() => {});
-      setIsPreviewing(true);
-      if (inst) inst.onended = () => { vocal?.pause(); setIsPreviewing(false); inst.onended = null; };
+      return;
     }
+
+    // iOS: résumer l'AudioContext DANS le callstack du geste (pas après un await)
+    const ctx = (window as any).__warmContext as AudioContext | undefined;
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    // Lancer play() immédiatement — SANS await, pour rester dans le callstack du geste
+    // iOS bloque play() si le callstack est rompu par un await intermédiaire
+    const doPlay = (el: HTMLAudioElement, label: string) => {
+      el.currentTime = 0;
+      el.play()
+        .then(() => addLog(`${label}.play() OK`))
+        .catch((e: Error) => {
+          addLog(`${label}.play() ERREUR: ${e.name}`);
+          // Fallback : recharger et réessayer une fois
+          if (e.name === 'NotSupportedError' || e.name === 'NotAllowedError') {
+            el.load();
+            setTimeout(() => {
+              el.play()
+                .then(() => addLog(`${label}.play() retry OK`))
+                .catch((e2: Error) => addLog(`${label}.play() retry ERREUR: ${e2.name}`));
+            }, 300);
+          }
+        });
+    };
+
+    if (inst && audio.instUrl) {
+      // S'assurer que le src est bien assigné (cas où instUrl vient de changer)
+      if (inst.src !== audio.instUrl && !inst.src.endsWith(audio.instUrl)) {
+        inst.src = audio.instUrl;
+        inst.load();
+        inst.addEventListener('canplay', () => doPlay(inst, 'inst'), { once: true });
+      } else {
+        doPlay(inst, 'inst');
+      }
+      inst.onended = () => { vocal?.pause(); setIsPreviewing(false); inst.onended = null; };
+    }
+
+    if (vocal && audio.vocalGuideUrl) {
+      try { vocal.volume = audio.vocalVolRef.current; } catch {}
+      if (vocal.src !== audio.vocalGuideUrl && !vocal.src.endsWith(audio.vocalGuideUrl)) {
+        vocal.src = audio.vocalGuideUrl;
+        vocal.load();
+        vocal.addEventListener('canplay', () => {
+          doPlay(vocal, 'vocal');
+          audio.setVocalGuideVol(audio.vocalGuideVol);
+        }, { once: true });
+      } else {
+        doPlay(vocal, 'vocal');
+        audio.setVocalGuideVol(audio.vocalGuideVol);
+      }
+    }
+
+    setIsPreviewing(true);
   };
 
   const handleDeleteRecording = (id: string) => { studioService.deleteLocalRecording(id); reloadRecordings(); };
@@ -300,7 +330,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   if (screen === 'master' && masterVocalBlob && selected) return <MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} />;
   if (screen === 'comp' && selected) return <CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onCompReady={async (blob) => { const dataUrl = await studioService.blobToDataUrl(blob); const rec: MobileRecording = { id: `COMP-${Date.now()}`, songId: selected.id, songTitle: selected.title, artist: selected.artist || '', duration: compTakes.reduce((s,t)=>s+t.regions.reduce((rs,r)=>rs+(r.endSec-r.startSec),0),0), recordedAt: Date.now(), dataUrl, transferred: false, fileName: `COMP_${selected.title.replace(/\s+/g,'_')}_${Date.now()}.mp4`, trackLabel: 'Comp final', trackIndex: 99, projectId: project?.id }; studioService.saveRecordingLocally(rec); reloadRecordings(); if (project) { updateProject(p => ({ ...p, mixedDataUrl: dataUrl })); setMixDone(true); } setScreen('mixer'); }} />;
   if (screen === 'mixer' && selected && project) return <MixerScreen selected={selected} project={project} playingId={audio.playingId} isMixing={isMixing} mixDone={mixDone} isOnline={offline.isOnline} uploading={uploading} uploadDone={uploadDone} playRef={audio.playRef} instBlob={masterInstBlob} onBack={() => setScreen('record')} onGoSongs={() => setScreen('songs')} onAddTrack={() => setScreen('record')} onPlay={audio.playRecording} onMute={handleMuteTrack} onSolo={handleSoloTrack} onVolume={handleVolumeTrack} onPan={handlePanTrack} onDelete={handleDeleteTrack} onMix={handleMix} onPlayMix={() => project?.mixedDataUrl && audio.playMix(project.mixedDataUrl)} onMasterize={async (vocalBlob, _) => { const ib = await getInstBlob(); handleMasterize(vocalBlob, ib); }} onUploadMix={handleUploadMix} onGoComp={(takes) => { setCompTakes(takes); setScreen('comp'); }} onProjectUpdate={(up) => { setProject(up); studioService.saveProject(up); reloadRecordings(); }} />;
-  if (screen === 'record' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><RecordScreen selected={selected} project={project} currentPreset={currentPreset} reverb={reverb} isRecording={recorder.isRecording} isSaving={recorder.isSaving} duration={recorder.duration} analyser={recorder.analyser} vuLevel={recorder.vuLevel} monitoring={recorder.monitoring} permError={recorder.permError} httpsUrl={offline.httpsUrl} instUrl={audio.instUrl} instLoading={audio.instLoading} vocalGuideUrl={audio.vocalGuideUrl} vocalLoading={audio.vocalLoading} vocalGuideVol={audio.vocalGuideVol} showLyrics={showLyrics} instRef={audio.instRef} vocalGuideRef={audio.vocalGuideRef} onPreWarmMic={recorder.preWarmMic} onBack={() => { if (isPreviewing) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); setIsPreviewing(false); } setScreen('songs'); setSelected(null); }} onGoMixer={() => { if (isPreviewing) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); setIsPreviewing(false); } setScreen('mixer'); }} onPresetChange={setCurrentPreset} onReverbChange={setReverb} takeSlot={takeSlot} onTakeSlotChange={setTakeSlot} slotTakes={slotTakes}
+  if (screen === 'record' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><RecordScreen selected={selected} project={project} currentPreset={currentPreset} reverb={reverb} isRecording={recorder.isRecording} isSaving={recorder.isSaving} duration={recorder.duration} analyser={recorder.analyser} vuLevel={recorder.vuLevel} monitoring={recorder.monitoring} permError={recorder.permError} httpsUrl={offline.httpsUrl} instUrl={audio.instUrl} instLoading={audio.instLoading} instCached={audio.instCached} vocalGuideUrl={audio.vocalGuideUrl} vocalLoading={audio.vocalLoading} vocalCached={audio.vocalCached} vocalGuideVol={audio.vocalGuideVol} showLyrics={showLyrics} instRef={audio.instRef} vocalGuideRef={audio.vocalGuideRef} onPreWarmMic={recorder.preWarmMic} onBack={() => { if (isPreviewing) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); setIsPreviewing(false); } setScreen('songs'); setSelected(null); }} onGoMixer={() => { if (isPreviewing) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); setIsPreviewing(false); } setScreen('mixer'); }} onPresetChange={setCurrentPreset} onReverbChange={setReverb} takeSlot={takeSlot} onTakeSlotChange={setTakeSlot} slotTakes={slotTakes}
         onStartRecording={() => { if (isPreviewing) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); setIsPreviewing(false); } if (selected && project) recorder.startRecording(selected, project); }} onStopRecording={() => { if (selected && project) recorder.stopRecording(selected, project, handleRecordingSaved); }} onToggleMonitor={recorder.toggleMonitoring} onVocalVolumeChange={audio.setVocalGuideVol} onToggleLyrics={() => setShowLyrics(v => !v)} onPreviewStems={handlePreviewStems} isPreviewing={isPreviewing} audioDevices={recorder.audioDevices} selectedDevice={recorder.selectedDevice} onSelectDevice={recorder.setSelectedDevice} onRefreshDevices={recorder.refreshDevices} punchIn={recorder.punchIn} punchOut={recorder.punchOut} onSetPunchIn={recorder.setPunchIn} onSetPunchOut={recorder.setPunchOut} stemDuration={audio.instRef.current?.duration || 0} sections={(project?.sections as any[] ?? [])} bluetoothMicDetected={recorder.bluetoothMicDetected} forcedBuiltinMic={recorder.forcedBuiltinMic} /></>;
   if (screen === 'recordings') return <RecordingsList recordings={recordings} pendingCount={pendingCount} playingId={audio.playingId} uploading={uploading} uploadDone={uploadDone} isOnline={offline.isOnline} playRef={audio.playRef} onBack={() => setScreen('songs')} onPlay={audio.playRecording} onUpload={handleUploadRecording} onDelete={handleDeleteRecording} />;
   return <><SongSelector songs={originals} isOnline={offline.isOnline} isInstalled={offline.isInstalled} httpsUrl={offline.httpsUrl} cachedSongs={offline.cachedSongs} cachingId={offline.cachingId} cacheProgress={offline.cacheProgress} cacheError={offline.cacheError} cachedCount={offline.cachedCount} storage={offline.storage} storageWarning={offline.storageWarning} pendingCount={pendingCount} cacheHealth={offline.cacheHealth} missingModules={offline.missingModules} repairProgress={offline.repairProgress} onSelect={(song) => { setSelected(song); setScreen('record'); audio.stopPlayback(); }} onInstall={offline.installPWA} onCache={(song) => offline.cacheSongForOffline(song, allSongs)} onForceRefresh={(song) => offline.forceRefreshSong(song, allSongs)}
