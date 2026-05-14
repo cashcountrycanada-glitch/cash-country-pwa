@@ -330,6 +330,7 @@ export default function SongSelector({
                   <button
                     onClick={() => {
                       if (showMenu) { setShowRefreshMenu(null); return; }
+                      if (showImport === s.id) { setShowImport(null); return; }
                       if (!isCaching && !hasError) onSelect(s);
                     }}
                     className={`w-full flex items-center gap-4 p-4 bg-zinc-900/60 border rounded-2xl transition-all text-left ${
@@ -477,7 +478,7 @@ export default function SongSelector({
                           <Download size={14} className="text-zinc-500"/>
                         </button>
                           <button
-                            onClick={e => { e.stopPropagation(); setShowImport(v => v === s.id ? null : s.id); }}
+                            onClick={e => { e.preventDefault(); e.stopPropagation(); setShowImport(v => v === s.id ? null : s.id); }}
                           className="w-10 h-10 rounded-full flex items-center justify-center active:scale-90 border bg-zinc-900 border-zinc-800">
                           <span className="text-[15px]">📁</span>
                           </button>
@@ -496,7 +497,7 @@ export default function SongSelector({
                       <div className="mx-1 mb-2 bg-zinc-900/80 border border-zinc-700 rounded-2xl px-4 py-3" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-3">
                           <p className="text-[11px] font-black text-zinc-300 uppercase tracking-widest">📁 Importer depuis Fichiers</p>
-                          <button onClick={() => setShowImport(null)} className="text-[10px] text-zinc-600 font-black active:text-zinc-400">✕ Fermer</button>
+                          <button onClick={e => { e.stopPropagation(); setShowImport(null); }} className="text-[10px] text-zinc-600 font-black active:text-zinc-400">✕ Fermer</button>
                         </div>
                         {_iName && <div className="mb-3">
                           <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mb-1">🎸 Instrumental</p>
