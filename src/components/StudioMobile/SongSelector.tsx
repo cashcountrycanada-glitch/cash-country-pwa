@@ -13,7 +13,7 @@ import {
   Loader2, Download, Trash2, AlertTriangle, HardDrive,
   ArrowDownToLine, RefreshCw, AlertCircle, RotateCcw,
 } from 'lucide-react';
-import { Song } from '../../types';
+import { Song, TrackType } from '../../types';
 import { studioService } from '../../services/StudioService';
 import { CacheProgress, CacheError } from './useStudioOffline';
 
