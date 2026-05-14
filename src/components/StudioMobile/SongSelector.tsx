@@ -327,13 +327,18 @@ export default function SongSelector({
 
               return (
                 <div key={s.id} className="relative">
-                  <button
-                    onClick={() => {
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onPointerDown={(e) => {
+                      // Ignorer si la cible est un bouton/label/input imbriqué
+                      const tag = (e.target as HTMLElement).closest('button, label, input, a');
+                      if (tag) return;
                       if (showMenu) { setShowRefreshMenu(null); return; }
                       if (showImport === s.id) { setShowImport(null); return; }
                       if (!isCaching && !hasError) onSelect(s);
                     }}
-                    className={`w-full flex items-center gap-4 p-4 bg-zinc-900/60 border rounded-2xl transition-all text-left ${
+                    className={`w-full flex items-center gap-4 p-4 bg-zinc-900/60 border rounded-2xl transition-all text-left cursor-pointer select-none ${
                       isCaching   ? 'border-blue-600/30 cursor-default' :
                       hasError    ? 'border-red-600/30' :
                       showMenu    ? 'border-zinc-600' :
@@ -485,7 +490,7 @@ export default function SongSelector({
                         </div>
                       )}
                     </div>
-                  </button>
+                  </div>
 
                   {/* Import depuis Fichiers */}
                   {showImport === s.id && !isCaching && (() => {
