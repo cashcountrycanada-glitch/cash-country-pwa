@@ -41,6 +41,8 @@ interface AudioResult {
   playingId:        string | null;
   instLoading:      boolean;
   vocalLoading:     boolean;
+  instCached:       boolean;   // true = blob URL depuis IndexedDB
+  vocalCached:      boolean;   // true = blob URL depuis IndexedDB
   instRef:          React.RefObject<HTMLAudioElement>;
   vocalGuideRef:    React.RefObject<HTMLAudioElement>;
   playRef:          React.RefObject<HTMLAudioElement>;
@@ -58,6 +60,8 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [instLoading, setInstLoading] = useState(false);
   const [vocalLoading, setVocalLoading] = useState(false);
+  const [instCached, setInstCached] = useState(false);
+  const [vocalCached, setVocalCached] = useState(false);
 
   const instRef = useRef(null as unknown as HTMLAudioElement);
   const vocalGuideRef = useRef(null as unknown as HTMLAudioElement);
@@ -152,47 +156,59 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   }, [vocalGuideUrl, setVolumeIOS]);
 
   useEffect(() => {
-    if (!selected) { setInstUrl(null); return; }
+    if (!selected) { setInstUrl(null); setInstCached(false); return; }
     const inst = selected.versions?.find(v => v.trackType === TrackType.STEM_INSTRUMENTAL);
-    if (!inst?.fileName) { setInstUrl(null); return; }
+    if (!inst?.fileName) { setInstUrl(null); setInstCached(false); return; }
     setInstLoading(true);
-    if (isIOS()) { setInstUrl(getMediaUrl(inst.fileName!)); setInstLoading(false); }
-    else {
-      studioOfflineDB.getAudio(`inst_${selected.id}`).then(blob => {
-        if (blob) {
-          setInstUrl(URL.createObjectURL(fixBlobType(blob)));
-          console.log(`[Audio] inst depuis cache IndexedDB: ${(blob.size/1024/1024).toFixed(1)} MB`);
-        } else {
-          console.warn('[Audio] inst non en cache - telecharger via le bouton vert');
-          setInstUrl(getMediaUrl(inst.fileName!));
-        }
-        if (!blob) fetch(getMediaUrl(inst.fileName!)).then(r => r.ok ? r.blob() : null)
+    // iOS et Desktop : IndexedDB en priorité, réseau en fallback
+    studioOfflineDB.getAudio(`inst_${selected.id}`).then(blob => {
+      if (blob) {
+        setInstUrl(URL.createObjectURL(fixBlobType(blob)));
+        setInstCached(true);
+        console.log(`[Audio] inst CACHE: ${(blob.size/1024/1024).toFixed(1)} MB`);
+      } else {
+        // Pas en cache — URL réseau (Mac requis)
+        setInstUrl(getMediaUrl(inst.fileName!));
+        setInstCached(false);
+        console.warn('[Audio] inst NON EN CACHE — URL réseau');
+        // Télécharger en arrière-plan pour mise en cache
+        fetch(getMediaUrl(inst.fileName!))
+          .then(r => r.ok ? r.blob() : null)
           .then(b => b && studioOfflineDB.saveAudio(`inst_${selected.id}`, fixBlobType(b), { songId: selected.id, songTitle: selected.title, type: 'instrumental' }).catch(() => {}))
           .catch(() => {});
-      }).catch(() => setInstUrl(getMediaUrl(inst.fileName!))).finally(() => setInstLoading(false));
-    }
+      }
+    }).catch(() => {
+      setInstUrl(getMediaUrl(inst.fileName!));
+      setInstCached(false);
+    }).finally(() => setInstLoading(false));
   }, [selected?.id]);
 
+
   useEffect(() => {
-    if (!selected) { setVocalGuideUrl(null); return; }
+    if (!selected) { setVocalGuideUrl(null); setVocalCached(false); return; }
     const vocal = selected.versions?.find(v => v.trackType === TrackType.STEM_VOCAL);
-    if (!vocal?.fileName) { setVocalGuideUrl(null); return; }
+    if (!vocal?.fileName) { setVocalGuideUrl(null); setVocalCached(false); return; }
     setVocalLoading(true);
-    if (isIOS()) { setVocalGuideUrl(getMediaUrl(vocal.fileName!)); setVocalLoading(false); }
-    else {
-      studioOfflineDB.getAudio(`vocal_${selected.id}`).then(blob => {
-        if (blob) {
-          setVocalGuideUrl(URL.createObjectURL(fixBlobType(blob)));
-          console.log(`[Audio] vocal depuis cache IndexedDB: ${(blob.size/1024/1024).toFixed(1)} MB`);
-        } else {
-          console.warn('[Audio] vocal non en cache - telecharger via le bouton vert');
-          setVocalGuideUrl(getMediaUrl(vocal.fileName!));
-        }
-        if (!blob) fetch(getMediaUrl(vocal.fileName!)).then(r => r.ok ? r.blob() : null)
+    // iOS et Desktop : IndexedDB en priorité, réseau en fallback
+    studioOfflineDB.getAudio(`vocal_${selected.id}`).then(blob => {
+      if (blob) {
+        setVocalGuideUrl(URL.createObjectURL(fixBlobType(blob)));
+        setVocalCached(true);
+        console.log(`[Audio] vocal CACHE: ${(blob.size/1024/1024).toFixed(1)} MB`);
+      } else {
+        setVocalGuideUrl(getMediaUrl(vocal.fileName!));
+        setVocalCached(false);
+        console.warn('[Audio] vocal NON EN CACHE — URL réseau');
+        fetch(getMediaUrl(vocal.fileName!))
+          .then(r => r.ok ? r.blob() : null)
           .then(b => b && studioOfflineDB.saveAudio(`vocal_${selected.id}`, fixBlobType(b), { songId: selected.id, songTitle: selected.title, type: 'vocal' }).catch(() => {}))
           .catch(() => {});
-      }).catch(() => setVocalGuideUrl(getMediaUrl(vocal.fileName!))).finally(() => setVocalLoading(false));
-    }
+      }
+    }).catch(() => {
+      setVocalGuideUrl(getMediaUrl(vocal.fileName!));
+      setVocalCached(false);
+    }).finally(() => setVocalLoading(false));
+  }, [selected?.id]);
   }, [selected?.id]);
 
   const playRecording = useCallback(async (rec: MobileRecording) => {
@@ -260,6 +276,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   return {
     instUrl, vocalGuideUrl, vocalGuideVol, playingId,
     instLoading, vocalLoading,
+    instCached, vocalCached,
     instRef, vocalGuideRef, playRef, vocalVolRef,
     setVocalGuideVol: updateVocalVol,
     playRecording, stopPlayback, playMix,
