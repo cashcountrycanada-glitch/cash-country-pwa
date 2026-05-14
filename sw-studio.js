@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v58-import-fix'; // v36: fix \\U escape + double-brace useStudioOffline
+const CACHE = 'studio-v59-songselector-fix'; // v59: fix TrackType import + s6_require esModule + upload stems nav bug
 
 const CRITICAL = [
   '/index-pwa.html',
