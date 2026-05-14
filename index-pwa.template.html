@@ -476,7 +476,10 @@ const depRegex = /import[\s\S]*?from\s+['"](.*?)['"]|require\s*\(\s*['"](.*?)['"
 };
 
                 func(syncRequire, module, module.exports, window.React);
-                return module.exports.__esModule ? module.exports.default : module.exports;
+                if (module.exports.__esModule) {
+                    return module.exports.default !== undefined ? module.exports.default : module.exports;
+                }
+                return module.exports;
             } catch(e) {
                 throw new Error(`SYNTAX_ERROR [${finalPath}]: ${e.message}`);
             }
