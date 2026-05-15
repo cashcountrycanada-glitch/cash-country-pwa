@@ -395,8 +395,13 @@ export function useStudioOffline(): OfflineResult {
 
   const importFileToCache = useCallback(async (song: Song, type: 'inst' | 'vocal', file: File) => {
     const key = type === 'inst' ? `inst_${song.id}` : `vocal_${song.id}`;
-    log(`📂 Import manuel: ${file.name} (${(file.size/1024).toFixed(0)} Ko) → clé: ${key}`);
-    const blob = new Blob([await file.arrayBuffer()], { type: file.type || 'audio/flac' });
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const rawType = file.type || 'audio/flac';
+    // iOS ne supporte pas FLAC/WebM/OGG — forcer audio/mp4 pour que <audio> puisse lire
+    const blobType = isIOS && !rawType.includes('mp4') && !rawType.includes('mpeg') && !rawType.includes('aac')
+      ? 'audio/mp4' : rawType;
+    log(`📂 Import manuel: ${file.name} (${(file.size/1024).toFixed(0)} Ko) → clé: ${key} type: ${blobType}`);
+    const blob = new Blob([await file.arrayBuffer()], { type: blobType });
     await studioOfflineDB.saveAudio(key, blob, { songId: song.id, songTitle: song.title, type: type === 'inst' ? 'instrumental' : 'vocal' });
     log(`✅ ${type === 'inst' ? '🎸' : '🎤'} Sauvegardé dans IndexedDB: ${key} (${(blob.size/1024).toFixed(0)} Ko)`);
     // Si les deux stems existent maintenant, marquer la chanson comme cachée

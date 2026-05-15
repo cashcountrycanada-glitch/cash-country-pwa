@@ -17,7 +17,14 @@ function isIOS(): boolean {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 function fixBlobType(blob: Blob): Blob {
-  if (isIOS() && (blob.type === 'audio/webm' || blob.type === '')) return new Blob([blob], { type: 'audio/mp4' });
+  if (isIOS()) {
+    // iOS Safari ne supporte que audio/mp4, audio/mpeg, audio/aac
+    // FLAC, WebM, OGG, et '' sont tous invalides → forcer audio/mp4
+    const t = blob.type.toLowerCase();
+    if (!t.includes('mp4') && !t.includes('mpeg') && !t.includes('aac') && !t.includes('mp3')) {
+      return new Blob([blob], { type: 'audio/mp4' });
+    }
+  }
   return blob;
 }
 function getMediaUrl(fileName: string): string {

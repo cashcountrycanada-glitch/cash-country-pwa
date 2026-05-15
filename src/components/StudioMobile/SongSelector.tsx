@@ -229,6 +229,7 @@ export default function SongSelector({
   const [stemCacheStatus, setStemCacheStatus]     = useState<Record<string, { inst: boolean|null; vocal: boolean|null }>>({});
   const [testingAudio, setTestingAudio]           = useState<string | null>(null); // 'songId:inst' | 'songId:vocal'
   const audioTestRef                              = useRef<HTMLAudioElement | null>(null);
+  const stemBlobCache                             = useRef<Record<string, Blob>>({});
 
   const handleFileImport = async (song: Song, type: 'inst' | 'vocal', e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -236,48 +237,80 @@ export default function SongSelector({
     setImporting(`${song.id}:${type}`);
     try {
       await onImportFile(song, type, file);
+      // Pré-charger le blob fraîchement importé
+      const fresh = await studioOfflineDB.getAudio(`${type}_${song.id}`).catch(() => null);
+      if (fresh) stemBlobCache.current[`${type}_${song.id}`] = fresh;
       // Rafraîchir le statut cache après import
-      const hasInst  = await studioOfflineDB.hasAudio(`inst_${song.id}`).catch(() => false);
-      const hasVocal = await studioOfflineDB.hasAudio(`vocal_${song.id}`).catch(() => false);
+      const hasInst  = !!stemBlobCache.current[`inst_${song.id}`]  || await studioOfflineDB.hasAudio(`inst_${song.id}`).catch(() => false);
+      const hasVocal = !!stemBlobCache.current[`vocal_${song.id}`] || await studioOfflineDB.hasAudio(`vocal_${song.id}`).catch(() => false);
       setStemCacheStatus(prev => ({ ...prev, [song.id]: { inst: hasInst, vocal: hasVocal } }));
     }
     finally { setImporting(null); e.target.value = ''; }
   };
 
-  // Vérifie la présence réelle dans IndexedDB pour une chanson
+  // Vérifie la présence réelle dans IndexedDB pour une chanson + pré-charge les blobs
   const checkStemCache = async (songId: string) => {
     setStemCacheStatus(prev => ({ ...prev, [songId]: { inst: null, vocal: null } }));
-    const [hasInst, hasVocal] = await Promise.all([
-      studioOfflineDB.hasAudio(`inst_${songId}`).catch(() => false),
-      studioOfflineDB.hasAudio(`vocal_${songId}`).catch(() => false),
+    const [instBlob, vocalBlob] = await Promise.all([
+      studioOfflineDB.getAudio(`inst_${songId}`).catch(() => null),
+      studioOfflineDB.getAudio(`vocal_${songId}`).catch(() => null),
     ]);
-    setStemCacheStatus(prev => ({ ...prev, [songId]: { inst: hasInst, vocal: hasVocal } }));
+    if (instBlob)  stemBlobCache.current[`inst_${songId}`]  = instBlob;
+    if (vocalBlob) stemBlobCache.current[`vocal_${songId}`] = vocalBlob;
+    setStemCacheStatus(prev => ({ ...prev, [songId]: { inst: !!instBlob, vocal: !!vocalBlob } }));
   };
 
   // Lit un stem directement depuis IndexedDB pour le tester
   const testStemAudio = (songId: string, type: 'inst' | 'vocal') => {
-    const key = `${songId}:${type}`;
+    const key    = `${songId}:${type}`;
+    const dbKey  = `${type}_${songId}`;
+
+    // Stop si déjà en lecture
     if (testingAudio === key) {
       audioTestRef.current?.pause();
+      if (audioTestRef.current?.src) URL.revokeObjectURL(audioTestRef.current.src);
       audioTestRef.current = null;
       setTestingAudio(null);
       return;
     }
-    // Créer et démarrer l'élément audio SYNCHRONE dans le handler du tap (exigence iOS)
-    const audio = new Audio();
-    audio.preload = 'auto';
+
+    // Utiliser le blob pré-chargé — SYNCHRONE, pas de .then()
+    const blob = stemBlobCache.current[dbKey];
+    if (!blob) {
+      // Blob pas encore chargé — tenter le chargement et réessayer
+      studioOfflineDB.getAudio(dbKey).then(b => {
+        if (b) { stemBlobCache.current[dbKey] = b; }
+      }).catch(() => {});
+      return;
+    }
+
+    // Tout synchrone dans le callstack du tap — iOS l'accepte
     audioTestRef.current?.pause();
+    if (audioTestRef.current?.src) URL.revokeObjectURL(audioTestRef.current.src);
+
+    const url   = URL.createObjectURL(blob);
+    const audio = new Audio(url);
     audioTestRef.current = audio;
     setTestingAudio(key);
-    // Charger le blob en async après avoir initié la lecture
-    studioOfflineDB.getAudio(`${type}_${songId}`).then(blob => {
-      if (!blob) { setTestingAudio(null); audioTestRef.current = null; return; }
-      const url = URL.createObjectURL(blob);
-      audio.src = url;
-      audio.onended = () => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
-      audio.onerror = () => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
-      audio.play().catch(() => setTestingAudio(null));
-    }).catch(() => setTestingAudio(null));
+
+    // Résumer le contexte audio global si nécessaire
+    const ctx = (window as any).__warmContext as AudioContext | undefined;
+    if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+
+    audio.onended = () => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
+    audio.onerror = (e) => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
+    audio.play().catch((e) => {
+      // Fallback via AudioContext si play() bloqué
+      const actx = (window as any).__warmContext as AudioContext | undefined;
+      if (!actx) { setTestingAudio(null); return; }
+      blob.arrayBuffer().then(buf => actx.decodeAudioData(buf)).then(decoded => {
+        const src = actx.createBufferSource();
+        src.buffer = decoded;
+        src.connect(actx.destination);
+        src.onended = () => { setTestingAudio(null); audioTestRef.current = null; };
+        src.start(0);
+      }).catch(() => setTestingAudio(null));
+    });
   };
 
   // Cleanup audio au démontage
