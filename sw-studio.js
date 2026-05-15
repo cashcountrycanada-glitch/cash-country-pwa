@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v68-no-forof-await'; // v68: remplace for...of+await par tryUrls() — compat Babel browser
+const CACHE = 'studio-v70-flac-ios-fix'; // v70: fixBlobType force audio/mp4 pour FLAC/WebM sur iOS, resume().then(play)
 
 const CRITICAL = [
   '/index-pwa.html',
