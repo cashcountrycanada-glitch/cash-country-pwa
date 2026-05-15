@@ -525,9 +525,9 @@ export default function SongSelector({
                             <RefreshCw size={11}/> Actualiser les stems
                           </button>
                           <button
-                            onClick={e => { e.stopPropagation(); setShowRefreshMenu(null); }}
-                            className="px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-xl text-[11px] font-black text-zinc-500 active:scale-95">
-                            Annuler
+                            onClick={e => { e.stopPropagation(); setShowRefreshMenu(null); onUncache(s.id); }}
+                            className="px-3 py-1.5 bg-red-900/40 border border-red-700/40 rounded-xl text-[11px] font-black text-red-400 active:scale-95">
+                            🗑 Effacer le lien
                           </button>
                         </div>
                       )}

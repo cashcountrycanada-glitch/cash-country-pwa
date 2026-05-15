@@ -8,7 +8,7 @@
  * - cachedCount : nombre total de chansons en cache
  * - Meilleure gestion WiFi coupé : l'erreur reste visible jusqu'au prochain essai
  */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Song, TrackType } from '../../types';
 import { studioOfflineDB } from '../../services/StudioOfflineDB';
 
@@ -48,6 +48,7 @@ interface OfflineResult {
   clearCacheError:     () => void;
   repairCache:         () => void;
   importFileToCache:   (song: Song, type: 'inst' | 'vocal', file: File) => Promise<void>;
+  setOfflineLog:       (fn: (msg: string) => void) => void;
 }
 
 // ── Téléchargement avec progression réelle ────────────────────────────────────
@@ -143,6 +144,9 @@ function needsConversion(_fileName: string): boolean {
 }
 
 export function useStudioOffline(): OfflineResult {
+  const logRef = useRef<(msg: string) => void>(() => {});
+  const setOfflineLog = useCallback((fn: (msg: string) => void) => { logRef.current = fn; }, []);
+  const log = (msg: string) => logRef.current(msg);
   const [isOnline, setIsOnline]           = useState(navigator.onLine);
   const [isInstalled, setIsInstalled]     = useState(false);
   const [httpsUrl, setHttpsUrl]           = useState('');
@@ -280,9 +284,66 @@ export function useStudioOffline(): OfflineResult {
       return true;
     }
 
+    // Vérifier que l'URL Mac est configurée AVANT de tenter le téléchargement
+    const macUrl = ((window as any).__CC_MAC_URL as string) || '';
+    if (!macUrl.startsWith('http')) {
+      throw new Error(`Adresse Mac non configurée — configure l'URL du Mac dans les paramètres pour télécharger les stems`);
+    }
+
+    const urlToFetch = getMediaUrlFallbacks(fileName)[0];
+    log(`⬇️ ${type === 'instrumental' ? '🎸' : '🎤'} Téléchargement: ${fileName}`);
+    log(`   URL: ${urlToFetch}`);
+
     const converting = needsConversion(fileName);
     const emoji = type === 'instrumental' ? '🎸' : '🎤';
     const name  = type === 'instrumental' ? 'Instrumental' : 'Guide vocal';
+
+    if (converting) {
+      setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — conversion...`, pct: basePct + 2 });
+      let simPct = basePct + 2;
+      const sim = setInterval(() => {
+        simPct = Math.min(simPct + 2, basePct + 38);
+        setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — conversion...`, pct: simPct });
+      }, 400);
+      try {
+        const _fallbackUrls = getMediaUrlFallbacks(fileName);
+        let blob: Blob | null = null;
+        let lastErr: Error = new Error('Aucune URL disponible');
+        for (const _url of _fallbackUrls) {
+          try {
+            blob = await fetchWithProgress(
+              _url,
+              (dlPct) => {
+                clearInterval(sim);
+                setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — ${dlPct}%`, pct: basePct + 10 + Math.round(dlPct * 0.35) });
+              },
+            );
+            break;
+          } catch (e: any) { lastErr = e; }
+        }
+        if (!blob) throw lastErr;
+        clearInterval(sim);
+        await studioOfflineDB.saveAudio(key, blob, { songId, songTitle, type });
+      } finally { clearInterval(sim); }
+    } else {
+      setCacheProgress({ step: `${baseStep}_download` as any, label: `${emoji} ${name} — 0%`, pct: basePct + 2 });
+      const _fallbackUrls2 = getMediaUrlFallbacks(fileName);
+      let blob: Blob | null = null;
+      let lastErr2: Error = new Error('Aucune URL disponible');
+      for (const _url2 of _fallbackUrls2) {
+        try {
+          blob = await fetchWithProgress(
+            _url2,
+            (dlPct) => setCacheProgress({ step: `${baseStep}_download` as any, label: `${emoji} ${name} — ${dlPct}%`, pct: basePct + 2 + Math.round(dlPct * 0.45) }),
+          );
+          break;
+        } catch (e: any) { lastErr2 = e; }
+      }
+      if (!blob) throw lastErr2;
+      await studioOfflineDB.saveAudio(key, blob, { songId, songTitle, type });
+    }
+    return true;
+  };
 
     if (converting) {
       setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — conversion...`, pct: basePct + 2 });
@@ -395,8 +456,10 @@ export function useStudioOffline(): OfflineResult {
 
   const importFileToCache = useCallback(async (song: Song, type: 'inst' | 'vocal', file: File) => {
     const key = type === 'inst' ? `inst_${song.id}` : `vocal_${song.id}`;
+    log(`📂 Import manuel: ${file.name} (${(file.size/1024).toFixed(0)} Ko) → clé: ${key}`);
     const blob = new Blob([await file.arrayBuffer()], { type: file.type || 'audio/flac' });
     await studioOfflineDB.saveAudio(key, blob, { songId: song.id, songTitle: song.title, type: type === 'inst' ? 'instrumental' : 'vocal' });
+    log(`✅ ${type === 'inst' ? '🎸' : '🎤'} Sauvegardé dans IndexedDB: ${key} (${(blob.size/1024).toFixed(0)} Ko)`);
     // Si les deux stems existent maintenant, marquer la chanson comme cachée
     const hasInst  = await studioOfflineDB.hasAudio(`inst_${song.id}`).catch(() => false);
     const hasVocal = await studioOfflineDB.hasAudio(`vocal_${song.id}`).catch(() => false);
@@ -404,9 +467,11 @@ export function useStudioOffline(): OfflineResult {
     const vocal = song.versions?.find((v: any) => v.trackType === TrackType.STEM_VOCAL);
     const needsInst  = !!inst?.fileName;
     const needsVocal = !!vocal?.fileName;
+    log(`   inst=${hasInst} vocal=${hasVocal} (requis: inst=${needsInst} vocal=${needsVocal})`);
     if ((!needsInst || hasInst) && (!needsVocal || hasVocal)) {
       await studioOfflineDB.markSongCached(song.id);
       setCachedSongs(prev => new Set([...prev, song.id]));
+      log(`✅ ${song.title} marquée Hors-ligne — les deux stems sont en cache`);
     }
     await refreshStorage();
   }, [refreshStorage]);
@@ -418,6 +483,6 @@ export function useStudioOffline(): OfflineResult {
     cacheHealth, missingModules, repairProgress,
     installPWA, cacheSongForOffline, forceRefreshSong,
     uncacheSong, clearAllCache, clearCacheError, repairCache,
-    importFileToCache,
+    importFileToCache, setOfflineLog,
   };
 }
