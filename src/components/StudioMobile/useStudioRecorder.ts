@@ -222,9 +222,30 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       const pOut = punchOutRef.current;
 
       // 1. Stems de référence
-      const startStem = (el: HTMLAudioElement, t: number) => { el.pause(); el.currentTime = t; el.play().catch(() => {}); };
-      if (optsRef.current.instRef.current && optsRef.current.instUrl)              startStem(optsRef.current.instRef.current, pIn ?? 0);
-      if (optsRef.current.vocalGuideRef.current && optsRef.current.vocalGuideUrl)  startStem(optsRef.current.vocalGuideRef.current, pIn ?? 0);
+      const startStem = (el: HTMLAudioElement, t: number, key: 'inst' | 'vocal') => {
+        el.pause();
+        el.currentTime = t;
+        el.play().catch(() => {
+          // Fallback AudioContext — nécessaire sur iOS pour FLAC/MP4 hors interaction directe
+          const ctx = (window as any).__warmContext as AudioContext | undefined;
+          if (!ctx || !el.src) return;
+          fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(decoded => {
+            const bsrc = ctx.createBufferSource();
+            bsrc.buffer = decoded;
+            bsrc.connect(ctx.destination);
+            if (key === 'inst') {
+              // Tracker pour sync paroles
+              (window as any).__instCtxStartTime  = ctx.currentTime;
+              (window as any).__instCtxOffset     = t;
+              (window as any).__instCtxActive     = true;
+              bsrc.onended = () => { (window as any).__instCtxActive = false; };
+            }
+            bsrc.start(0, t); // démarrer à l'offset punchIn
+          }).catch(() => {});
+        });
+      };
+      if (optsRef.current.instRef.current && optsRef.current.instUrl)             startStem(optsRef.current.instRef.current, pIn ?? 0, 'inst');
+      if (optsRef.current.vocalGuideRef.current && optsRef.current.vocalGuideUrl) startStem(optsRef.current.vocalGuideRef.current, pIn ?? 0, 'vocal');
 
       if (optsRef.current.backingTracks && optsRef.current.backingTracks.length > 0) {
         backingRefsRef.current.forEach(el => { el.pause(); el.src = ''; });

@@ -25,6 +25,7 @@ interface Props {
   vocalGuideUrl: string | null; vocalLoading: boolean; vocalCached: boolean;
   vocalGuideVol: number; showLyrics: boolean;
   instRef: React.RefObject<HTMLAudioElement>; vocalGuideRef: React.RefObject<HTMLAudioElement>;
+  getInstPlaybackTime: () => number;
   onBack: () => void; onGoMixer: () => void; onPresetChange: (preset: TrackPreset) => void;
   onReverbChange: (r: ReverbType) => void; onStartRecording: () => void; onStopRecording: () => void;
   takeSlot: 'A' | 'B' | 'C'; onTakeSlotChange: (slot: 'A' | 'B' | 'C') => void;
@@ -105,7 +106,7 @@ function deviceStyle(dev: AudioDevice, isSelected: boolean, isAuto: boolean, aut
 export default function RecordScreen({
   selected, project, currentPreset, reverb, isRecording, isSaving, duration, analyser, vuLevel,
   monitoring, permError, httpsUrl, instUrl, instLoading, instCached, vocalGuideUrl, vocalLoading, vocalCached,
-  vocalGuideVol, showLyrics, instRef, vocalGuideRef,
+  vocalGuideVol, showLyrics, instRef, vocalGuideRef, getInstPlaybackTime,
   takeSlot, onTakeSlotChange, slotTakes,
   onBack, onGoMixer, onPresetChange, onReverbChange,
   onStartRecording, onStopRecording, onToggleMonitor, onVocalVolumeChange, onToggleLyrics,
@@ -144,16 +145,16 @@ export default function RecordScreen({
   const hasLrc = lrcLines.length > 0;
 
   useEffect(() => {
-    if (!hasLrc || !instRef.current) return;
-    const el = instRef.current;
-    const onTime = () => {
-      const t = el.currentTime; let idx = 0;
+    if (!hasLrc) return;
+    const iv = setInterval(() => {
+      const t = getInstPlaybackTime();
+      if (t <= 0) return;
+      let idx = 0;
       for (let i = 0; i < lrcLines.length; i++) { if (lrcLines[i].time <= t) idx = i; else break; }
       setLrcIndex(idx);
-    };
-    el.addEventListener('timeupdate', onTime);
-    return () => el.removeEventListener('timeupdate', onTime);
-  }, [hasLrc, lrcLines, instUrl]);
+    }, 150);
+    return () => clearInterval(iv);
+  }, [hasLrc, lrcLines, getInstPlaybackTime]);
 
   useEffect(() => {
     if (!lyricsScrollRef.current) return;

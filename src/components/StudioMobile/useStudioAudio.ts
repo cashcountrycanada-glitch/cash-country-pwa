@@ -58,6 +58,7 @@ interface AudioResult {
   playRecording:    (rec: MobileRecording) => Promise<void>;
   stopPlayback:     () => void;
   playMix:          (dataUrl: string) => void;
+  getInstPlaybackTime: () => number; // temps de lecture actuel du stem inst (sec)
 }
 
 export function useStudioAudio(selected: Song | null): AudioResult {
@@ -75,6 +76,29 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const playRef = useRef(null as unknown as HTMLAudioElement);
   const vocalVolRef = useRef(0.4);
   const createdRef = useRef(false);
+
+  // Tracking du temps de lecture via AudioContext (pour sync paroles quand <audio>.play() échoue sur iOS)
+  const ctxPlaybackStartTimeRef = useRef<number>(0);  // ctx.currentTime au moment du start
+  const ctxPlaybackOffsetRef    = useRef<number>(0);  // offset dans le fichier (punchIn)
+  const ctxPlaybackActiveRef    = useRef<boolean>(false);
+  const instBufSrcRef           = useRef<AudioBufferSourceNode | null>(null);
+
+  const getInstPlaybackTime = (): number => {
+    // Priorité 1 : <audio> element joue normalement
+    if (instRef.current && !isNaN(instRef.current.currentTime) && instRef.current.currentTime > 0) {
+      return instRef.current.currentTime;
+    }
+    // Priorité 2 : tracker local (handlePreviewStems fallback)
+    const ctx = (window as any).__warmContext as AudioContext | undefined;
+    if (ctx && ctxPlaybackActiveRef.current) {
+      return ctxPlaybackOffsetRef.current + (ctx.currentTime - ctxPlaybackStartTimeRef.current);
+    }
+    // Priorité 3 : tracker global (startStem dans recorder)
+    if (ctx && (window as any).__instCtxActive) {
+      return ((window as any).__instCtxOffset || 0) + (ctx.currentTime - ((window as any).__instCtxStartTime || ctx.currentTime));
+    }
+    return 0;
+  };
   
   if (!createdRef.current && typeof document !== 'undefined') {
     createdRef.current = true;
@@ -286,5 +310,6 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     instRef, vocalGuideRef, playRef, vocalVolRef,
     setVocalGuideVol: updateVocalVol,
     playRecording, stopPlayback, playMix,
+    getInstPlaybackTime,
   };
 }
