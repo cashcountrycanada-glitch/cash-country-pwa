@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v71-preview-fix'; // v71: fix doPlay hoisting + play() synchrone tap iOS + fallback AudioContext decodeAudioData
+const CACHE = 'studio-v72-lyrics-actx-sync'; // v72: sync paroles via getInstPlaybackTime, startStem AudioContext fallback+tracker
 
 const CRITICAL = [
   '/index-pwa.html',
