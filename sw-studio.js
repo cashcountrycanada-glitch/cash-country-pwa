@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v61-import-always-both'; // v61: panneau import toujours 2 stems peu importe versions[]
+const CACHE = 'studio-v62-stem-cache-status'; // v62: panneau stems avec statut cache réel, noms complets, bouton écouter
 
 const CRITICAL = [
   '/index-pwa.html',
