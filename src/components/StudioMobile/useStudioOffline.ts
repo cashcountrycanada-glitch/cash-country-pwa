@@ -264,6 +264,15 @@ export function useStudioOffline(): OfflineResult {
     }
   }, [installPrompt]);
 
+  // Helper : essaie chaque URL en séquence sans for...of+await (compat Babel browser)
+  const tryUrls = (urls: string[], onProgress: (pct: number) => void): Promise<Blob> => {
+    const attempt = (i: number): Promise<Blob> => {
+      if (i >= urls.length) return Promise.reject(new Error('Toutes les URLs ont échoué'));
+      return fetchWithProgress(urls[i], onProgress).catch(() => attempt(i + 1));
+    };
+    return attempt(0);
+  };
+
   // ── Téléchargement d'un stem individuel ──────────────────────────────────
   const downloadStem = async (
     fileName: string,
@@ -298,97 +307,27 @@ export function useStudioOffline(): OfflineResult {
     const emoji = type === 'instrumental' ? '🎸' : '🎤';
     const name  = type === 'instrumental' ? 'Instrumental' : 'Guide vocal';
 
+    // Téléchargement via tryUrls (pas de for...of+await — compat Babel browser)
+    const urls = getMediaUrlFallbacks(fileName);
+    let blob: Blob;
     if (converting) {
       setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — conversion...`, pct: basePct + 2 });
-      let simPct = basePct + 2;
       const sim = setInterval(() => {
-        simPct = Math.min(simPct + 2, basePct + 38);
-        setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — conversion...`, pct: simPct });
+        setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — conversion...`, pct: basePct + 20 });
       }, 400);
       try {
-        const _fallbackUrls = getMediaUrlFallbacks(fileName);
-        let blob: Blob | null = null;
-        let lastErr: Error = new Error('Aucune URL disponible');
-        for (const _url of _fallbackUrls) {
-          try {
-            blob = await fetchWithProgress(
-              _url,
-              (dlPct) => {
-                clearInterval(sim);
-                setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — ${dlPct}%`, pct: basePct + 10 + Math.round(dlPct * 0.35) });
-              },
-            );
-            break;
-          } catch (e: any) { lastErr = e; }
-        }
-        if (!blob) throw lastErr;
-        clearInterval(sim);
-        await studioOfflineDB.saveAudio(key, blob, { songId, songTitle, type });
+        blob = await tryUrls(urls, (dlPct) => {
+          clearInterval(sim);
+          setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — ${dlPct}%`, pct: basePct + 10 + Math.round(dlPct * 0.35) });
+        });
       } finally { clearInterval(sim); }
     } else {
       setCacheProgress({ step: `${baseStep}_download` as any, label: `${emoji} ${name} — 0%`, pct: basePct + 2 });
-      const _fallbackUrls2 = getMediaUrlFallbacks(fileName);
-      let blob: Blob | null = null;
-      let lastErr2: Error = new Error('Aucune URL disponible');
-      for (const _url2 of _fallbackUrls2) {
-        try {
-          blob = await fetchWithProgress(
-            _url2,
-            (dlPct) => setCacheProgress({ step: `${baseStep}_download` as any, label: `${emoji} ${name} — ${dlPct}%`, pct: basePct + 2 + Math.round(dlPct * 0.45) }),
-          );
-          break;
-        } catch (e: any) { lastErr2 = e; }
-      }
-      if (!blob) throw lastErr2;
-      await studioOfflineDB.saveAudio(key, blob, { songId, songTitle, type });
+      blob = await tryUrls(urls,
+        (dlPct) => setCacheProgress({ step: `${baseStep}_download` as any, label: `${emoji} ${name} — ${dlPct}%`, pct: basePct + 2 + Math.round(dlPct * 0.45) }),
+      );
     }
-    return true;
-  };
-
-    if (converting) {
-      setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — conversion...`, pct: basePct + 2 });
-      let simPct = basePct + 2;
-      const sim = setInterval(() => {
-        simPct = Math.min(simPct + 2, basePct + 38);
-        setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — conversion...`, pct: simPct });
-      }, 400);
-      try {
-        const _fallbackUrls = getMediaUrlFallbacks(fileName);
-        let blob: Blob | null = null;
-        let lastErr: Error = new Error('Aucune URL disponible');
-        for (const _url of _fallbackUrls) {
-          try {
-            blob = await fetchWithProgress(
-              _url,
-              (dlPct) => {
-                clearInterval(sim);
-                setCacheProgress({ step: `${baseStep}_convert` as any, label: `${emoji} ${name} — ${dlPct}%`, pct: basePct + 10 + Math.round(dlPct * 0.35) });
-              },
-            );
-            break;
-          } catch (e: any) { lastErr = e; }
-        }
-        if (!blob) throw lastErr;
-        clearInterval(sim);
-        await studioOfflineDB.saveAudio(key, blob, { songId, songTitle, type });
-      } finally { clearInterval(sim); }
-    } else {
-      setCacheProgress({ step: `${baseStep}_download` as any, label: `${emoji} ${name} — 0%`, pct: basePct + 2 });
-      const _fallbackUrls2 = getMediaUrlFallbacks(fileName);
-      let blob: Blob | null = null;
-      let lastErr2: Error = new Error('Aucune URL disponible');
-      for (const _url2 of _fallbackUrls2) {
-        try {
-          blob = await fetchWithProgress(
-            _url2,
-            (dlPct) => setCacheProgress({ step: `${baseStep}_download` as any, label: `${emoji} ${name} — ${dlPct}%`, pct: basePct + 2 + Math.round(dlPct * 0.45) }),
-          );
-          break;
-        } catch (e: any) { lastErr2 = e; }
-      }
-      if (!blob) throw lastErr2;
-      await studioOfflineDB.saveAudio(key, blob, { songId, songTitle, type });
-    }
+    await studioOfflineDB.saveAudio(key, blob, { songId, songTitle, type });
     return true;
   };
 
