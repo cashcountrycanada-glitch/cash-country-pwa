@@ -313,7 +313,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       if (/Permission|denied|NotAllowed/i.test(e.message)) setPermError(true);
       else alert('Erreur micro : ' + e.message);
     }
-  }, [selectedDevice, refreshDevices, opts]);
+  }, [selectedDevice, refreshDevices]);
 
   const stopRecording = useCallback((
     song: Song, project: TrackProject,
@@ -402,7 +402,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
 
     if (stopWorkletRef.current) { const wavBlob = stopWorkletRef.current(); stopWorkletRef.current = null; handleSave(wavBlob); }
     else if (recorderRef.current) { recorderRef.current.onstop = () => handleSave(); recorderRef.current.stop(); }
-  }, [optsRef.current.currentPreset]);
+  }, []);
 
   const toggleMonitoring = useCallback(() => {
     setMonitoring(v => {
