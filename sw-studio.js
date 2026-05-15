@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v65-emoji-build-fix'; // v65: build.js préserve emojis UTF-8, optsRef deps nettoyés
+const CACHE = 'studio-v67-offline-logs-import'; // v67: logs téléchargement+import dans DebugPanel, setOfflineLog branché
 
 const CRITICAL = [
   '/index-pwa.html',
