@@ -494,8 +494,8 @@ export default function SongSelector({
 
                   {/* Import depuis Fichiers */}
                   {showImport === s.id && !isCaching && (() => {
-                    const _inst  = s.versions?.find((v: any) => v.trackType === 'STEM_INSTRUMENTAL' || v.trackType === TrackType.STEM_INSTRUMENTAL);
-                    const _vocal = s.versions?.find((v: any) => v.trackType === 'STEM_VOCAL' || v.trackType === TrackType.STEM_VOCAL);
+                    const _inst  = s.versions?.find((v: any) => v.trackType === 'Instrumental Stem (Export ZIP)' || v.trackType === TrackType.STEM_INSTRUMENTAL);
+                    const _vocal = s.versions?.find((v: any) => v.trackType === 'Vocal Stem (Export ZIP)'        || v.trackType === TrackType.STEM_VOCAL);
                     const _iName = _inst?.fileName || null;
                     const _vName = _vocal?.fileName || null;
                     return (
@@ -504,27 +504,28 @@ export default function SongSelector({
                           <p className="text-[11px] font-black text-zinc-300 uppercase tracking-widest">📁 Importer depuis Fichiers</p>
                           <button onClick={e => { e.stopPropagation(); setShowImport(null); }} className="text-[10px] text-zinc-600 font-black active:text-zinc-400">✕ Fermer</button>
                         </div>
-                        {_iName && <div className="mb-3">
+                        {/* Instrumental — toujours affiché */}
+                        <div className="mb-3">
                           <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mb-1">🎸 Instrumental</p>
-                          <p className="text-[10px] font-mono text-zinc-400 bg-zinc-800 rounded-lg px-2 py-1 mb-2 truncate">{_iName}</p>
+                          {_iName && <p className="text-[10px] font-mono text-zinc-400 bg-zinc-800 rounded-lg px-2 py-1 mb-2 truncate">{_iName}</p>}
                           <label className="block">
                             <input type="file" accept="audio/*,.flac,.wav,.mp3,.m4a,.mp4" className="hidden" onChange={e => handleFileImport(s, 'inst', e)}/>
                             <span className={`flex items-center justify-center gap-2 py-2 rounded-xl font-black text-[11px] uppercase active:scale-95 cursor-pointer ${importing === s.id+':inst' ? 'bg-zinc-700 text-zinc-400' : 'bg-blue-700 text-white'}`}>
                               {importing === s.id+':inst' ? '⏳ Import...' : '📂 Choisir'}
                             </span>
                           </label>
-                        </div>}
-                        {_vName && <div>
+                        </div>
+                        {/* Vocal stem — toujours affiché */}
+                        <div>
                           <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mb-1">🎤 Vocal stem</p>
-                          <p className="text-[10px] font-mono text-zinc-400 bg-zinc-800 rounded-lg px-2 py-1 mb-2 truncate">{_vName}</p>
+                          {_vName && <p className="text-[10px] font-mono text-zinc-400 bg-zinc-800 rounded-lg px-2 py-1 mb-2 truncate">{_vName}</p>}
                           <label className="block">
                             <input type="file" accept="audio/*,.flac,.wav,.mp3,.m4a,.mp4" className="hidden" onChange={e => handleFileImport(s, 'vocal', e)}/>
                             <span className={`flex items-center justify-center gap-2 py-2 rounded-xl font-black text-[11px] uppercase active:scale-95 cursor-pointer ${importing === s.id+':vocal' ? 'bg-zinc-700 text-zinc-400' : 'bg-emerald-700 text-white'}`}>
                               {importing === s.id+':vocal' ? '⏳ Import...' : '📂 Choisir'}
                             </span>
                           </label>
-                        </div>}
-                        {!_iName && !_vName && <p className="text-[10px] text-zinc-600 font-black">Aucun stem pour cette chanson.</p>}
+                        </div>
                       </div>
                     );
                   })()}
