@@ -49,7 +49,9 @@ function DebugPanel({ debugLog, onClear }: { debugLog: string[]; onClear: () => 
           <span style={{ color:'#facc15', fontSize:9, fontWeight:900, textTransform:'uppercase' }}>
             {minimized ? `LOG(${debugLog.length})` : 'DEBUG'}
           </span>
-          <button onClick={() => setMinimized(m => !m)} style={{ color:'#a1a1aa', fontSize:9, background:'none', border:'none' }}>
+          <button
+            onClick={() => setMinimized(m => !m)}
+            style={{ color:'#a1a1aa', fontSize:11, background:'rgba(255,255,255,0.08)', border:'1px solid #3f3f46', borderRadius:6, padding:'4px 10px', minWidth:36, minHeight:28 }}>
             {minimized ? '▲' : '▼'}
           </button>
           {debugLog.length > 0 && (
@@ -99,6 +101,9 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     const t = new Date().toISOString().slice(11,19);
     setDebugLog(prev => [`[${t}] ${msg}`, ...prev].slice(0, 20));
   };
+
+  // Brancher addLog dans le hook offline dès le premier render
+  useEffect(() => { offline.setOfflineLog(addLog); });
 
   const audio = useStudioAudio(selected);
   const offline = useStudioOffline();
