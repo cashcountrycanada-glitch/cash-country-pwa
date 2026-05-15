@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v67-offline-logs-import'; // v67: logs téléchargement+import dans DebugPanel, setOfflineLog branché
+const CACHE = 'studio-v68-no-forof-await'; // v68: remplace for...of+await par tryUrls() — compat Babel browser
 
 const CRITICAL = [
   '/index-pwa.html',
