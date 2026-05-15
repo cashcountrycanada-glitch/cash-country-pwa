@@ -226,66 +226,64 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const handlePreviewStems = () => {
     const inst  = audio.instRef.current;
     const vocal = audio.vocalGuideRef.current;
-    addLog(`PREVIEW tap | instUrl=${audio.instUrl ? audio.instUrl.slice(0,30) : 'NULL'}`);
+    addLog(`PREVIEW tap | instUrl=${audio.instUrl ? audio.instUrl.slice(0,30) : 'NULL'} | instCached=${audio.instCached}`);
 
     if (isPreviewing) {
       inst?.pause(); vocal?.pause(); setIsPreviewing(false);
       return;
     }
 
-    // iOS: résumer l'AudioContext DANS le callstack du geste PUIS jouer
+    // Résumer AudioContext en fire-and-forget — ne PAS attendre la Promise
+    // play() doit rester dans la callstack synchrone du tap
     const ctx = (window as any).__warmContext as AudioContext | undefined;
-    const resumeAndPlay = (el: HTMLAudioElement, label: string) => {
-      const go = () => doPlay(el, label);
-      if (ctx && ctx.state === 'suspended') {
-        ctx.resume().then(go).catch(go); // jouer même si resume échoue
-      } else {
-        go();
-      }
-    };
+    if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
 
-    // Lancer play() immédiatement — SANS await, pour rester dans le callstack du geste
-    // iOS bloque play() si le callstack est rompu par un await intermédiaire
-    const doPlay = (el: HTMLAudioElement, label: string) => {
+    const playEl = (el: HTMLAudioElement, label: string) => {
       el.currentTime = 0;
-      el.play()
-        .then(() => addLog(`${label}.play() OK`))
-        .catch((e: Error) => {
-          addLog(`${label}.play() ERREUR: ${e.name}`);
-          // Fallback : recharger et réessayer une fois
-          if (e.name === 'NotSupportedError' || e.name === 'NotAllowedError') {
-            el.load();
-            setTimeout(() => {
-              el.play()
-                .then(() => addLog(`${label}.play() retry OK`))
-                .catch((e2: Error) => addLog(`${label}.play() retry ERREUR: ${e2.name}`));
-            }, 300);
-          }
-        });
+      const p = el.play();
+      if (p) {
+        p.then(() => addLog(`${label}.play() OK`))
+         .catch((e: Error) => {
+           addLog(`${label}.play() ERREUR: ${e.name} | src=${el.src.slice(0,40)}`);
+           // Fallback AudioContext decodeAudioData (contourne les restrictions iOS sur <audio>)
+           if (ctx && (e.name === 'NotSupportedError' || e.name === 'NotAllowedError')) {
+             fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(decoded => {
+               const src = ctx.createBufferSource();
+               src.buffer = decoded;
+               src.connect(ctx.destination);
+               src.onended = () => { vocal?.pause(); setIsPreviewing(false); };
+               src.start(0);
+               addLog(`${label} AudioContext fallback OK`);
+             }).catch(e2 => addLog(`${label} AudioContext fallback ERREUR: ${e2.message}`));
+           }
+         });
+      }
     };
 
     if (inst && audio.instUrl) {
-      if (inst.src !== audio.instUrl && !inst.src.endsWith(audio.instUrl)) {
+      if (!inst.src || inst.src !== audio.instUrl) {
         inst.src = audio.instUrl;
         inst.load();
-        inst.addEventListener('canplay', () => resumeAndPlay(inst, 'inst'), { once: true });
+        inst.addEventListener('canplay', () => playEl(inst, 'inst'), { once: true });
       } else {
-        resumeAndPlay(inst, 'inst');
+        playEl(inst, 'inst');
       }
       inst.onended = () => { vocal?.pause(); setIsPreviewing(false); inst.onended = null; };
+    } else {
+      addLog(`PREVIEW: inst manquant | instUrl=${audio.instUrl} | instRef=${!!inst}`);
     }
 
     if (vocal && audio.vocalGuideUrl) {
       try { vocal.volume = audio.vocalVolRef.current; } catch {}
-      if (vocal.src !== audio.vocalGuideUrl && !vocal.src.endsWith(audio.vocalGuideUrl)) {
+      if (!vocal.src || vocal.src !== audio.vocalGuideUrl) {
         vocal.src = audio.vocalGuideUrl;
         vocal.load();
         vocal.addEventListener('canplay', () => {
-          resumeAndPlay(vocal, 'vocal');
+          playEl(vocal, 'vocal');
           audio.setVocalGuideVol(audio.vocalGuideVol);
         }, { once: true });
       } else {
-        resumeAndPlay(vocal, 'vocal');
+        playEl(vocal, 'vocal');
         audio.setVocalGuideVol(audio.vocalGuideVol);
       }
     }
