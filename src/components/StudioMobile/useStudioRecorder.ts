@@ -116,6 +116,8 @@ function resolveAutoDevice(
 }
 
 export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
+  const optsRef = useRef(opts);
+  useEffect(() => { optsRef.current = opts; }); // sync every render, no deps
   const [isRecording, setIsRecording]   = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
   const [duration, setDuration]         = useState(0);
@@ -152,8 +154,8 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       audioDevicesRef.current = mics;
       const ext = mics.find(m => m.category === 'external');
       const bt  = mics.find(m => m.category === 'bluetooth');
-      if (ext) opts.onLog?.(`🎙 Externe détecté : ${ext.label}`);
-      if (bt)  opts.onLog?.(`🎧 Bluetooth : ${bt.label}`);
+      if (ext) optsRef.current.onLog?.(`🎙 Externe détecté : ${ext.label}`);
+      if (bt)  optsRef.current.onLog?.(`🎧 Bluetooth : ${bt.label}`);
     } catch {}
   }, []);
 
@@ -204,10 +206,10 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       });
       s.getTracks().forEach(t => t.stop());
       permissionGrantedRef.current = true;
-      opts.onLog?.(`✅ Warm-up OK | ${ctx.sampleRate}Hz`);
+      optsRef.current.onLog?.(`✅ Warm-up OK | ${ctx.sampleRate}Hz`);
       await refreshDevices(); // Maintenant les labels sont disponibles
     } catch (e: any) {
-      opts.onLog?.(`⚠️ Warm-up : ${e.message}`);
+      optsRef.current.onLog?.(`⚠️ Warm-up : ${e.message}`);
       setPermError(true);
     }
   }, [refreshDevices]);
@@ -215,21 +217,21 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
   const startRecording = useCallback(async (song: Song, project: TrackProject) => {
     if (!song) return;
     try {
-      opts.onLog?.('═══ TAP REC ═══');
+      optsRef.current.onLog?.('═══ TAP REC ═══');
       const pIn  = punchInRef.current;
       const pOut = punchOutRef.current;
 
       // 1. Stems de référence
       const startStem = (el: HTMLAudioElement, t: number) => { el.pause(); el.currentTime = t; el.play().catch(() => {}); };
-      if (opts.instRef.current && opts.instUrl)              startStem(opts.instRef.current, pIn ?? 0);
-      if (opts.vocalGuideRef.current && opts.vocalGuideUrl)  startStem(opts.vocalGuideRef.current, pIn ?? 0);
+      if (optsRef.current.instRef.current && optsRef.current.instUrl)              startStem(optsRef.current.instRef.current, pIn ?? 0);
+      if (optsRef.current.vocalGuideRef.current && optsRef.current.vocalGuideUrl)  startStem(optsRef.current.vocalGuideRef.current, pIn ?? 0);
 
-      if (opts.backingTracks && opts.backingTracks.length > 0) {
+      if (optsRef.current.backingTracks && optsRef.current.backingTracks.length > 0) {
         backingRefsRef.current.forEach(el => { el.pause(); el.src = ''; });
         backingRefsRef.current = [];
-        const sections: any[] = (opts as any).sections ?? [];
+        const sections: any[] = (optsRef.current as any).sections ?? [];
         const activeSec = pIn !== null ? sections.find((s: any) => Math.abs(s.startSec - pIn) < 2) : null;
-        for (const bt of opts.backingTracks) {
+        for (const bt of optsRef.current.backingTracks) {
           if (activeSec && bt.trackIndex !== undefined && !activeSec.activeHarmonies.includes(bt.trackIndex)) continue;
           let gain = bt.gain ?? 0.4;
           if (activeSec && bt.trackIndex !== undefined) { const sv = activeSec.harmonyVolumes?.[bt.trackIndex]; if (sv !== undefined) gain = sv * 0.6; }
@@ -250,13 +252,13 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         reason = 'manual';
         const found = currentDevices.find(d => d.deviceId === selectedDevice);
         deviceLabel = found?.label ?? `Device ${selectedDevice.slice(0, 8)}`;
-        opts.onLog?.(`🎙 MANUEL → "${deviceLabel}"`);
+        optsRef.current.onLog?.(`🎙 MANUEL → "${deviceLabel}"`);
         // Avertissement si l'utilisateur a sélectionné un micro BT manuellement
         if (found?.category === 'bluetooth') {
-          opts.onLog?.('⚠️ Micro BT sélectionné manuellement — iOS peut basculer en HFP (son téléphonie). Préférer "Micro int." si qualité dégradée.');
+          optsRef.current.onLog?.('⚠️ Micro BT sélectionné manuellement — iOS peut basculer en HFP (son téléphonie). Préférer "Micro int." si qualité dégradée.');
         }
       } else {
-        const resolved = resolveAutoDevice(currentDevices, opts.onLog ?? (() => {}));
+        const resolved = resolveAutoDevice(currentDevices, optsRef.current.onLog ?? (() => {}));
         effectiveDeviceId = resolved.deviceId;
         reason = resolved.reason;
         deviceLabel = resolved.label;
@@ -266,20 +268,20 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       setActiveDeviceLabel(deviceLabel);
 
       // 3. Capture DRY
-      opts.onLog?.(`🎤 Capture DRY → "${deviceLabel}"`);
+      optsRef.current.onLog?.(`🎤 Capture DRY → "${deviceLabel}"`);
       const result = await studioService.startRecordingPro({
         reverb: 'none' as any, saturation: 0, compression: false, gainL: 1.0, gainR: 1.0,
         deviceId: effectiveDeviceId,
-      }, (level) => setVuLevel(level), opts.onLog);
+      }, (level) => setVuLevel(level), optsRef.current.onLog);
 
       refreshDevices();
       const { recorder, chunks, context, stream, analyser: an, monitorGain, stopWorklet } = result;
 
       if (stream) {
         const track = stream.getAudioTracks()[0]; const s = track.getSettings();
-        opts.onLog?.(`🎵 Stream : ${s.sampleRate ?? '?'}Hz · ${s.channelCount ?? '?'}ch`);
+        optsRef.current.onLog?.(`🎵 Stream : ${s.sampleRate ?? '?'}Hz · ${s.channelCount ?? '?'}ch`);
       }
-      if (context) opts.onLog?.(`🎵 AudioContext : ${context.sampleRate}Hz ${context.sampleRate >= 44000 ? '✅' : '⚠️'}`);
+      if (context) optsRef.current.onLog?.(`🎵 AudioContext : ${context.sampleRate}Hz ${context.sampleRate >= 44000 ? '✅' : '⚠️'}`);
 
       stopWorkletRef.current      = stopWorklet ?? null;
       recorderRef.current         = recorder;
@@ -296,7 +298,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       setDuration(0);
       durationRef.current = 0;
       setPermError(false);
-      opts.onLog?.(`✅ REC — ${deviceLabel}`);
+      optsRef.current.onLog?.(`✅ REC — ${deviceLabel}`);
 
       timerRef.current = setInterval(() => {
         setDuration(d => {
@@ -307,7 +309,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       }, 1000);
 
     } catch (e: any) {
-      opts.onLog?.(`❌ Erreur REC : ${e.message}`);
+      optsRef.current.onLog?.(`❌ Erreur REC : ${e.message}`);
       if (/Permission|denied|NotAllowed/i.test(e.message)) setPermError(true);
       else alert('Erreur micro : ' + e.message);
     }
@@ -319,8 +321,8 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
   ) => {
     if ((!recorderRef.current && !stopWorkletRef.current) || !song || !project) return;
     clearInterval(timerRef.current);
-    opts.instRef.current?.pause();
-    opts.vocalGuideRef.current?.pause();
+    optsRef.current.instRef.current?.pause();
+    optsRef.current.vocalGuideRef.current?.pause();
     backingRefsRef.current.forEach(el => { el.pause(); el.currentTime = 0; });
     backingRefsRef.current = [];
     if (monitorConnectedRef.current && monitorGainRef.current && audioCtxRef.current) {
@@ -347,7 +349,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     }
     vocalGainNodeRef.current = null;
     setAnalyser(null);
-    opts.onLog?.('🔓 Session micro fermée — stems restaurés');
+    optsRef.current.onLog?.('🔓 Session micro fermée — stems restaurés');
 
     const handleSave = async (workletBlob?: Blob) => {
       setIsRecording(false); setIsSaving(true);
@@ -356,18 +358,18 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         let blob: Blob;
         if (workletBlob && workletBlob.size > 0) {
           blob = workletBlob;
-          opts.onLog?.(`💾 Blob AudioWorklet: ${(workletBlob.size / 1024).toFixed(0)} Ko WAV`);
+          optsRef.current.onLog?.(`💾 Blob AudioWorklet: ${(workletBlob.size / 1024).toFixed(0)} Ko WAV`);
         } else if (chunksRef.current.length > 0) {
           blob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || 'audio/mp4' });
-          opts.onLog?.(`💾 Blob MediaRecorder: ${(blob.size / 1024).toFixed(0)} Ko | chunks=${chunksRef.current.length}`);
+          optsRef.current.onLog?.(`💾 Blob MediaRecorder: ${(blob.size / 1024).toFixed(0)} Ko | chunks=${chunksRef.current.length}`);
         } else {
           // Aucune donnée — enregistrement trop court ou erreur capture
-          opts.onLog?.('❌ Blob vide — aucune donnée capturée. Durée suffisante?');
+          optsRef.current.onLog?.('❌ Blob vide — aucune donnée capturée. Durée suffisante?');
           return;
         }
 
         if (blob.size < 1000) {
-          opts.onLog?.(`⚠️ Blob suspect: ${blob.size} bytes — trop petit, probablement corrompu`);
+          optsRef.current.onLog?.(`⚠️ Blob suspect: ${blob.size} bytes — trop petit, probablement corrompu`);
         }
 
         // sourceNode et stream déjà libérés ci-dessus (avant handleSave)
@@ -375,32 +377,32 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         const id = `REC-${Date.now()}`;
         const safeTitle = song.title.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
         const ext = workletBlob ? 'wav' : (chunksRef.current[0]?.type?.includes('mp4') ? 'mp4' : 'webm');
-        const fileName = `${safeTitle}_T${opts.currentPreset.index}_${Date.now()}.${ext}`;
+        const fileName = `${safeTitle}_T${optsRef.current.currentPreset.index}_${Date.now()}.${ext}`;
 
-        opts.onLog?.(`💾 Sauvegarde: ${fileName}`);
+        optsRef.current.onLog?.(`💾 Sauvegarde: ${fileName}`);
         const dataUrl = await studioService.blobToDataUrl(blob);
-        opts.onLog?.(`✅ dataUrl: ${(dataUrl.length / 1024).toFixed(0)} Ko`);
+        optsRef.current.onLog?.(`✅ dataUrl: ${(dataUrl.length / 1024).toFixed(0)} Ko`);
 
         const rec: MobileRecording = {
           id, songId: song.id, songTitle: song.title, artist: song.artist || '',
           duration: durationRef.current, recordedAt: Date.now(), dataUrl, transferred: false,
-          fileName, trackIndex: opts.currentPreset.index, trackLabel: opts.currentPreset.label,
-          takeSlot: opts.currentPreset.index === 0 ? (opts.takeSlot ?? 'A') : undefined,
-          pitchShift: opts.currentPreset.pitch, gain: opts.currentPreset.gain,
-          pan: opts.currentPreset.pan, projectId: project.id,
+          fileName, trackIndex: optsRef.current.currentPreset.index, trackLabel: optsRef.current.currentPreset.label,
+          takeSlot: optsRef.current.currentPreset.index === 0 ? (optsRef.current.takeSlot ?? 'A') : undefined,
+          pitchShift: optsRef.current.currentPreset.pitch, gain: optsRef.current.currentPreset.gain,
+          pan: optsRef.current.currentPreset.pan, projectId: project.id,
         };
         studioService.saveRecordingLocally(rec);
         const updatedProject = studioService.addTrackToProject(project.id, rec);
-        opts.onLog?.(`✅ Prise sauvegardée | trackIndex=${opts.currentPreset.index}`);
+        optsRef.current.onLog?.(`✅ Prise sauvegardée | trackIndex=${optsRef.current.currentPreset.index}`);
         onSaved(rec, updatedProject);
       } catch(e: any) {
-        opts.onLog?.(`❌ Erreur sauvegarde: ${e.message}`);
+        optsRef.current.onLog?.(`❌ Erreur sauvegarde: ${e.message}`);
       } finally { setIsSaving(false); }
     };
 
     if (stopWorkletRef.current) { const wavBlob = stopWorkletRef.current(); stopWorkletRef.current = null; handleSave(wavBlob); }
     else if (recorderRef.current) { recorderRef.current.onstop = () => handleSave(); recorderRef.current.stop(); }
-  }, [opts.currentPreset]);
+  }, [optsRef.current.currentPreset]);
 
   const toggleMonitoring = useCallback(() => {
     setMonitoring(v => {

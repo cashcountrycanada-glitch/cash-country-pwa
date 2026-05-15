@@ -50,6 +50,62 @@ interface Props {
 }
 
 // ── Composant config URL Mac ─────────────────────────────────────────────────
+// Composant ligne de stem — défini au niveau module pour éviter la redéfinition à chaque render
+interface StemRowProps {
+  songId: string;
+  type: 'inst' | 'vocal';
+  fileName: string | null;
+  inCache: boolean | null;
+  importing: string | null;
+  testingAudio: string | null;
+  onTest: (songId: string, type: 'inst' | 'vocal') => void;
+  onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}
+function StemRow({ songId, type, fileName, inCache, importing, testingAudio, onTest, onImport }: StemRowProps) {
+  const isInst   = type === 'inst';
+  const testKey  = `${songId}:${type}`;
+  const isTesting = testingAudio === testKey;
+  const isImporting = importing === `${songId}:${type}`;
+  return (
+    <div className="mb-4">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">
+          {isInst ? '🎸 Instrumental' : '🎤 Vocal stem'}
+        </span>
+        {inCache === null  && <span className="text-[9px] text-zinc-600 animate-pulse">…vérif</span>}
+        {inCache === true  && <span className="text-[9px] font-black text-emerald-400 bg-emerald-900/30 px-1.5 py-0.5 rounded-full">✓ En cache</span>}
+        {inCache === false && <span className="text-[9px] font-black text-orange-400 bg-orange-900/20 px-1.5 py-0.5 rounded-full">⚠ Absent</span>}
+      </div>
+      {fileName
+        ? <p className="text-[10px] font-mono text-zinc-300 bg-zinc-800/80 border border-zinc-700 rounded-lg px-2.5 py-1.5 mb-2 break-all leading-relaxed">{fileName}</p>
+        : <p className="text-[10px] font-mono text-zinc-600 bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 mb-2 italic">Aucun fichier associé</p>
+      }
+      <div className="flex gap-2">
+        <button
+          onClick={e => { e.stopPropagation(); onTest(songId, type); }}
+          disabled={!inCache}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl font-black text-[11px] uppercase transition-all active:scale-95 ${
+            !inCache   ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-40' :
+            isTesting  ? 'bg-amber-600 text-white' :
+            isInst     ? 'bg-blue-900/60 border border-blue-600/40 text-blue-300' :
+                         'bg-emerald-900/60 border border-emerald-600/40 text-emerald-300'
+          }`}>
+          {isTesting ? '⏹ Stop' : '🔊 Écouter'}
+        </button>
+        <label className="flex-1">
+          <input type="file" accept="audio/*,.flac,.wav,.mp3,.m4a,.mp4" className="hidden" onChange={onImport}/>
+          <span className={`flex items-center justify-center gap-1.5 py-2 rounded-xl font-black text-[11px] uppercase active:scale-95 cursor-pointer transition-all ${
+            isImporting ? 'bg-zinc-700 text-zinc-400' :
+            isInst      ? 'bg-blue-700 text-white' : 'bg-emerald-700 text-white'
+          }`}>
+            {isImporting ? '⏳ Import...' : '📂 Remplacer'}
+          </span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
 function MacUrlConfig() {
   const [macUrl, setMacUrl] = React.useState<string>(() => (window as any).__CC_MAC_URL || '');
   const [editing, setEditing] = React.useState(false);
@@ -199,7 +255,7 @@ export default function SongSelector({
   };
 
   // Lit un stem directement depuis IndexedDB pour le tester
-  const testStemAudio = async (songId: string, type: 'inst' | 'vocal') => {
+  const testStemAudio = (songId: string, type: 'inst' | 'vocal') => {
     const key = `${songId}:${type}`;
     if (testingAudio === key) {
       audioTestRef.current?.pause();
@@ -207,18 +263,21 @@ export default function SongSelector({
       setTestingAudio(null);
       return;
     }
+    // Créer et démarrer l'élément audio SYNCHRONE dans le handler du tap (exigence iOS)
+    const audio = new Audio();
+    audio.preload = 'auto';
+    audioTestRef.current?.pause();
+    audioTestRef.current = audio;
     setTestingAudio(key);
-    try {
-      const blob = await studioOfflineDB.getAudio(`${type}_${songId}`);
-      if (!blob) { setTestingAudio(null); return; }
+    // Charger le blob en async après avoir initié la lecture
+    studioOfflineDB.getAudio(`${type}_${songId}`).then(blob => {
+      if (!blob) { setTestingAudio(null); audioTestRef.current = null; return; }
       const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioTestRef.current?.pause();
-      audioTestRef.current = audio;
+      audio.src = url;
       audio.onended = () => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
       audio.onerror = () => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
-      await audio.play();
-    } catch { setTestingAudio(null); }
+      audio.play().catch(() => setTestingAudio(null));
+    }).catch(() => setTestingAudio(null));
   };
 
   // Cleanup audio au démontage
@@ -546,73 +605,29 @@ export default function SongSelector({
                     const _iName = _inst?.fileName  || null;
                     const _vName = _vocal?.fileName || null;
                     const cst    = stemCacheStatus[s.id];
-                    const iHas   = cst?.inst;   // true/false/null(chargement)
-                    const vHas   = cst?.vocal;
-
-                    const StemRow = ({ type, fileName, inCache }: { type: 'inst'|'vocal'; fileName: string|null; inCache: boolean|null }) => {
-                      const isInst   = type === 'inst';
-                      const testKey  = `${s.id}:${type}`;
-                      const isTesting = testingAudio === testKey;
-                      return (
-                        <div className="mb-4">
-                          {/* Label */}
-                          <div className="flex items-center gap-1.5 mb-1.5">
-                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">
-                              {isInst ? '🎸 Instrumental' : '🎤 Vocal stem'}
-                            </span>
-                            {/* Badge cache */}
-                            {inCache === null && <span className="text-[9px] text-zinc-600 animate-pulse">…</span>}
-                            {inCache === true  && <span className="text-[9px] font-black text-emerald-400 bg-emerald-900/30 px-1.5 py-0.5 rounded-full">✓ En cache</span>}
-                            {inCache === false && <span className="text-[9px] font-black text-orange-400 bg-orange-900/20 px-1.5 py-0.5 rounded-full">⚠ Absent</span>}
-                          </div>
-
-                          {/* Nom de fichier complet */}
-                          {fileName
-                            ? <p className="text-[10px] font-mono text-zinc-300 bg-zinc-800/80 border border-zinc-700 rounded-lg px-2.5 py-1.5 mb-2 break-all leading-relaxed">{fileName}</p>
-                            : <p className="text-[10px] font-mono text-zinc-600 bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 mb-2 italic">Aucun fichier associé</p>
-                          }
-
-                          {/* Boutons */}
-                          <div className="flex gap-2">
-                            {/* Tester l'audio */}
-                            <button
-                              onClick={e => { e.stopPropagation(); if (inCache) testStemAudio(s.id, type); }}
-                              disabled={!inCache}
-                              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl font-black text-[11px] uppercase transition-all active:scale-95 ${
-                                !inCache        ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-40' :
-                                isTesting       ? 'bg-amber-600 text-white'  :
-                                isInst          ? 'bg-blue-900/60 border border-blue-600/40 text-blue-300' :
-                                                  'bg-emerald-900/60 border border-emerald-600/40 text-emerald-300'
-                              }`}>
-                              {isTesting ? '⏹ Stop' : '🔊 Écouter'}
-                            </button>
-
-                            {/* Importer un fichier */}
-                            <label className="flex-1">
-                              <input type="file" accept="audio/*,.flac,.wav,.mp3,.m4a,.mp4" className="hidden" onChange={e => handleFileImport(s, type, e)}/>
-                              <span className={`flex items-center justify-center gap-1.5 py-2 rounded-xl font-black text-[11px] uppercase active:scale-95 cursor-pointer transition-all ${
-                                importing === `${s.id}:${type}` ? 'bg-zinc-700 text-zinc-400' :
-                                isInst ? 'bg-blue-700 text-white' : 'bg-emerald-700 text-white'
-                              }`}>
-                                {importing === `${s.id}:${type}` ? '⏳ Import...' : '📂 Remplacer'}
-                              </span>
-                            </label>
-                          </div>
-                        </div>
-                      );
-                    };
-
+                    const iHas   = cst ? cst.inst   : null;
+                    const vHas   = cst ? cst.vocal  : null;
                     return (
                       <div className="mx-1 mb-2 bg-zinc-900/90 border border-zinc-700 rounded-2xl px-4 py-3" onClick={e => e.stopPropagation()}>
                         <div className="flex items-center justify-between mb-3">
                           <p className="text-[11px] font-black text-zinc-300 uppercase tracking-widest">📁 Stems — {s.title}</p>
                           <div className="flex items-center gap-2">
-                            <button onClick={e => { e.stopPropagation(); checkStemCache(s.id); }} className="text-[9px] text-zinc-500 font-black active:text-zinc-300 border border-zinc-700 px-2 py-1 rounded-lg">↺</button>
+                            <button onClick={e => { e.stopPropagation(); checkStemCache(s.id); }} className="text-[9px] text-zinc-500 font-black active:text-zinc-300 border border-zinc-700 px-2 py-1 rounded-lg">↺ Vérifier</button>
                             <button onClick={e => { e.stopPropagation(); setShowImport(null); }} className="text-[10px] text-zinc-600 font-black active:text-zinc-400">✕</button>
                           </div>
                         </div>
-                        <StemRow type="inst"  fileName={_iName} inCache={iHas ?? null} />
-                        <StemRow type="vocal" fileName={_vName} inCache={vHas ?? null} />
+                        <StemRow
+                          songId={s.id} type="inst" fileName={_iName} inCache={iHas}
+                          importing={importing} testingAudio={testingAudio}
+                          onTest={testStemAudio}
+                          onImport={e => handleFileImport(s, 'inst', e)}
+                        />
+                        <StemRow
+                          songId={s.id} type="vocal" fileName={_vName} inCache={vHas}
+                          importing={importing} testingAudio={testingAudio}
+                          onTest={testStemAudio}
+                          onImport={e => handleFileImport(s, 'vocal', e)}
+                        />
                       </div>
                     );
                   })()}
