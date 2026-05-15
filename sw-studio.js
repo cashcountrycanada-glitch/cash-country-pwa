@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v64-log-stem-fixes'; // v64: optsRef stale fix, StemRow module-level, testStemAudio iOS sync, noms+cache corrects
+const CACHE = 'studio-v65-emoji-build-fix'; // v65: build.js préserve emojis UTF-8, optsRef deps nettoyés
 
 const CRITICAL = [
   '/index-pwa.html',

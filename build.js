@@ -63,8 +63,13 @@ function build() {
       continue;
     }
     const source = fs.readFileSync(srcPath, 'utf8');
-    // JSON.stringify gère TOUT l'échappement correctement
-    const escaped = JSON.stringify(source);
+    // JSON.stringify puis restaurer les emojis/unicode (évite les surrogate pairs \uXXXX dans le HTML)
+    const escaped = JSON.stringify(source).replace(
+      /\\u([dD][89aAbB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})/g,
+      (_, high, low) => String.fromCodePoint(
+        ((parseInt(high, 16) - 0xD800) << 10) + (parseInt(low, 16) - 0xDC00) + 0x10000
+      )
+    );
     entries.push(`  ${JSON.stringify(modKey)}: ${escaped}`);
     console.log(`  ✅ ${modKey} (${(source.length/1024).toFixed(1)} Ko)`);
   }
