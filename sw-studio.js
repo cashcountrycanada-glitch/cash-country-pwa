@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v63-emoji-log-fix'; // v63: fix emojis cassés RecordScreen+StudioMobile, DebugPanel sur tous les écrans
+const CACHE = 'studio-v64-log-stem-fixes'; // v64: optsRef stale fix, StemRow module-level, testStemAudio iOS sync, noms+cache corrects
 
 const CRITICAL = [
   '/index-pwa.html',
