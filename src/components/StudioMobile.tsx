@@ -233,11 +233,16 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       return;
     }
 
-    // iOS: résumer l'AudioContext DANS le callstack du geste (pas après un await)
+    // iOS: résumer l'AudioContext DANS le callstack du geste PUIS jouer
     const ctx = (window as any).__warmContext as AudioContext | undefined;
-    if (ctx && ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
-    }
+    const resumeAndPlay = (el: HTMLAudioElement, label: string) => {
+      const go = () => doPlay(el, label);
+      if (ctx && ctx.state === 'suspended') {
+        ctx.resume().then(go).catch(go); // jouer même si resume échoue
+      } else {
+        go();
+      }
+    };
 
     // Lancer play() immédiatement — SANS await, pour rester dans le callstack du geste
     // iOS bloque play() si le callstack est rompu par un await intermédiaire
@@ -260,13 +265,12 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     };
 
     if (inst && audio.instUrl) {
-      // S'assurer que le src est bien assigné (cas où instUrl vient de changer)
       if (inst.src !== audio.instUrl && !inst.src.endsWith(audio.instUrl)) {
         inst.src = audio.instUrl;
         inst.load();
-        inst.addEventListener('canplay', () => doPlay(inst, 'inst'), { once: true });
+        inst.addEventListener('canplay', () => resumeAndPlay(inst, 'inst'), { once: true });
       } else {
-        doPlay(inst, 'inst');
+        resumeAndPlay(inst, 'inst');
       }
       inst.onended = () => { vocal?.pause(); setIsPreviewing(false); inst.onended = null; };
     }
@@ -277,11 +281,11 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         vocal.src = audio.vocalGuideUrl;
         vocal.load();
         vocal.addEventListener('canplay', () => {
-          doPlay(vocal, 'vocal');
+          resumeAndPlay(vocal, 'vocal');
           audio.setVocalGuideVol(audio.vocalGuideVol);
         }, { once: true });
       } else {
-        doPlay(vocal, 'vocal');
+        resumeAndPlay(vocal, 'vocal');
         audio.setVocalGuideVol(audio.vocalGuideVol);
       }
     }
