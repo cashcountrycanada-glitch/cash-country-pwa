@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v60-div-card-fix'; // v60: carte chanson div+onPointerDown — fix bouton 📁 → RecordScreen sur iOS
+const CACHE = 'studio-v61-import-always-both'; // v61: panneau import toujours 2 stems peu importe versions[]
 
 const CRITICAL = [
   '/index-pwa.html',
