@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v70-flac-ios-fix'; // v70: fixBlobType force audio/mp4 pour FLAC/WebM sur iOS, resume().then(play)
+const CACHE = 'studio-v71-preview-fix'; // v71: fix doPlay hoisting + play() synchrone tap iOS + fallback AudioContext decodeAudioData
 
 const CRITICAL = [
   '/index-pwa.html',
