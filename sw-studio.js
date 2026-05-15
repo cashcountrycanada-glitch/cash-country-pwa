@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v62-stem-cache-status'; // v62: panneau stems avec statut cache réel, noms complets, bouton écouter
+const CACHE = 'studio-v63-emoji-log-fix'; // v63: fix emojis cassés RecordScreen+StudioMobile, DebugPanel sur tous les écrans
 
 const CRITICAL = [
   '/index-pwa.html',
