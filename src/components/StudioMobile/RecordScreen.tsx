@@ -79,7 +79,7 @@ function deviceStyle(dev: AudioDevice, isSelected: boolean, isAuto: boolean, aut
       bg:     isSelected ? '#7c3aed20' : '#1a1a1a',
       border: isSelected ? '#7c3aed' : '#2a2a2a',
       color:  isSelected ? '#a78bfa' : '#52525b',
-      icon:   '\ud83c\udfa7',
+      icon:   '🎧',
     };
   }
   if (dev.category === 'external') {
@@ -87,7 +87,7 @@ function deviceStyle(dev: AudioDevice, isSelected: boolean, isAuto: boolean, aut
       bg:     isSelected ? '#16a34a20' : '#1a1a1a',
       border: isSelected ? '#16a34a' : '#2a2a2a',
       color:  isSelected ? '#4ade80' : '#52525b',
-      icon:   '\ud83c\udf99',
+      icon:   '🎙',
     };
   }
   if (dev.category === 'builtin') {
@@ -96,10 +96,10 @@ function deviceStyle(dev: AudioDevice, isSelected: boolean, isAuto: boolean, aut
       bg:     isSelected ? (isHfpProtect ? '#92400e20' : presetColor + '20') : '#1a1a1a',
       border: isSelected ? (isHfpProtect ? '#d97706' : presetColor) : '#2a2a2a',
       color:  isSelected ? (isHfpProtect ? '#fbbf24' : presetColor) : '#52525b',
-      icon:   '\ud83d\udcf1',
+      icon:   '📱',
     };
   }
-  return { bg: isSelected ? presetColor + '20' : '#1a1a1a', border: isSelected ? presetColor : '#2a2a2a', color: isSelected ? presetColor : '#52525b', icon: '\ud83c\udf99' };
+  return { bg: isSelected ? presetColor + '20' : '#1a1a1a', border: isSelected ? presetColor : '#2a2a2a', color: isSelected ? presetColor : '#52525b', icon: '🎙' };
 }
 
 export default function RecordScreen({
@@ -175,9 +175,9 @@ export default function RecordScreen({
       const color = autoSelectReason === 'external' ? '#4ade80'
         : autoSelectReason === 'builtin_hfp' ? '#fbbf24'
         : '#a1a1aa';
-      const icon = autoSelectReason === 'external' ? '\ud83c\udf99'
-        : autoSelectReason === 'builtin_hfp' ? '\ud83d\udee1'
-        : '\ud83d\udcf1';
+      const icon = autoSelectReason === 'external' ? '🎙'
+        : autoSelectReason === 'builtin_hfp' ? '🛡'
+        : '📱';
       return (
         <div className="mx-4 mb-2 rounded-xl px-3 py-2 flex items-center gap-2" style={{ background: color + '15', border: `1px solid ${color}50` }}>
           <span style={{ fontSize: 11 }}>{icon}</span>
@@ -218,7 +218,7 @@ export default function RecordScreen({
           <div>
             <p className="text-[12px] text-red-400 font-black mb-1">Accès micro refusé</p>
             {httpsUrl
-              ? <><p className="text-[11px] text-zinc-400 mb-2">Safari iOS exige HTTPS.</p><a href={httpsUrl} className="block text-center py-2 bg-red-600 rounded-xl font-black text-[11px] text-white">\ud83d\udd12 Ouvrir en HTTPS</a></>
+              ? <><p className="text-[11px] text-zinc-400 mb-2">Safari iOS exige HTTPS.</p><a href={httpsUrl} className="block text-center py-2 bg-red-600 rounded-xl font-black text-[11px] text-white">🔒 Ouvrir en HTTPS</a></>
               : <p className="text-[11px] text-zinc-400">Réglages → Safari → Microphone → Autoriser</p>}
           </div>
         </div>
@@ -315,7 +315,7 @@ export default function RecordScreen({
                   <span className="text-[8px] font-black uppercase" style={{ color: selectedDevice === null ? '#60a5fa' : '#52525b' }}>Auto</span>
                   {selectedDevice === null && (
                     <span className="text-[6px] font-black" style={{ color: '#3b82f6aa' }}>
-                      {autoSelectReason === 'external' ? 'EXT' : autoSelectReason === 'builtin_hfp' ? 'HFP\ud83d\udee1' : 'DEF'}
+                      {autoSelectReason === 'external' ? 'EXT' : autoSelectReason === 'builtin_hfp' ? 'HFP🛡' : 'DEF'}
                     </span>
                   )}
                 </button>
@@ -354,12 +354,12 @@ export default function RecordScreen({
                 <div className="mt-2 flex items-center gap-1.5 flex-wrap">
                   {hasExternalMic && (
                     <span className="text-[8px] font-black px-2 py-0.5 rounded-full" style={{ background: '#16a34a20', color: '#4ade80', border: '1px solid #16a34a40' }}>
-                      \ud83c\udf99 Externe détecté — qualité HD
+                      🎙 Externe détecté — qualité HD
                     </span>
                   )}
                   {hasBluetooth && !hasExternalMic && selectedDevice === null && (
                     <span className="text-[8px] font-black px-2 py-0.5 rounded-full" style={{ background: '#92400e20', color: '#fbbf24', border: '1px solid #92400e40' }}>
-                      \ud83c\udfa7 BT → Micro iPhone auto (A2DP protégé)
+                      🎧 BT → Micro iPhone auto (A2DP protégé)
                     </span>
                   )}
                   {hasBluetooth && !hasExternalMic && selectedIsBT && (
@@ -369,7 +369,7 @@ export default function RecordScreen({
                   )}
                   {!hasBluetooth && !hasExternalMic && (
                     <span className="text-[8px] font-black px-2 py-0.5 rounded-full" style={{ background: '#1a1a1a', color: '#52525b', border: '1px solid #222' }}>
-                      \ud83d\udcf1 Micro iPhone
+                      📱 Micro iPhone
                     </span>
                   )}
                 </div>
@@ -580,7 +580,7 @@ export default function RecordScreen({
         )}
         {(hasLrc || staticLines.length > 0) && !showLyrics && (
           <button onClick={onToggleLyrics} className="shrink-0 mx-4 mb-4 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest active:scale-95 transition-all" style={{ background: '#141414', border: '1px solid #333', color: '#a1a1aa' }}>
-            \ud83c\udfb5 Afficher les paroles
+            🎵 Afficher les paroles
           </button>
         )}
       </div>
