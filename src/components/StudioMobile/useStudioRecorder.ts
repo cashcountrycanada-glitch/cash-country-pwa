@@ -413,14 +413,47 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
 
         // sourceNode et stream déjà libérés ci-dessus (avant handleSave)
 
+        optsRef.current.onLog?.(`💾 Sauvegarde...`);
+
+        // Sur iOS, si l'AudioWorklet a produit un WAV trop gros ET qu'on a des chunks MediaRecorder disponibles,
+        // préférer les chunks (mp4 compressé natif iOS)
+        let finalBlob = blob;
+        if (blob.type.includes('wav') && blob.size > 5 * 1024 * 1024 && chunksRef.current.length > 0) {
+          const mpBlob = new Blob(chunksRef.current, { type: chunksRef.current[0]?.type || 'audio/mp4' });
+          if (mpBlob.size > 1000) {
+            finalBlob = mpBlob;
+            optsRef.current.onLog?.(`💾 WAV → mp4 (MediaRecorder): ${(finalBlob.size/1024).toFixed(0)} Ko (était ${(blob.size/1024).toFixed(0)} Ko WAV)`);
+          }
+        }
+
         const id = `REC-${Date.now()}`;
         const safeTitle = song.title.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
-        const ext = workletBlob ? 'wav' : (chunksRef.current[0]?.type?.includes('mp4') ? 'mp4' : 'webm');
+        const ext = finalBlob.type.includes('mp4') ? 'mp4' : finalBlob.type.includes('wav') ? 'wav' : 'webm';
         const fileName = `${safeTitle}_T${optsRef.current.currentPreset.index}_${Date.now()}.${ext}`;
 
-        optsRef.current.onLog?.(`💾 Sauvegarde: ${fileName}`);
-        const dataUrl = await studioService.blobToDataUrl(blob);
+        const dataUrl = await studioService.blobToDataUrl(finalBlob);
         optsRef.current.onLog?.(`✅ dataUrl: ${(dataUrl.length / 1024).toFixed(0)} Ko`);
+
+        // Vérifier l'espace disponible et libérer les anciennes prises si nécessaire
+        try {
+          if (navigator.storage && navigator.storage.estimate) {
+            const est = await navigator.storage.estimate();
+            const usedMB  = ((est.usage  || 0) / 1024 / 1024).toFixed(0);
+            const quotaMB = ((est.quota  || 0) / 1024 / 1024).toFixed(0);
+            const freeMB  = (((est.quota || 0) - (est.usage || 0)) / 1024 / 1024).toFixed(0);
+            optsRef.current.onLog?.(`💾 Stockage: ${usedMB}MB / ${quotaMB}MB — libre: ${freeMB}MB`);
+            // Si moins de 10MB libres, supprimer les prises déjà transférées
+            if (((est.quota || 0) - (est.usage || 0)) < 10 * 1024 * 1024) {
+              optsRef.current.onLog?.('⚠️ Espace faible — nettoyage des prises transférées...');
+              const allRecs = await studioService.getLocalRecordingsAsync();
+              const transferred = allRecs.filter(r => r.transferred);
+              for (const r of transferred) {
+                await studioService.deleteLocalRecordingAsync(r.id).catch(() => {});
+              }
+              optsRef.current.onLog?.(`🗑 ${transferred.length} prise(s) transférée(s) supprimées`);
+            }
+          }
+        } catch {}
 
         const rec: MobileRecording = {
           id, songId: song.id, songTitle: song.title, artist: song.artist || '',
