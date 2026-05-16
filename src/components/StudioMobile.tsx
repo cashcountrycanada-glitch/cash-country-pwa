@@ -229,7 +229,10 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     addLog(`PREVIEW tap | instUrl=${audio.instUrl ? audio.instUrl.slice(0,30) : 'NULL'} | instCached=${audio.instCached}`);
 
     if (isPreviewing) {
-      inst?.pause(); vocal?.pause(); setIsPreviewing(false);
+      inst?.pause(); vocal?.pause();
+      try { (window as any).__instBufSrc?.stop();  } catch {} finally { (window as any).__instBufSrc  = null; (window as any).__instCtxActive = false; }
+      try { (window as any).__vocalBufSrc?.stop(); } catch {} finally { (window as any).__vocalBufSrc = null; }
+      setIsPreviewing(false);
       return;
     }
 
@@ -247,19 +250,31 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
            addLog(`${label}.play() ERREUR: ${e.name} | src=${el.src.slice(0,40)}`);
            // Fallback AudioContext decodeAudioData (contourne les restrictions iOS sur <audio>)
            if (ctx && (e.name === 'NotSupportedError' || e.name === 'NotAllowedError')) {
-             fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(decoded => {
+             const key2 = label === 'inst' ? '__instDecodedBuf' : '__vocalDecodedBuf';
+             const decoded: AudioBuffer | null = (window as any)[key2] || null;
+             const playDecoded = (buf: AudioBuffer) => {
                const bsrc = ctx.createBufferSource();
-               bsrc.buffer = decoded;
+               bsrc.buffer = buf;
                bsrc.connect(ctx.destination);
-               bsrc.onended = () => { vocal?.pause(); setIsPreviewing(false); };
-               // Tracker le temps de lecture pour sync paroles
-               (window as any).__instCtxStartTime = ctx.currentTime;
-               (window as any).__instCtxOffset    = 0;
-               (window as any).__instCtxActive    = true;
-               bsrc.onended = () => { setIsPreviewing(false); (window as any).__instCtxActive = false; };
+               if (label === 'inst') {
+                 (window as any).__instCtxStartTime = ctx.currentTime;
+                 (window as any).__instCtxOffset    = 0;
+                 (window as any).__instCtxActive    = true;
+                 (window as any).__instBufSrc       = bsrc;
+                 bsrc.onended = () => { setIsPreviewing(false); (window as any).__instCtxActive = false; (window as any).__instBufSrc = null; };
+               } else {
+                 (window as any).__vocalBufSrc = bsrc;
+                 bsrc.onended = () => { (window as any).__vocalBufSrc = null; };
+               }
                bsrc.start(0);
                addLog(`${label} AudioContext fallback OK`);
-             }).catch(e2 => addLog(`${label} AudioContext fallback ERREUR: ${e2.message}`));
+             };
+             if (decoded) {
+               playDecoded(decoded);
+             } else {
+               fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(playDecoded)
+                 .catch(e2 => addLog(`${label} AudioContext fallback ERREUR: ${e2.message}`));
+             }
            }
          });
       }
