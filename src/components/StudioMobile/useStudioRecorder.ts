@@ -234,16 +234,21 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           const playBuf = (buf: AudioBuffer) => {
             const bsrc = ctx.createBufferSource();
             bsrc.buffer = buf;
-            bsrc.connect(ctx.destination);
             if (key === 'inst') {
+              bsrc.connect(ctx.destination);
               (window as any).__instCtxStartTime = ctx.currentTime;
               (window as any).__instCtxOffset    = t;
               (window as any).__instCtxActive    = true;
               (window as any).__instBufSrc       = bsrc;
               bsrc.onended = () => { (window as any).__instCtxActive = false; (window as any).__instBufSrc = null; };
             } else {
-              (window as any).__vocalBufSrc = bsrc;
-              bsrc.onended = () => { (window as any).__vocalBufSrc = null; };
+              const vGain = ctx.createGain();
+              vGain.gain.value = optsRef.current.vocalGuideVolRef?.current ?? 0.4;
+              bsrc.connect(vGain);
+              vGain.connect(ctx.destination);
+              (window as any).__vocalBufGain = vGain;
+              (window as any).__vocalBufSrc  = bsrc;
+              bsrc.onended = () => { (window as any).__vocalBufSrc = null; (window as any).__vocalBufGain = null; };
             }
             bsrc.start(0, t);
           };
@@ -356,7 +361,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     optsRef.current.vocalGuideRef.current?.pause();
     // Stopper les BufferSourceNodes AudioContext (fallback iOS)
     try { (window as any).__instBufSrc?.stop();  } catch {} finally { (window as any).__instBufSrc  = null; (window as any).__instCtxActive = false; }
-    try { (window as any).__vocalBufSrc?.stop(); } catch {} finally { (window as any).__vocalBufSrc = null; }
+    try { (window as any).__vocalBufSrc?.stop(); } catch {} finally { (window as any).__vocalBufSrc = null; (window as any).__vocalBufGain = null; }
     backingRefsRef.current.forEach(el => { el.pause(); el.currentTime = 0; });
     backingRefsRef.current = [];
     if (monitorConnectedRef.current && monitorGainRef.current && audioCtxRef.current) {

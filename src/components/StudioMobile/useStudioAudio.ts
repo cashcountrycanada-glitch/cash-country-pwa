@@ -82,23 +82,18 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const ctxPlaybackOffsetRef    = useRef<number>(0);  // offset dans le fichier (punchIn)
   const ctxPlaybackActiveRef    = useRef<boolean>(false);
   const instBufSrcRef           = useRef<AudioBufferSourceNode | null>(null);
-  // Cache des AudioBuffers pré-décodés pour éviter le délai au play
   const instDecodedBufRef       = useRef<AudioBuffer | null>(null);
   const vocalDecodedBufRef      = useRef<AudioBuffer | null>(null);
 
   const getInstPlaybackTime = (): number => {
-    // Priorité 1 : <audio> element joue normalement
-    if (instRef.current && !isNaN(instRef.current.currentTime) && instRef.current.currentTime > 0) {
-      return instRef.current.currentTime;
-    }
-    // Priorité 2 : tracker local (handlePreviewStems fallback)
     const ctx = (window as any).__warmContext as AudioContext | undefined;
-    if (ctx && ctxPlaybackActiveRef.current) {
-      return ctxPlaybackOffsetRef.current + (ctx.currentTime - ctxPlaybackStartTimeRef.current);
-    }
-    // Priorité 3 : tracker global (startStem dans recorder)
+    // Priorité 1 : tracker AudioContext global (preview ou REC via BufferSourceNode)
     if (ctx && (window as any).__instCtxActive) {
       return ((window as any).__instCtxOffset || 0) + (ctx.currentTime - ((window as any).__instCtxStartTime || ctx.currentTime));
+    }
+    // Priorité 2 : <audio> element joue normalement (Desktop ou quand play() réussit)
+    if (instRef.current && !isNaN(instRef.current.currentTime) && instRef.current.currentTime > 0) {
+      return instRef.current.currentTime;
     }
     return 0;
   };
@@ -160,6 +155,11 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     vocalVolRef.current = v;
     setVocalGuideVol(v);
     setVolumeIOS(v);
+    // Contrôler aussi le GainNode du BufferSourceNode vocal (mode AudioContext)
+    const gain: GainNode | null = (window as any).__vocalBufGain || null;
+    if (gain) {
+      try { gain.gain.setTargetAtTime(v, gain.context.currentTime, 0.01); } catch {}
+    }
   }, [setVolumeIOS]);
 
   useEffect(() => {
