@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v74-vocal-slider-lyrics'; // v74: slider vocal via GainNode BufferSrc, paroles sync mode écouter
+const CACHE = 'studio-v76-lame-loader'; // v76: lame.min.js loader async+IndexedDB cache, encodeMP3 poll wait
 
 const CRITICAL = [
   '/index-pwa.html',
