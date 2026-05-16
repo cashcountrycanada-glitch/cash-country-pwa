@@ -172,13 +172,21 @@ async function audioBufferToBlob(buffer: AudioBuffer): Promise<Blob> {
 
 // Encodeur MP3 via lamejs
 async function encodeMP3(buffer: AudioBuffer, kbps = 320): Promise<Blob> {
-  // Charger lamejs depuis le serveur local (mis en cache SW) ou CDN
+  // Charger lamejs — supporte le loader async (lame.min.js peut charger depuis CDN/IndexedDB)
   if (!(window as any).lamejs) {
     await new Promise<void>((resolve, reject) => {
       const tryLoad = (src: string, fallback?: string) => {
         const s = document.createElement('script');
         s.src = src;
-        s.onload  = () => resolve();
+        s.onload  = () => {
+          // Le loader peut être async — attendre que window.lamejs soit disponible
+          if ((window as any).lamejs) { resolve(); return; }
+          let tries = 0;
+          const poll = setInterval(() => {
+            if ((window as any).lamejs) { clearInterval(poll); resolve(); }
+            else if (++tries > 100) { clearInterval(poll); fallback ? tryLoad(fallback) : reject(new Error('lamejs introuvable après 10s')); }
+          }, 100);
+        };
         s.onerror = () => fallback ? tryLoad(fallback) : reject(new Error('lamejs introuvable'));
         document.head.appendChild(s);
       };
