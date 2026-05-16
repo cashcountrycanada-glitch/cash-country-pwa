@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v72-lyrics-actx-sync'; // v72: sync paroles via getInstPlaybackTime, startStem AudioContext fallback+tracker
+const CACHE = 'studio-v73-stop-sync-fix'; // v73: stop BufSrc au stop, pré-decode AudioBuffer, sync parfaite
 
 const CRITICAL = [
   '/index-pwa.html',
