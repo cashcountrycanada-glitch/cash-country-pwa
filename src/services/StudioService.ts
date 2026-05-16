@@ -360,16 +360,19 @@ export const studioService = {
   addTrackToProject(projectId: string, track: MobileRecording): TrackProject | null {
     const projects = this.getProjects(); const project = projects.find(p => p.id === projectId);
     if (!project) return null;
+    // Stocker seulement les métadonnées dans localStorage (dataUrl est dans IndexedDB)
+    const trackMeta = { ...track, dataUrl: undefined, blob: undefined };
     if (track.takeSlot && track.trackIndex === 0) {
-      // Voix principale avec slot A/B/C — remplace seulement le même slot
       project.tracks = project.tracks.filter(t =>
         !(t.trackIndex === 0 && !t.isGenerated && t.takeSlot === track.takeSlot)
       );
     } else {
-      // Autres pistes — remplace par trackIndex
       project.tracks = project.tracks.filter(t => t.trackIndex !== track.trackIndex);
     }
-    project.tracks.push(track); this.saveProject(project); return project;
+    project.tracks.push(trackMeta as MobileRecording); this.saveProject(project);
+    // Retourner le projet avec le vrai track (dataUrl inclus) pour le state React en mémoire
+    const projectWithData = { ...project, tracks: [...project.tracks.filter(t => t.id !== track.id), track] };
+    return projectWithData;
   },
   async analyzeWaveform(dataUrl: string, points = 200): Promise<number[]> {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
