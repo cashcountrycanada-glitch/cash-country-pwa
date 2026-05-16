@@ -82,6 +82,9 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const ctxPlaybackOffsetRef    = useRef<number>(0);  // offset dans le fichier (punchIn)
   const ctxPlaybackActiveRef    = useRef<boolean>(false);
   const instBufSrcRef           = useRef<AudioBufferSourceNode | null>(null);
+  // Cache des AudioBuffers pré-décodés pour éviter le délai au play
+  const instDecodedBufRef       = useRef<AudioBuffer | null>(null);
+  const vocalDecodedBufRef      = useRef<AudioBuffer | null>(null);
 
   const getInstPlaybackTime = (): number => {
     // Priorité 1 : <audio> element joue normalement
@@ -197,6 +200,14 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         setInstUrl(URL.createObjectURL(fixBlobType(blob)));
         setInstCached(true);
         console.log(`[Audio] inst CACHE: ${(blob.size/1024/1024).toFixed(1)} MB`);
+        // Pré-décoder pour un play instantané (évite le délai fetch+decode au tap)
+        blob.arrayBuffer().then(buf => {
+          const ctx = (window as any).__warmContext as AudioContext | undefined;
+          if (ctx) ctx.decodeAudioData(buf).then(decoded => {
+            instDecodedBufRef.current = decoded;
+            (window as any).__instDecodedBuf = decoded;
+          }).catch(() => {});
+        }).catch(() => {});
       } else {
         // Pas en cache — URL réseau (Mac requis)
         setInstUrl(getMediaUrl(inst.fileName!));
@@ -225,6 +236,14 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       if (blob) {
         setVocalGuideUrl(URL.createObjectURL(fixBlobType(blob)));
         setVocalCached(true);
+        // Pré-décoder vocal aussi
+        blob.arrayBuffer().then(buf => {
+          const ctx = (window as any).__warmContext as AudioContext | undefined;
+          if (ctx) ctx.decodeAudioData(buf).then(decoded => {
+            vocalDecodedBufRef.current = decoded;
+            (window as any).__vocalDecodedBuf = decoded;
+          }).catch(() => {});
+        }).catch(() => {});
         console.log(`[Audio] vocal CACHE: ${(blob.size/1024/1024).toFixed(1)} MB`);
       } else {
         setVocalGuideUrl(getMediaUrl(vocal.fileName!));

@@ -228,20 +228,30 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         el.play().catch(() => {
           // Fallback AudioContext — nécessaire sur iOS pour FLAC/MP4 hors interaction directe
           const ctx = (window as any).__warmContext as AudioContext | undefined;
-          if (!ctx || !el.src) return;
-          fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(decoded => {
+          if (!ctx) return;
+          const bufKey = key === 'inst' ? '__instDecodedBuf' : '__vocalDecodedBuf';
+          const preDecoded: AudioBuffer | null = (window as any)[bufKey] || null;
+          const playBuf = (buf: AudioBuffer) => {
             const bsrc = ctx.createBufferSource();
-            bsrc.buffer = decoded;
+            bsrc.buffer = buf;
             bsrc.connect(ctx.destination);
             if (key === 'inst') {
-              // Tracker pour sync paroles
-              (window as any).__instCtxStartTime  = ctx.currentTime;
-              (window as any).__instCtxOffset     = t;
-              (window as any).__instCtxActive     = true;
-              bsrc.onended = () => { (window as any).__instCtxActive = false; };
+              (window as any).__instCtxStartTime = ctx.currentTime;
+              (window as any).__instCtxOffset    = t;
+              (window as any).__instCtxActive    = true;
+              (window as any).__instBufSrc       = bsrc;
+              bsrc.onended = () => { (window as any).__instCtxActive = false; (window as any).__instBufSrc = null; };
+            } else {
+              (window as any).__vocalBufSrc = bsrc;
+              bsrc.onended = () => { (window as any).__vocalBufSrc = null; };
             }
-            bsrc.start(0, t); // démarrer à l'offset punchIn
-          }).catch(() => {});
+            bsrc.start(0, t);
+          };
+          if (preDecoded) {
+            playBuf(preDecoded);
+          } else if (el.src) {
+            fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(playBuf).catch(() => {});
+          }
         });
       };
       if (optsRef.current.instRef.current && optsRef.current.instUrl)             startStem(optsRef.current.instRef.current, pIn ?? 0, 'inst');
@@ -344,6 +354,9 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     clearInterval(timerRef.current);
     optsRef.current.instRef.current?.pause();
     optsRef.current.vocalGuideRef.current?.pause();
+    // Stopper les BufferSourceNodes AudioContext (fallback iOS)
+    try { (window as any).__instBufSrc?.stop();  } catch {} finally { (window as any).__instBufSrc  = null; (window as any).__instCtxActive = false; }
+    try { (window as any).__vocalBufSrc?.stop(); } catch {} finally { (window as any).__vocalBufSrc = null; }
     backingRefsRef.current.forEach(el => { el.pause(); el.currentTime = 0; });
     backingRefsRef.current = [];
     if (monitorConnectedRef.current && monitorGainRef.current && audioCtxRef.current) {
