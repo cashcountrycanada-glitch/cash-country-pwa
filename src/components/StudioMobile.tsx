@@ -361,7 +361,18 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
 
   const handleMasterize = (vocalBlob: Blob, instBlob: Blob | null) => { setMasterVocalBlob(vocalBlob); setMasterInstBlob(instBlob); setScreen('master'); };
   const handleStemReady = async (_blob: Blob, fileName: string) => { if (!selected) return; console.log(`[StudioMobile] Stem vocal transféré : ${fileName}`); };
-  const handleRecordingSaved = (rec: MobileRecording, up: TrackProject | null) => { if (up) setProject(up); reloadRecordings(); setScreen('mixer'); };
+  const handleRecordingSaved = (rec: MobileRecording, up: TrackProject | null) => {
+    if (up) {
+      setProject(up);
+    } else if (project) {
+      // addTrackToProject a retourné null (projet introuvable dans localStorage) — mettre à jour le state manuellement
+      const updated = { ...project, tracks: [...project.tracks.filter(t => t.id !== rec.id), rec] };
+      setProject(updated);
+      studioService.saveProject({ ...updated, tracks: updated.tracks.map(t => ({ ...t, dataUrl: undefined, blob: undefined })) });
+    }
+    reloadRecordings();
+    setScreen('mixer');
+  };
   const getInstBlob = async (): Promise<Blob | null> => { if (!audio.instUrl) return null; try { return await studioOfflineDB.getAudio(`inst_${selected?.id}`); } catch { return null; } };
   const pendingCount = recordings.filter(r => !r.transferred).length;
 
