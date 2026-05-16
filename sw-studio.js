@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v77-dup-id-fix'; // v77: fix duplicate const id declaration in stopRecording
+const CACHE = 'studio-v78-project-save-fix'; // v78: addTrackToProject strip dataUrl localStorage, handleRecordingSaved robuste
 
 const CRITICAL = [
   '/index-pwa.html',
