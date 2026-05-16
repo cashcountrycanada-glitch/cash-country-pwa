@@ -231,7 +231,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     if (isPreviewing) {
       inst?.pause(); vocal?.pause();
       try { (window as any).__instBufSrc?.stop();  } catch {} finally { (window as any).__instBufSrc  = null; (window as any).__instCtxActive = false; }
-      try { (window as any).__vocalBufSrc?.stop(); } catch {} finally { (window as any).__vocalBufSrc = null; }
+      try { (window as any).__vocalBufSrc?.stop(); } catch {} finally { (window as any).__vocalBufSrc = null; (window as any).__vocalBufGain = null; }
       setIsPreviewing(false);
       return;
     }
@@ -263,8 +263,17 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
                  (window as any).__instBufSrc       = bsrc;
                  bsrc.onended = () => { setIsPreviewing(false); (window as any).__instCtxActive = false; (window as any).__instBufSrc = null; };
                } else {
-                 (window as any).__vocalBufSrc = bsrc;
-                 bsrc.onended = () => { (window as any).__vocalBufSrc = null; };
+                 // GainNode pour contrôler le volume du guide vocal
+                 const vGain = ctx.createGain();
+                 vGain.gain.value = audio.vocalVolRef.current;
+                 bsrc.connect(vGain);
+                 vGain.connect(ctx.destination);
+                 (window as any).__vocalBufGain = vGain;
+                 (window as any).__vocalBufSrc  = bsrc;
+                 bsrc.onended = () => { (window as any).__vocalBufSrc = null; (window as any).__vocalBufGain = null; };
+                 bsrc.start(0);
+                 addLog(`${label} AudioContext fallback OK`);
+                 return; // déjà connecté via vGain
                }
                bsrc.start(0);
                addLog(`${label} AudioContext fallback OK`);
