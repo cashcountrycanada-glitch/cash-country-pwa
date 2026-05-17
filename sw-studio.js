@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v83-ctx-reliable'; // v83: resume AudioContext sur chaque tap, wall clock fallback paroles, retry decoded buffer
+const CACHE = 'studio-v84-lrc-parse'; // v84: parse lrcData string ou array, fix paroles verticales
 
 const CRITICAL = [
   '/index-pwa.html',
