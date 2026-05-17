@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v78-project-save-fix'; // v78: addTrackToProject strip dataUrl localStorage, handleRecordingSaved robuste
+const CACHE = 'studio-v80-refresh-stems'; // v80: bouton ↺ Recharger stems dans RecordScreen, auto-sync selected si apiSongs change
 
 const CRITICAL = [
   '/index-pwa.html',
