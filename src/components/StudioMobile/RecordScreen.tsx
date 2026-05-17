@@ -134,6 +134,20 @@ export default function RecordScreen({
 
   useEffect(() => {
     setServerLrc(null); setLrcIndex(0); if (!selected) return;
+
+    // 1. Vérifier IndexedDB d'abord (LRC importé manuellement via panneau 📁)
+    studioOfflineDB.getAudio(`lrc_${selected.id}`).then(blob => {
+      if (blob) {
+        blob.text().then(txt => {
+          try {
+            const parsed = JSON.parse(txt);
+            if (Array.isArray(parsed) && parsed.length > 0) { setServerLrc(parsed); return; }
+          } catch {}
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+
+    // 2. Fallback : fichier LRC dans versions[]
     const lrcVersion = selected.versions?.find(v => (v as any).fileName?.toLowerCase().endsWith('.lrc'));
     if (!lrcVersion) return;
     const url = `/api/media/${encodeURIComponent((lrcVersion as any).fileName as string)}`;

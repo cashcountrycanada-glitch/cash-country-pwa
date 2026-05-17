@@ -225,6 +225,35 @@ export default function SongSelector({
   const [showRefreshMenu, setShowRefreshMenu]     = useState<string | null>(null);
   const [showImport, setShowImport]               = useState<string | null>(null);
   const [importing, setImporting]                 = useState<string | null>(null);
+  const [importingLrc, setImportingLrc]           = useState<string | null>(null); // songId en cours d'import LRC
+
+  const handleLrcImport = async (song: Song, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportingLrc(song.id);
+    try {
+      const text = await file.text();
+      // Parser le LRC en array [{time, text}]
+      const lines: { time: number; text: string }[] = [];
+      text.split('\n').forEach(line => {
+        const m = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
+        if (m) lines.push({ time: parseInt(m[1]) * 60 + parseFloat(m[2]), text: m[3].trim() });
+      });
+      if (lines.length === 0) { alert('Fichier LRC invalide — aucune ligne trouvée'); return; }
+      // Sauvegarder dans IndexedDB sous la clé lrc_{songId}
+      await studioOfflineDB.saveAudio(
+        `lrc_${song.id}`,
+        new Blob([JSON.stringify(lines)], { type: 'application/json' }),
+        { songId: song.id, songTitle: song.title, type: 'lrc' }
+      );
+      alert(`✅ LRC importé — ${lines.length} lignes pour ${song.title}`);
+    } catch (err: any) {
+      alert('Erreur import LRC : ' + err.message);
+    } finally {
+      setImportingLrc(null);
+      e.target.value = '';
+    }
+  };
   // Cache status pour le panneau d'import: { inst: bool|null, vocal: bool|null }
   const [stemCacheStatus, setStemCacheStatus]     = useState<Record<string, { inst: boolean|null; vocal: boolean|null }>>({});
   const [testingAudio, setTestingAudio]           = useState<string | null>(null); // 'songId:inst' | 'songId:vocal'
@@ -633,7 +662,7 @@ export default function SongSelector({
 
                   {/* Import depuis Fichiers */}
                   {showImport === s.id && !isCaching && (() => {
-                    const _inst  = s.versions?.find((v: any) => v.trackType === 'Instrumental Stem (Export ZIP)' || v.trackType === TrackType.STEM_INSTRUMENTAL);
+                    const _inst  = s.versions?.find((v: any) => v.trackType === 'Instrumental Stem (Export ZIP)' || (v.trackType === TrackType.STEM_INSTRUMENTAL || v.trackType === 'Instrumental Stem (Export ZIP)' || v.trackType === 'Instrumentale Pure (Copie IA)'));
                     const _vocal = s.versions?.find((v: any) => v.trackType === 'Vocal Stem (Export ZIP)'        || v.trackType === TrackType.STEM_VOCAL);
                     const _iName = _inst?.fileName  || null;
                     const _vName = _vocal?.fileName || null;
@@ -661,6 +690,21 @@ export default function SongSelector({
                           onTest={testStemAudio}
                           onImport={e => handleFileImport(s, 'vocal', e)}
                         />
+
+                        {/* Import LRC */}
+                        <div className="mt-2 pt-3 border-t border-zinc-800">
+                          <div className="flex items-center gap-1.5 mb-2">
+                            <span className="text-[9px] font-black uppercase tracking-widest text-zinc-500">🎵 Paroles synchronisées (.lrc)</span>
+                          </div>
+                          <label className="block">
+                            <input type="file" accept=".lrc,.txt" className="hidden" onChange={e => handleLrcImport(s, e)}/>
+                            <span className={`flex items-center justify-center gap-2 py-2 rounded-xl font-black text-[11px] uppercase active:scale-95 cursor-pointer transition-all ${
+                              importingLrc === s.id ? 'bg-zinc-700 text-zinc-400' : 'bg-purple-900/60 border border-purple-600/40 text-purple-300'
+                            }`}>
+                              {importingLrc === s.id ? '⏳ Import...' : '📄 Importer fichier .lrc'}
+                            </span>
+                          </label>
+                        </div>
                       </div>
                     );
                   })()}
