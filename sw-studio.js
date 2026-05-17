@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v84-lrc-parse'; // v84: parse lrcData string ou array, fix paroles verticales
+const CACHE = 'studio-v85-lrc-debug'; // v85: log type lrcData dans DebugPanel, handle array-of-strings
 
 const CRITICAL = [
   '/index-pwa.html',
