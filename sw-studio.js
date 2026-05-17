@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v85-lrc-debug'; // v85: log type lrcData dans DebugPanel, handle array-of-strings
+const CACHE = 'studio-v87-lrc-import'; // v87: bouton import .lrc dans panneau 📁, lecture depuis IndexedDB en priorité
 
 const CRITICAL = [
   '/index-pwa.html',
