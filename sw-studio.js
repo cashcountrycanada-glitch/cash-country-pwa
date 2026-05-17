@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v80-refresh-stems'; // v80: bouton ↺ Recharger stems dans RecordScreen, auto-sync selected si apiSongs change
+const CACHE = 'studio-v82-mac-songs-first'; // v82: songs.json chargé depuis Mac en priorité, Railway en fallback
 
 const CRITICAL = [
   '/index-pwa.html',
