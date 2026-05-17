@@ -142,8 +142,26 @@ export default function RecordScreen({
   }, [selected?.id]);
 
   const rawLrc = selected.lrcData || serverLrc || selected.lrcDense || [];
+  // DEBUG — à retirer après diagnostic
+  if (rawLrc && (window as any).__lastLrcDebug !== selected.id) {
+    (window as any).__lastLrcDebug = selected.id;
+    console.warn('[LRC DEBUG]', selected.title, 'type:', typeof rawLrc, 'isArray:', Array.isArray(rawLrc),
+      'first:', JSON.stringify(Array.isArray(rawLrc) ? rawLrc[0] : String(rawLrc).slice(0,80)));
+    if ((window as any).__addLog) (window as any).__addLog(`[LRC] type=${typeof rawLrc} isArr=${Array.isArray(rawLrc)} first=${JSON.stringify(Array.isArray(rawLrc) ? rawLrc[0] : String(rawLrc).slice(0,60))}`);
+  }
   const lrcLines: { time: number; text: string }[] = (() => {
-    if (Array.isArray(rawLrc)) return rawLrc as { time: number; text: string }[];
+    if (Array.isArray(rawLrc)) {
+      if (rawLrc.length === 0) return [];
+      // Array d'objets {time, text} — format correct
+      if (typeof rawLrc[0] === 'object' && rawLrc[0] !== null && 'text' in rawLrc[0]) {
+        return rawLrc as { time: number; text: string }[];
+      }
+      // Array de strings — traiter chaque string comme une ligne
+      if (typeof rawLrc[0] === 'string') {
+        return (rawLrc as string[]).filter(s => s.trim()).map((text, i) => ({ time: i * 3, text: text.trim() }));
+      }
+      return [];
+    }
     if (typeof rawLrc === 'string' && rawLrc.includes('[')) {
       // Format LRC: [mm:ss.xx]texte
       return rawLrc.split('\n').reduce((acc: { time: number; text: string }[], line: string) => {
@@ -152,8 +170,7 @@ export default function RecordScreen({
         return acc;
       }, []);
     }
-    if (typeof rawLrc === 'string') {
-      // String simple — chaque ligne = une entrée sans timestamp
+    if (typeof rawLrc === 'string' && rawLrc.length > 0) {
       return rawLrc.split('\n').filter(l => l.trim()).map((text, i) => ({ time: i * 3, text: text.trim() }));
     }
     return [];
