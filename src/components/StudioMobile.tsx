@@ -225,6 +225,17 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       addLog(`⚠️ Pré-création contexte échouée: ${e}`);
     }
 
+    // Résumer le contexte sur CHAQUE interaction utilisateur (pas seulement visibilitychange)
+    // iOS suspend le contexte après inactivité même si l'app est en foreground
+    const resumeOnTap = () => {
+      const ctx = (window as any).__warmContext as AudioContext | undefined;
+      if (ctx && ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+    };
+    document.addEventListener('touchstart', resumeOnTap, { passive: true });
+    document.addEventListener('pointerdown', resumeOnTap, { passive: true });
+
     // Visibilité : reprendre le contexte si suspendu (app en background puis foreground)
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
@@ -235,7 +246,11 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      document.removeEventListener('touchstart', resumeOnTap);
+      document.removeEventListener('pointerdown', resumeOnTap);
+    };
   }, []);
 
   useEffect(() => {
@@ -280,7 +295,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
 
     if (isPreviewing) {
       inst?.pause(); vocal?.pause();
-      try { (window as any).__instBufSrc?.stop();  } catch {} finally { (window as any).__instBufSrc  = null; (window as any).__instCtxActive = false; }
+      try { (window as any).__instBufSrc?.stop();  } catch {} finally { (window as any).__instBufSrc  = null; (window as any).__instCtxActive = false; (window as any).__instWallStart = null; }
       try { (window as any).__vocalBufSrc?.stop(); } catch {} finally { (window as any).__vocalBufSrc = null; (window as any).__vocalBufGain = null; }
       setIsPreviewing(false);
       return;
@@ -300,20 +315,19 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
            addLog(`${label}.play() ERREUR: ${e.name} | src=${el.src.slice(0,40)}`);
            // Fallback AudioContext decodeAudioData (contourne les restrictions iOS sur <audio>)
            if (ctx && (e.name === 'NotSupportedError' || e.name === 'NotAllowedError')) {
-             const key2 = label === 'inst' ? '__instDecodedBuf' : '__vocalDecodedBuf';
-             const decoded: AudioBuffer | null = (window as any)[key2] || null;
+             const bufKey = label === 'inst' ? '__instDecodedBuf' : '__vocalDecodedBuf';
              const playDecoded = (buf: AudioBuffer) => {
                const bsrc = ctx.createBufferSource();
                bsrc.buffer = buf;
-               bsrc.connect(ctx.destination);
                if (label === 'inst') {
+                 bsrc.connect(ctx.destination);
                  (window as any).__instCtxStartTime = ctx.currentTime;
                  (window as any).__instCtxOffset    = 0;
                  (window as any).__instCtxActive    = true;
+                 (window as any).__instWallStart    = Date.now();
                  (window as any).__instBufSrc       = bsrc;
-                 bsrc.onended = () => { setIsPreviewing(false); (window as any).__instCtxActive = false; (window as any).__instBufSrc = null; };
+                 bsrc.onended = () => { setIsPreviewing(false); (window as any).__instCtxActive = false; (window as any).__instBufSrc = null; (window as any).__instWallStart = null; };
                } else {
-                 // GainNode pour contrôler le volume du guide vocal
                  const vGain = ctx.createGain();
                  vGain.gain.value = audio.vocalVolRef.current;
                  bsrc.connect(vGain);
@@ -321,19 +335,17 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
                  (window as any).__vocalBufGain = vGain;
                  (window as any).__vocalBufSrc  = bsrc;
                  bsrc.onended = () => { (window as any).__vocalBufSrc = null; (window as any).__vocalBufGain = null; };
-                 bsrc.start(0);
-                 addLog(`${label} AudioContext fallback OK`);
-                 return; // déjà connecté via vGain
                }
                bsrc.start(0);
-               addLog(`${label} AudioContext fallback OK`);
+               addLog(label + ' AudioContext OK');
              };
-             if (decoded) {
-               playDecoded(decoded);
-             } else {
-               fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(playDecoded)
-                 .catch(e2 => addLog(`${label} AudioContext fallback ERREUR: ${e2.message}`));
-             }
+             const tryPlay = (attempts: number) => {
+               const decoded: AudioBuffer | null = (window as any)[bufKey] || null;
+               if (decoded) { playDecoded(decoded); }
+               else if (attempts > 0) { setTimeout(() => tryPlay(attempts - 1), 300); }
+               else { fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(playDecoded).catch(e2 => addLog(label + ' ERREUR: ' + e2.message)); }
+             };
+             tryPlay(10);
            }
          });
       }
