@@ -137,14 +137,15 @@ export default function RecordScreen({
 
     // 1. Vérifier IndexedDB d'abord (LRC importé manuellement via panneau 📁)
     studioOfflineDB.getAudio(`lrc_${selected.id}`).then(blob => {
-      if (blob) {
-        blob.text().then(txt => {
-          try {
-            const parsed = JSON.parse(txt);
-            if (Array.isArray(parsed) && parsed.length > 0) { setServerLrc(parsed); return; }
-          } catch {}
-        }).catch(() => {});
-      }
+      if (!blob) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const parsed = JSON.parse(reader.result as string);
+          if (Array.isArray(parsed) && parsed.length > 0) setServerLrc(parsed);
+        } catch {}
+      };
+      reader.readAsText(blob);
     }).catch(() => {});
 
     // 2. Fallback : fichier LRC dans versions[]

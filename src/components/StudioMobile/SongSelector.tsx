@@ -227,32 +227,31 @@ export default function SongSelector({
   const [importing, setImporting]                 = useState<string | null>(null);
   const [importingLrc, setImportingLrc]           = useState<string | null>(null); // songId en cours d'import LRC
 
-  const handleLrcImport = async (song: Song, e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLrcImport = (song: Song, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setImportingLrc(song.id);
-    try {
-      const text = await file.text();
-      // Parser le LRC en array [{time, text}]
-      const lines: { time: number; text: string }[] = [];
-      text.split('\n').forEach(line => {
-        const m = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
-        if (m) lines.push({ time: parseInt(m[1]) * 60 + parseFloat(m[2]), text: m[3].trim() });
-      });
-      if (lines.length === 0) { alert('Fichier LRC invalide — aucune ligne trouvée'); return; }
-      // Sauvegarder dans IndexedDB sous la clé lrc_{songId}
-      await studioOfflineDB.saveAudio(
-        `lrc_${song.id}`,
-        new Blob([JSON.stringify(lines)], { type: 'application/json' }),
-        { songId: song.id, songTitle: song.title, type: 'lrc' }
-      );
-      alert(`✅ LRC importé — ${lines.length} lignes pour ${song.title}`);
-    } catch (err: any) {
-      alert('Erreur import LRC : ' + err.message);
-    } finally {
-      setImportingLrc(null);
-      e.target.value = '';
-    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = reader.result as string;
+        const lines: { time: number; text: string }[] = [];
+        text.split('\n').forEach(line => {
+          const m = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
+          if (m) lines.push({ time: parseInt(m[1]) * 60 + parseFloat(m[2]), text: m[3].trim() });
+        });
+        if (lines.length === 0) { setImportingLrc(null); return; }
+        const blob = new Blob([JSON.stringify(lines)], { type: 'application/json' });
+        studioOfflineDB.saveAudio(`lrc_${song.id}`, blob, { songId: song.id, songTitle: song.title, type: 'lrc' })
+          .then(() => { setImportingLrc(null); })
+          .catch(() => { setImportingLrc(null); });
+      } catch {
+        setImportingLrc(null);
+      }
+    };
+    reader.onerror = () => setImportingLrc(null);
+    reader.readAsText(file);
+    e.target.value = '';
   };
   // Cache status pour le panneau d'import: { inst: bool|null, vocal: bool|null }
   const [stemCacheStatus, setStemCacheStatus]     = useState<Record<string, { inst: boolean|null; vocal: boolean|null }>>({});
