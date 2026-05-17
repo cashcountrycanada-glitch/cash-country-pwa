@@ -27,6 +27,7 @@ interface Props {
   instRef: React.RefObject<HTMLAudioElement>; vocalGuideRef: React.RefObject<HTMLAudioElement>;
   getInstPlaybackTime: () => number;
   onBack: () => void; onGoMixer: () => void; onPresetChange: (preset: TrackPreset) => void;
+  onRefreshSong: () => void;
   onReverbChange: (r: ReverbType) => void; onStartRecording: () => void; onStopRecording: () => void;
   takeSlot: 'A' | 'B' | 'C'; onTakeSlotChange: (slot: 'A' | 'B' | 'C') => void;
   slotTakes: { A?: any; B?: any; C?: any };
@@ -106,7 +107,7 @@ function deviceStyle(dev: AudioDevice, isSelected: boolean, isAuto: boolean, aut
 export default function RecordScreen({
   selected, project, currentPreset, reverb, isRecording, isSaving, duration, analyser, vuLevel,
   monitoring, permError, httpsUrl, instUrl, instLoading, instCached, vocalGuideUrl, vocalLoading, vocalCached,
-  vocalGuideVol, showLyrics, instRef, vocalGuideRef, getInstPlaybackTime,
+  vocalGuideVol, showLyrics, instRef, vocalGuideRef, getInstPlaybackTime, onRefreshSong,
   takeSlot, onTakeSlotChange, slotTakes,
   onBack, onGoMixer, onPresetChange, onReverbChange,
   onStartRecording, onStopRecording, onToggleMonitor, onVocalVolumeChange, onToggleLyrics,
@@ -398,7 +399,12 @@ export default function RecordScreen({
                       INSTRUM {instCached ? '📦' : '🌐'}
                     </span>
                   </div>
-                : null
+                : <button onClick={onRefreshSong} disabled={isRecording}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-lg active:scale-95"
+                    style={{ background: '#2a1a00', border: '1px solid #92400e80' }}>
+                    <RefreshCw size={9} className="text-amber-500" />
+                    <span className="text-[9px] font-black uppercase text-amber-500">↺ Recharger stems</span>
+                  </button>
             }
             {vocalLoading
               ? <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: '#1a1a1a' }}><Loader2 size={9} className="text-zinc-600 animate-spin" /><span className="text-[9px] text-zinc-600 font-black">Guide...</span></div>

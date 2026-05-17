@@ -436,6 +436,12 @@ export default function MasteringEngine({
   const [exportedMp4, setExportedMp4]       = useState(false);
   const [exportingWav, setExportingWav]     = useState(false);
   const [exportedWav, setExportedWav]       = useState(false);
+  const [exportingVocal, setExportingVocal] = useState(false);
+  const [exportedVocal, setExportedVocal]   = useState(false);
+  const [exportingInst, setExportingInst]   = useState(false);
+  const [exportedInst, setExportedInst]     = useState(false);
+  const [exportingZip, setExportingZip]     = useState(false);
+  const [exportedZip, setExportedZip]       = useState(false);
 
   // Lecture
   const [playing, setPlaying]   = useState<'vocal' | 'full' | null>(null);
@@ -651,6 +657,60 @@ export default function MasteringEngine({
 
   const hasResult = !!vocalMastered;
   const hasFullMix = !!fullMastered;
+
+  // ── Stem vocal seul (local iPhone) ───────────────────────────────────────
+  const exportVocalStem = async () => {
+    if (!vocalMastered) return;
+    setExportingVocal(true);
+    try {
+      const safeTitle = songTitle.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
+      const wavBlob   = encodeWAV(vocalMastered);
+      await shareFileIOS(wavBlob, `${safeTitle}_VOCAL_STEM.wav`, `${songTitle} — Stem Vocal`);
+      setExportedVocal(true);
+    } catch (e: any) {
+      if (e.name !== 'AbortError') alert('Erreur export vocal : ' + e.message);
+    } finally { setExportingVocal(false); }
+  };
+
+  // ── Stem instrumental seul (depuis IndexedDB) ─────────────────────────────
+  const exportInstStem = async () => {
+    if (!instBlob) return;
+    setExportingInst(true);
+    try {
+      const safeTitle = songTitle.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
+      const ext = instBlob.type.includes('mp4') ? 'mp4' : instBlob.type.includes('flac') ? 'flac' : 'mp4';
+      await shareFileIOS(instBlob, `${safeTitle}_INST_STEM.${ext}`, `${songTitle} — Stem Instrumental`);
+      setExportedInst(true);
+    } catch (e: any) {
+      if (e.name !== 'AbortError') alert('Erreur export instrumental : ' + e.message);
+    } finally { setExportingInst(false); }
+  };
+
+  // ── ZIP stems (vocal WAV + instrumental) ─────────────────────────────────
+  const exportStemsZip = async () => {
+    if (!vocalMastered) return;
+    setExportingZip(true);
+    try {
+      const safeTitle = songTitle.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
+      // Partager les deux fichiers ensemble via navigator.share({ files })
+      const vocalWav  = encodeWAV(vocalMastered);
+      const vocalFile = new File([vocalWav], `${safeTitle}_VOCAL_STEM.wav`, { type: 'audio/wav' });
+      const files: File[] = [vocalFile];
+      if (instBlob) {
+        const ext = instBlob.type.includes('mp4') ? 'mp4' : 'mp4';
+        files.push(new File([instBlob], `${safeTitle}_INST_STEM.${ext}`, { type: instBlob.type || 'audio/mp4' }));
+      }
+      if (navigator.share && navigator.canShare?.({ files })) {
+        await navigator.share({ title: `${songTitle} — Stems`, files });
+      } else {
+        // Fallback : télécharger vocal seulement
+        await shareFileIOS(vocalWav, `${safeTitle}_VOCAL_STEM.wav`, `${songTitle} — Stem Vocal`);
+      }
+      setExportedZip(true);
+    } catch (e: any) {
+      if (e.name !== 'AbortError') alert('Erreur export stems : ' + e.message);
+    } finally { setExportingZip(false); }
+  };
 
   return (
     <div className="min-h-screen bg-[#020202] text-white flex flex-col">
@@ -934,6 +994,42 @@ export default function MasteringEngine({
                 <span className="text-blue-400 font-black">MP4</span> — Pour YouTube avec photo de couverture.
               </p>
             </div>
+
+            {/* ── Stems séparés ── */}
+            {hasResult && (
+              <div className="bg-zinc-950 border border-orange-800/40 rounded-2xl overflow-hidden">
+                <div className="flex items-center gap-3 p-4 border-b border-white/5">
+                  <div className="w-9 h-9 rounded-xl bg-orange-900/30 flex items-center justify-center shrink-0">
+                    <span className="text-[16px]">🎛️</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-black text-white">Stems séparés</p>
+                    <p className="text-[10px] text-zinc-500">Vocal WAV + Instrumental — Pour production avancée</p>
+                  </div>
+                </div>
+                <div className="divide-y divide-white/5">
+                  <button onClick={exportVocalStem} disabled={exportingVocal}
+                    className="w-full py-3.5 font-black text-[12px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all text-red-400 disabled:opacity-60">
+                    {exportingVocal ? <><Loader2 size={14} className="animate-spin"/> Export vocal...</>
+                      : exportedVocal ? <><CheckCircle2 size={14}/> Stem vocal partagé !</>
+                      : <><Share2 size={14}/> Stem vocal WAV — Voix + harmonies</>}
+                  </button>
+                  <button onClick={exportInstStem} disabled={exportingInst || !instBlob}
+                    className={`w-full py-3.5 font-black text-[12px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-40 ${instBlob ? 'text-blue-400' : 'text-zinc-600'}`}>
+                    {exportingInst ? <><Loader2 size={14} className="animate-spin"/> Export instrumental...</>
+                      : exportedInst ? <><CheckCircle2 size={14}/> Instrumental partagé !</>
+                      : instBlob ? <><Share2 size={14}/> Stem instrumental — Piste de fond</>
+                      : <>🔒 Instrumental non disponible hors-ligne</>}
+                  </button>
+                  <button onClick={exportStemsZip} disabled={exportingZip}
+                    className="w-full py-3.5 font-black text-[12px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all text-orange-400 disabled:opacity-60">
+                    {exportingZip ? <><Loader2 size={14} className="animate-spin"/> Préparation stems...</>
+                      : exportedZip ? <><CheckCircle2 size={14}/> Stems partagés !</>
+                      : <><Share2 size={14}/> Partager les 2 stems ensemble</>}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
