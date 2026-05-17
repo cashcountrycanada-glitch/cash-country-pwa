@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v82-mac-songs-first'; // v82: songs.json chargé depuis Mac en priorité, Railway en fallback
+const CACHE = 'studio-v83-ctx-reliable'; // v83: resume AudioContext sur chaque tap, wall clock fallback paroles, retry decoded buffer
 
 const CRITICAL = [
   '/index-pwa.html',
