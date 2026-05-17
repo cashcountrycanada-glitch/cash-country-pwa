@@ -135,16 +135,34 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 3000);
-        const res = await fetch('/api/songs', { signal: controller.signal, cache: 'no-store' });
+        // Priorité : Mac local (données fraîches) → Railway (données statiques du repo)
+        const macUrl = (window as any).__CC_MAC_URL as string || '';
+        const songsUrl = macUrl.startsWith('http')
+          ? `${macUrl}/api/songs`
+          : '/api/songs';
+        const res = await fetch(songsUrl, { signal: controller.signal, cache: 'no-store' });
         clearTimeout(timeout);
         if (res.ok) {
           const data = await res.json();
-          if (Array.isArray(data)) {
+          if (Array.isArray(data) && data.length > 0) {
             setApiSongs(data);
             studioOfflineDB.saveSongs(data).catch(() => {});
+            addLog(`✅ Songs chargés depuis ${macUrl ? 'Mac' : 'Railway'}: ${data.length} chansons`);
           }
         }
-      } catch {}
+      } catch {
+        // Si Mac inaccessible, essayer Railway en fallback
+        try {
+          const res2 = await fetch('/api/songs', { cache: 'no-store' });
+          if (res2.ok) {
+            const data2 = await res2.json();
+            if (Array.isArray(data2) && data2.length > 0) {
+              setApiSongs(data2);
+              studioOfflineDB.saveSongs(data2).catch(() => {});
+            }
+          }
+        } catch {}
+      }
     })();
   }, []);
 
@@ -162,7 +180,9 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     if (!selected) return;
     addLog('🔄 Rechargement des données de la chanson...');
     try {
-      const res = await fetch('/api/songs', { cache: 'no-store' });
+      const macUrl = (window as any).__CC_MAC_URL as string || '';
+      const songsUrl = macUrl.startsWith('http') ? `${macUrl}/api/songs` : '/api/songs';
+      const res = await fetch(songsUrl, { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) {
@@ -171,7 +191,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
           const fresh = data.find((s: any) => s.id === selected.id);
           if (fresh) {
             setSelected(fresh);
-            addLog(`✅ Stems rechargés: ${fresh.versions?.length ?? 0} version(s)`);
+            addLog(`✅ Stems rechargés depuis ${macUrl ? 'Mac' : 'Railway'}: ${fresh.versions?.length ?? 0} version(s)`);
           }
         }
       }
