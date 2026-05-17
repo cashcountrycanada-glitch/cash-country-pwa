@@ -141,7 +141,23 @@ export default function RecordScreen({
     fetch(url).then(r => r.ok ? r.text() : null).then(txt => { if (txt) { const p = parseLrcFile(txt); if (p.length > 0) setServerLrc(p); } }).catch(() => {}).finally(() => setServerLrcLoading(false));
   }, [selected?.id]);
 
-  const lrcLines = selected.lrcData || serverLrc || selected.lrcDense || [];
+  const rawLrc = selected.lrcData || serverLrc || selected.lrcDense || [];
+  const lrcLines: { time: number; text: string }[] = (() => {
+    if (Array.isArray(rawLrc)) return rawLrc as { time: number; text: string }[];
+    if (typeof rawLrc === 'string' && rawLrc.includes('[')) {
+      // Format LRC: [mm:ss.xx]texte
+      return rawLrc.split('\n').reduce((acc: { time: number; text: string }[], line: string) => {
+        const m = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
+        if (m) acc.push({ time: parseInt(m[1]) * 60 + parseFloat(m[2]), text: m[3].trim() });
+        return acc;
+      }, []);
+    }
+    if (typeof rawLrc === 'string') {
+      // String simple — chaque ligne = une entrée sans timestamp
+      return rawLrc.split('\n').filter(l => l.trim()).map((text, i) => ({ time: i * 3, text: text.trim() }));
+    }
+    return [];
+  })();
   const staticLines = selected.lyricsWithChords ? parseLyricsWithChords(selected.lyricsWithChords) : [];
   const hasLrc = lrcLines.length > 0;
 
