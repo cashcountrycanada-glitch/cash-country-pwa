@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v87-lrc-import'; // v87: bouton import .lrc dans panneau 📁, lecture depuis IndexedDB en priorité
+const CACHE = 'studio-v88-lrc-fileread'; // v88: fix blob.text() → FileReader iOS, fix alert() → silencieux
 
 const CRITICAL = [
   '/index-pwa.html',
