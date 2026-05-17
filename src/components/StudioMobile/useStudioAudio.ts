@@ -89,9 +89,16 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     const ctx = (window as any).__warmContext as AudioContext | undefined;
     // Priorité 1 : tracker AudioContext global (preview ou REC via BufferSourceNode)
     if (ctx && (window as any).__instCtxActive) {
-      return ((window as any).__instCtxOffset || 0) + (ctx.currentTime - ((window as any).__instCtxStartTime || ctx.currentTime));
+      const elapsed = ctx.currentTime - ((window as any).__instCtxStartTime || ctx.currentTime);
+      const t = ((window as any).__instCtxOffset || 0) + elapsed;
+      if (t >= 0) return t;
     }
-    // Priorité 2 : <audio> element joue normalement (Desktop ou quand play() réussit)
+    // Priorité 2 : tracker Date.now() (fallback si AudioContext suspendu)
+    if ((window as any).__instWallStart) {
+      const elapsed = (Date.now() - (window as any).__instWallStart) / 1000;
+      return ((window as any).__instCtxOffset || 0) + elapsed;
+    }
+    // Priorité 3 : <audio> element joue normalement
     if (instRef.current && !isNaN(instRef.current.currentTime) && instRef.current.currentTime > 0) {
       return instRef.current.currentTime;
     }
@@ -191,7 +198,11 @@ export function useStudioAudio(selected: Song | null): AudioResult {
 
   useEffect(() => {
     if (!selected) { setInstUrl(null); setInstCached(false); return; }
-    const inst = selected.versions?.find(v => v.trackType === TrackType.STEM_INSTRUMENTAL);
+    const inst = selected.versions?.find(v =>
+      v.trackType === TrackType.STEM_INSTRUMENTAL ||
+      v.trackType === 'Instrumental Stem (Export ZIP)' ||
+      v.trackType === 'Instrumentale Pure (Copie IA)'
+    );
     if (!inst?.fileName) { setInstUrl(null); setInstCached(false); return; }
     setInstLoading(true);
     // iOS et Desktop : IndexedDB en priorité, réseau en fallback
@@ -223,7 +234,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       setInstUrl(getMediaUrl(inst.fileName!));
       setInstCached(false);
     }).finally(() => setInstLoading(false));
-  }, [selected?.id]);
+  }, [selected?.id, selected?.versions?.length]);
 
 
   useEffect(() => {
@@ -258,7 +269,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       setVocalGuideUrl(getMediaUrl(vocal.fileName!));
       setVocalCached(false);
     }).finally(() => setVocalLoading(false));
-  }, [selected?.id]);
+  }, [selected?.id, selected?.versions?.length]);
 
   const playRecording = useCallback(async (rec: MobileRecording) => {
     if (!playRef.current) return;
