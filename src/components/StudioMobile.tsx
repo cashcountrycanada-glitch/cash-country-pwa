@@ -101,6 +101,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     const t = new Date().toISOString().slice(11,19);
     setDebugLog(prev => [`[${t}] ${msg}`, ...prev].slice(0, 20));
   };
+  (window as any).__addLog = addLog;
 
   // Brancher addLog dans le hook offline dès le premier render
   useEffect(() => { offline.setOfflineLog(addLog); });
