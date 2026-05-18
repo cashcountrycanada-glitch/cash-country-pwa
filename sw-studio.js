@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v88-lrc-fileread'; // v88: fix blob.text() → FileReader iOS, fix alert() → silencieux
+const CACHE = 'studio-v94-lrcfile-route20'; // v94: lrcFile dans songs.json pour La Route 20 → Tunee_Cœur en Marche.lrc
 
 const CRITICAL = [
   '/index-pwa.html',
