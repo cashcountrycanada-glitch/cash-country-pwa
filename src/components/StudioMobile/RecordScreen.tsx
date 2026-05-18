@@ -148,12 +148,24 @@ export default function RecordScreen({
       reader.readAsText(blob);
     }).catch(() => {});
 
-    // 2. Fallback : fichier LRC dans versions[]
-    const lrcVersion = selected.versions?.find(v => (v as any).fileName?.toLowerCase().endsWith('.lrc'));
-    if (!lrcVersion) return;
-    const url = `/api/media/${encodeURIComponent((lrcVersion as any).fileName as string)}`;
+    // 2. Essayer de fetcher le .lrc — depuis versions[] ou par convention Tunee_{title}.lrc dans public/
+    const macUrl = (window as any).__CC_MAC_URL as string || '';
+    const lrcVersion = selected.versions?.find((v: any) => v.fileName?.toLowerCase().endsWith('.lrc'));
+    let lrcUrl: string | null = null;
+    if (lrcVersion) {
+      lrcUrl = `${macUrl.startsWith('http') ? macUrl : ''}/api/media/${encodeURIComponent(lrcVersion.fileName)}`;
+    } else if ((selected as any).lrcFile) {
+      // Champ optionnel lrcFile dans songs.json — nom exact du fichier
+      lrcUrl = `/Tunee_${(selected as any).lrcFile}`;
+    } else {
+      // Convention: Tunee_{titre exact}.lrc dans public/
+      lrcUrl = `/Tunee_${encodeURIComponent(selected.title)}.lrc`;
+    }
+
     setServerLrcLoading(true);
-    fetch(url).then(r => r.ok ? r.text() : null).then(txt => { if (txt) { const p = parseLrcFile(txt); if (p.length > 0) setServerLrc(p); } }).catch(() => {}).finally(() => setServerLrcLoading(false));
+    fetch(lrcUrl).then(r => r.ok ? r.text() : null).then(txt => {
+      if (txt) { const p = parseLrcFile(txt); if (p.length > 0) setServerLrc(p); }
+    }).catch(() => {}).finally(() => setServerLrcLoading(false));
   }, [selected?.id]);
 
   const rawLrc = selected.lrcData || serverLrc || selected.lrcDense || [];
