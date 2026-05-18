@@ -270,7 +270,7 @@ class StudioOfflineDatabase {
           if (i >= recs.length || freed >= needed) { resolve(); return; }
           const del = store.delete(recs[i].key);
           del.onsuccess = () => {
-            freed += recs[i].blob?.size || 0;
+            freed += recs[i].size || 0;
             console.warn(`[DB] Libéré enregistrement ${recs[i].key} (${(freed/1024/1024).toFixed(1)} Mo)`);
             deleteNext(i + 1);
           };
@@ -287,12 +287,15 @@ class StudioOfflineDatabase {
     if ('storage' in navigator && 'estimate' in navigator.storage) {
       try {
         const est = await navigator.storage.estimate();
-        const quota = est.quota || 50 * 1024 * 1024;
+        // iOS 17+ retourne le vrai quota appareil (souvent 500Mo–2Go)
+        // On prend le quota réel de navigator.storage si > 200 Mo, sinon fallback 500 Mo
+        const rawQuota = est.quota || 0;
+        const quota = rawQuota > 200 * 1024 * 1024 ? rawQuota : 500 * 1024 * 1024;
         return { used, quota, pct: Math.round((used / quota) * 100) };
       } catch {}
     }
-    // Fallback : quota iOS estimé à 50MB
-    const quota = 50 * 1024 * 1024;
+    // Fallback : quota iOS conservateur 500 Mo
+    const quota = 500 * 1024 * 1024;
     return { used, quota, pct: Math.round((used / quota) * 100) };
   }
 
@@ -301,6 +304,41 @@ class StudioOfflineDatabase {
     const store = await this.tx(STORE_AUDIO, 'readwrite');
     await this.idbOp(store.clear());
     await this.setState('cachedSongIds', []);
+  }
+
+  // Garder seulement les N prises les plus récentes par chanson, supprimer le reste
+  async clearOldRecordings(keepPerSong: number = 3): Promise<number> {
+    await this.init(); const db = this.db!;
+    return new Promise((resolve) => {
+      const tx = db.transaction(['audio'], 'readwrite');
+      const store = tx.objectStore('audio');
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const items = req.result as any[];
+        const recs = items.filter(i => i.key?.startsWith('rec_'));
+        // Grouper par songId
+        const bySong: Record<string, any[]> = {};
+        for (const r of recs) {
+          const songId = r.meta?.songId || 'unknown';
+          if (!bySong[songId]) bySong[songId] = [];
+          bySong[songId].push(r);
+        }
+        // Garder les N plus récentes, supprimer le reste
+        const toDelete: string[] = [];
+        for (const songId in bySong) {
+          const sorted = bySong[songId].sort((a, b) => (b.meta?.createdAt || 0) - (a.meta?.createdAt || 0));
+          for (let i = keepPerSong; i < sorted.length; i++) toDelete.push(sorted[i].key);
+        }
+        let done = 0;
+        if (toDelete.length === 0) { resolve(0); return; }
+        for (const key of toDelete) {
+          const del = store.delete(key);
+          del.onsuccess = () => { if (++done === toDelete.length) resolve(toDelete.length); };
+          del.onerror  = () => { if (++done === toDelete.length) resolve(toDelete.length); };
+        }
+      };
+      req.onerror = () => resolve(0);
+    });
   }
 }
 

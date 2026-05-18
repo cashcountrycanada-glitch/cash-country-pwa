@@ -444,28 +444,57 @@ export default function SongSelector({
         </div>
       )}
 
-      {/* Jauge de stockage */}
+      {/* Panneau de stockage iPhone */}
       {storage && (
         <div className={`mx-5 mt-3 rounded-2xl px-4 py-3 border ${storageWarning ? 'bg-red-950/30 border-red-600/40' : 'bg-zinc-900/40 border-zinc-800'}`}>
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
               {storageWarning ? <AlertTriangle size={11} className="text-red-400"/> : <HardDrive size={11} className="text-zinc-500"/>}
-              <p className={`text-[10px] font-black uppercase ${storageWarning ? 'text-red-400' : 'text-zinc-500'}`}>
-                {storageWarning ? 'Stockage presque plein' : 'Stockage hors-ligne'}
+              <p className={`text-[10px] font-black uppercase tracking-widest ${storageWarning ? 'text-red-400' : 'text-zinc-500'}`}>
+                {storageWarning ? '⚠️ Stockage presque plein' : 'Stockage iPhone'}
               </p>
             </div>
-            <p className="text-[10px] text-zinc-500 font-black">{formatMB(storage.used)} / {formatMB(storage.quota)}</p>
+            <p className={`text-[10px] font-black ${storageWarning ? 'text-red-400' : 'text-zinc-400'}`}>
+              {formatMB(storage.quota - storage.used)} libre
+            </p>
           </div>
-          <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+
+          {/* Barre principale iPhone */}
+          <div className="h-2 bg-zinc-800 rounded-full overflow-hidden mb-2">
             <div
               className={`h-full rounded-full transition-all duration-500 ${storageWarning ? 'bg-red-500' : storage.pct > 70 ? 'bg-amber-500' : 'bg-emerald-500'}`}
               style={{ width: `${Math.min(storage.pct, 100)}%` }}/>
           </div>
+
+          {/* Détail chiffres */}
+          <div className="flex justify-between text-[9px] font-black mb-2">
+            <span className="text-zinc-600">App: <span className="text-zinc-400">{formatMB(storage.used)}</span></span>
+            <span className="text-zinc-600">Quota: <span className="text-zinc-400">{formatMB(storage.quota)}</span></span>
+            <span className="text-zinc-600">Libre: <span className={storageWarning ? 'text-red-400' : 'text-emerald-400'}>{formatMB(storage.quota - storage.used)}</span></span>
+          </div>
+
+          {/* Conseil si faible espace */}
           {storageWarning && (
-            <button onClick={onClearAll} className="w-full mt-2 py-2 bg-red-900/30 border border-red-600/40 rounded-xl text-[11px] font-black text-red-400 uppercase active:scale-95">
-              Vider tout le cache ({cachedSongs.size} chansons)
-            </button>
+            <div className="bg-red-950/40 rounded-xl px-3 py-2 mb-2">
+              <p className="text-[9px] text-red-300 leading-relaxed">
+                💡 Libère de l'espace dans <span className="font-black">Réglages → Général → Stockage iPhone</span> pour éviter les blocages durant l'enregistrement.
+              </p>
+            </div>
           )}
+
+          {/* Boutons libérer */}
+          <div className="flex gap-2">
+            {storageWarning && (
+              <button onClick={onClearAll} className="flex-1 py-1.5 bg-red-900/30 border border-red-600/40 rounded-xl text-[10px] font-black text-red-400 uppercase active:scale-95">
+                🗑 Vider cache ({cachedSongs.size} chansons)
+              </button>
+            )}
+            <button
+              onClick={async () => { await studioOfflineDB.clearOldRecordings?.(5); }}
+              className="flex-1 py-1.5 bg-zinc-800 border border-zinc-700 rounded-xl text-[10px] font-black text-zinc-400 uppercase active:scale-95">
+              🎙 Nettoyer vieilles prises
+            </button>
+          </div>
         </div>
       )}
 
