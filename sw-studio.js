@@ -6,7 +6,7 @@
  * qui les isole correctement en modules ES natifs.
  */
 
-const CACHE = 'studio-v94-lrcfile-route20'; // v94: lrcFile dans songs.json pour La Route 20 → Tunee_Cœur en Marche.lrc
+const CACHE = 'studio-v96'; // v94: lrcFile dans songs.json pour La Route 20 → Tunee_Cœur en Marche.lrc
 
 const CRITICAL = [
   '/index-pwa.html',

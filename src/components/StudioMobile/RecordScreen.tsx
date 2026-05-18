@@ -10,12 +10,13 @@
  * Mode Manuel : sélection toujours respectée, avertissement si BT choisi manuellement
  */
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { ChevronLeft, Mic, Square, Headphones, AlertCircle, Layers, Loader2, VolumeX, Radio, RefreshCw, Wifi } from 'lucide-react';
+import { ChevronLeft, Mic, Square, Headphones, AlertCircle, Layers, Loader2, VolumeX, Radio, RefreshCw } from 'lucide-react';
 import { ReverbType, TrackProject } from '../../services/StudioService';
 import { Song } from '../../types';
 import { TRACK_PRESETS, TrackPreset, REVERB_LABELS, REVERB_TYPES, formatTime, SectionMarker, SECTION_COLORS } from './studio.types';
 import VUMeter from './VUMeter';
 import { AudioDevice, AutoSelectReason } from './useStudioRecorder';
+import { studioOfflineDB } from '../../services/StudioOfflineDB';
 
 interface Props {
   selected: Song; project: TrackProject | null; currentPreset: TrackPreset; reverb: ReverbType;
