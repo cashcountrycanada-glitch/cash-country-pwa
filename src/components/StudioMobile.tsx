@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.2';
+const BUILD_VERSION = 'v7.6.5';
 
 function DebugPanel({ debugLog, onClear }: { debugLog: string[]; onClear: () => void }) {
   const [minimized, setMinimized] = React.useState(true);

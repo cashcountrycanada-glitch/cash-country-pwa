@@ -182,7 +182,20 @@ export default function RecordScreen({
       if (rawLrc.length === 0) return [];
       // Array d'objets {time, text} — format correct
       if (typeof rawLrc[0] === 'object' && rawLrc[0] !== null && 'text' in rawLrc[0]) {
-        return rawLrc as { time: number; text: string }[];
+        // Fusionner les lignes consécutives dont le gap est < 3.5s (phrases coupées en deux)
+        const raw = rawLrc as { time: number; text: string }[];
+        const merged: { time: number; text: string }[] = [];
+        for (let i = 0; i < raw.length; i++) {
+          const cur = raw[i];
+          const next = raw[i + 1];
+          if (next && (next.time - cur.time) < 3.5 && cur.text.length < 40 && !cur.text.match(/[.!?…]$/)) {
+            merged.push({ time: cur.time, text: cur.text + ' ' + next.text });
+            i++; // sauter la ligne suivante déjà fusionnée
+          } else {
+            merged.push(cur);
+          }
+        }
+        return merged;
       }
       // Array de strings — traiter chaque string comme une ligne
       if (typeof rawLrc[0] === 'string') {

@@ -65,12 +65,45 @@ function isIOS(): boolean {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
+// Approximation LUFS ITU-R BS.1770-4 — K-weighting simplifié
+// Beaucoup plus précis que le RMS simple pour cibler Spotify/YouTube
 function analyzeLoudness(buffer: AudioBuffer): number {
-  const data = buffer.getChannelData(0);
-  let sum = 0;
-  for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-  const rms = Math.sqrt(sum / data.length);
-  return rms > 0 ? 20 * Math.log10(rms) : -100;
+  const sr = buffer.sampleRate;
+  const ch = Math.min(2, buffer.numberOfChannels);
+
+  // Filtre pre-filter BS.1770 (high-shelf +4dB à 1681Hz)
+  // Coefficients pour 44.1kHz / 48kHz
+  const f0 = 1681.0;
+  const Q  = 0.7071;
+  const dBgain = 3.99984;
+  const A  = Math.pow(10, dBgain / 40);
+  const w0 = 2 * Math.PI * f0 / sr;
+  const alpha = Math.sin(w0) / (2 * Q);
+  const b0 = A * ((A + 1) + (A - 1) * Math.cos(w0) + 2 * Math.sqrt(A) * alpha);
+  const b1 = -2 * A * ((A - 1) + (A + 1) * Math.cos(w0));
+  const b2 = A * ((A + 1) + (A - 1) * Math.cos(w0) - 2 * Math.sqrt(A) * alpha);
+  const a0 = (A + 1) - (A - 1) * Math.cos(w0) + 2 * Math.sqrt(A) * alpha;
+  const a1 = 2 * ((A - 1) - (A + 1) * Math.cos(w0));
+  const a2 = (A + 1) - (A - 1) * Math.cos(w0) - 2 * Math.sqrt(A) * alpha;
+
+  let totalPower = 0;
+  for (let c = 0; c < ch; c++) {
+    const data = buffer.getChannelData(c);
+    const filtered = new Float32Array(data.length);
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < data.length; i++) {
+      const x0 = data[i];
+      const y0 = (b0/a0)*x0 + (b1/a0)*x1 + (b2/a0)*x2 - (a1/a0)*y1 - (a2/a0)*y2;
+      filtered[i] = y0;
+      x2 = x1; x1 = x0; y2 = y1; y1 = y0;
+    }
+    let sum = 0;
+    for (let i = 0; i < filtered.length; i++) sum += filtered[i] * filtered[i];
+    totalPower += sum / filtered.length;
+  }
+  const meanPower = totalPower / ch;
+  // LUFS = -0.691 + 10*log10(power) — offset BS.1770
+  return meanPower > 0 ? -0.691 + 10 * Math.log10(meanPower) : -100;
 }
 
 async function decodeBlob(blob: Blob): Promise<AudioBuffer> {
@@ -85,14 +118,21 @@ async function decodeBlob(blob: Blob): Promise<AudioBuffer> {
 }
 
 // Mixer deux AudioBuffers (vocal + instrumental) dans un OfflineAudioContext
+// instGainDb : niveau instrumental en dB relatif à la voix (ex: -3 = instrumental 3dB sous la voix)
 async function mixVocalWithInst(
   vocalBuf: AudioBuffer,
   instBuf:  AudioBuffer,
-  instGain: number = 0.85, // instrumental légèrement en dessous de la voix
+  instGainDb: number = -3,
 ): Promise<AudioBuffer> {
   const sr       = Math.max(vocalBuf.sampleRate, instBuf.sampleRate);
   const duration = Math.max(vocalBuf.duration, instBuf.duration);
   const offline  = new OfflineAudioContext(2, Math.ceil(duration * sr), sr);
+
+  // Normaliser l'instrumental par rapport à la voix pour un niveau cohérent
+  const vocalLufs = analyzeLoudness(vocalBuf);
+  const instLufs  = analyzeLoudness(instBuf);
+  const normDb    = vocalLufs - instLufs;
+  const instLinear = Math.pow(10, (normDb + instGainDb) / 20);
 
   const vSrc = offline.createBufferSource();
   vSrc.buffer = vocalBuf;
@@ -104,7 +144,7 @@ async function mixVocalWithInst(
   const iSrc = offline.createBufferSource();
   iSrc.buffer = instBuf;
   const iGain = offline.createGain();
-  iGain.gain.value = instGain;
+  iGain.gain.value = Math.max(0.1, Math.min(2.0, instLinear));
   iSrc.connect(iGain); iGain.connect(offline.destination);
   iSrc.start(0);
 
@@ -117,9 +157,15 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const src     = offline.createBufferSource();
   src.buffer    = buf;
 
+  // High-pass 35Hz — coupe les sub-bass inutiles qui gaspillent du headroom
+  const hpf  = offline.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 35; hpf.Q.value = 0.7;
+
   const low  = offline.createBiquadFilter(); low.type  = 'lowshelf';  low.frequency.value  = 250;  low.gain.value  = s.lowGain;
   const mid  = offline.createBiquadFilter(); mid.type  = 'peaking';   mid.frequency.value  = 2500; mid.Q.value = 0.8; mid.gain.value = s.midGain;
   const high = offline.createBiquadFilter(); high.type = 'highshelf'; high.frequency.value = 8000; high.gain.value = s.highGain;
+
+  // De-esser — compresseur sidechain simulé sur 6-8kHz (sibilance voix)
+  const deEss = offline.createBiquadFilter(); deEss.type = 'peaking'; deEss.frequency.value = 7000; deEss.Q.value = 2.5; deEss.gain.value = -2.5;
 
   const comp    = offline.createDynamicsCompressor();
   comp.threshold.value = s.threshold; comp.ratio.value = s.ratio;
@@ -134,8 +180,8 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const makeup  = offline.createGain();
   makeup.gain.value = Math.pow(10, gainDb / 20);
 
-  src.connect(low); low.connect(mid); mid.connect(high);
-  high.connect(comp); comp.connect(limiter); limiter.connect(makeup);
+  src.connect(hpf); hpf.connect(low); low.connect(mid); mid.connect(high);
+  high.connect(deEss); deEss.connect(comp); comp.connect(limiter); limiter.connect(makeup);
   makeup.connect(offline.destination);
   src.start(0);
   return offline.startRendering();
@@ -329,6 +375,7 @@ const PRESET_CATEGORIES: { id: string; label: string; keys: string[] }[] = [
   { id: 'distrib',  label: '🌐 Distribution', keys: ['spotify', 'youtube', 'podcast'] },
   { id: 'country',  label: '🤠 Country',       keys: ['country', 'country_live', 'country_bright'] },
   { id: 'vocal',    label: '🎤 Vocal',          keys: ['studio_vocal', 'velvet', 'airy'] },
+  { id: 'broadcast', label: '📡 Broadcast',      keys: ['broadcast_canada', 'broadcast_ebu', 'broadcast_country'] },
   { id: 'impact',   label: '💥 Impact',         keys: ['radio', 'punchy', 'vintage'] },
 ];
 
@@ -381,6 +428,22 @@ const PRESETS: Record<string, { label: string; emoji: string; description: strin
     description: 'Légèreté, aigus cristallins',
     settings: { lowGain: -1.0, midGain: 0.5, highGain: 4.0, threshold: -20, ratio: 2.5, attack: 20, release: 200, ceiling: -1.0, targetLufs: -14 },
   },
+  // ── Broadcast ──
+  broadcast_canada: {
+    label: 'Radio Canada / USA', emoji: '📡',
+    description: '-24 LUFS · Standard ATSC A/85',
+    settings: { lowGain: 1.5, midGain: 0.5, highGain: 0.5, threshold: -28, ratio: 2, attack: 20, release: 300, ceiling: -2.0, targetLufs: -24 },
+  },
+  broadcast_ebu: {
+    label: 'Radio Europe / EBU', emoji: '🌍',
+    description: '-23 LUFS · Standard EBU R128',
+    settings: { lowGain: 1.5, midGain: 0.5, highGain: 0.5, threshold: -27, ratio: 2, attack: 20, release: 300, ceiling: -1.0, targetLufs: -23 },
+  },
+  broadcast_country: {
+    label: 'Radio Country Broadcast', emoji: '🤠📡',
+    description: '-23 LUFS · Country pour diffusion',
+    settings: { lowGain: 2.5, midGain: 0.0, highGain: 0.5, threshold: -27, ratio: 2, attack: 20, release: 300, ceiling: -1.5, targetLufs: -23 },
+  },
   // ── Impact ──
   radio: {
     label: 'Radio / Loud', emoji: '📻',
@@ -411,7 +474,7 @@ export default function MasteringEngine({
   const [activeCategory, setActiveCategory] = useState('country');
   const [settings, setSettings]           = useState<MasterSettings>(PRESETS.country.settings);
   const [showAdvanced, setShowAdvanced]   = useState(false);
-  const [instGain, setInstGain]           = useState(0.85); // volume instrumental dans le mix publication
+  const [instGainDb, setInstGainDb]       = useState(-3); // niveau instrumental en dB relatif à la voix
 
   // État de rendu
   const [isMastering, setIsMastering]     = useState(false);
@@ -499,7 +562,7 @@ export default function MasteringEngine({
         const instRaw = await decodeBlob(instBlob);
 
         setProgressLabel('Mixage vocal + instrumental...'); setProgress(70);
-        const fullRaw = await mixVocalWithInst(vocalM, instRaw, instGain);
+        const fullRaw = await mixVocalWithInst(vocalM, instRaw, instGainDb);
 
         setProgressLabel('Masterisation du mix complet...'); setProgress(80);
         const fullM = await masterAudio(fullRaw, settings);
@@ -813,21 +876,39 @@ export default function MasteringEngine({
           </div>
         </div>
 
-        {/* Volume instrumental pour le mix publication */}
+        {/* Balance Voix / Instrumental */}
         {instBlob && (
           <div className="bg-zinc-950 border border-white/8 rounded-2xl p-4">
-            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2">
-              Volume instrumental (mix publication)
-            </p>
-            <div className="flex items-center gap-3">
-              <span className="text-[10px] text-zinc-600 font-black uppercase w-12">Inst</span>
-              <input type="range" min="0.3" max="1.2" step="0.05" value={instGain}
-                onChange={e => setInstGain(parseFloat(e.target.value))}
-                className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer accent-blue-500"
-                style={{ background: `linear-gradient(to right, #3b82f6 ${((instGain-0.3)/0.9)*100}%, #27272a ${((instGain-0.3)/0.9)*100}%)` }}/>
-              <span className="text-[10px] text-blue-400 font-black w-10 text-right">{Math.round(instGain * 100)}%</span>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Balance Voix / Instrumental</p>
+              <div className="flex gap-1.5">
+                {[[-9,'Voix forte'],[-6,'Voix+'],[-3,'Équilibré'],[0,'Égal'],[3,'Inst+'],[6,'Inst fort']].map(([val, label]) => (
+                  <button key={val} onClick={() => setInstGainDb(val as number)}
+                    className="px-1.5 py-0.5 rounded-lg text-[8px] font-black transition-all"
+                    style={{ background: instGainDb === val ? '#3b82f6' : '#27272a', color: instGainDb === val ? '#fff' : '#52525b' }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <p className="text-[9px] text-zinc-700 mt-1">Voix toujours à 100% — ajuste l'instrumental en dessous</p>
+            <div className="flex items-center gap-3">
+              <span className="text-[9px] text-red-400 font-black w-8 shrink-0">VOIX</span>
+              <div className="flex-1 relative">
+                <input type="range" min="-12" max="6" step="1" value={instGainDb}
+                  onChange={e => setInstGainDb(parseInt(e.target.value))}
+                  className="w-full h-2 rounded-full appearance-none cursor-pointer"
+                  style={{ background: `linear-gradient(to right, #ef4444 0%, #ef4444 ${((0-(-12))/18)*100}%, #3b82f6 ${((0-(-12))/18)*100}%, #3b82f6 ${((instGainDb-(-12))/18)*100}%, #27272a ${((instGainDb-(-12))/18)*100}%, #27272a 100%)` }}/>
+                <div className="absolute left-1/2 top-0 w-px h-2 bg-zinc-600 pointer-events-none" style={{ transform: 'translateX(-50%)' }}/>
+              </div>
+              <span className="text-[9px] text-blue-400 font-black w-8 shrink-0 text-right">INST</span>
+            </div>
+            <div className="flex justify-between mt-1.5">
+              <span className="text-[8px] text-zinc-700">Voix forte</span>
+              <span className="text-[9px] font-black" style={{ color: instGainDb === 0 ? '#a1a1aa' : instGainDb < 0 ? '#ef4444' : '#3b82f6' }}>
+                {instGainDb === 0 ? 'Égal' : instGainDb < 0 ? `Voix +${Math.abs(instGainDb)} dB` : `Inst +${instGainDb} dB`}
+              </span>
+              <span className="text-[8px] text-zinc-700">Inst forte</span>
+            </div>
           </div>
         )}
 
