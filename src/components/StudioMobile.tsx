@@ -106,6 +106,23 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // Brancher addLog dans le hook offline dès le premier render
   useEffect(() => { offline.setOfflineLog(addLog); });
 
+  // Forcer la mise à jour du SW immédiatement sans attendre fermeture des onglets
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    navigator.serviceWorker.ready.then(reg => {
+      const activate = (sw: ServiceWorker) => {
+        sw.postMessage({ type: 'SKIP_WAITING' });
+        navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload(), { once: true });
+      };
+      if (reg.waiting) { activate(reg.waiting); return; }
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener('statechange', () => { if (sw.state === 'installed') activate(sw); });
+      });
+    }).catch(() => {});
+  }, []);
+
   const audio = useStudioAudio(selected);
   const offline = useStudioOffline();
   
@@ -167,7 +184,29 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     })();
   }, []);
 
-  // Synchroniser `selected` si apiSongs se met à jour (ex: nouveau stem ajouté sur le Mac)
+  // Poll depuis le Mac toutes les 5 minutes pour détecter nouvelles chansons
+  useEffect(() => {
+    const poll = async () => {
+      const macUrl = (window as any).__CC_MAC_URL as string || '';
+      if (!macUrl.startsWith('http')) return;
+      try {
+        const res = await fetch(`${macUrl}/api/songs`, { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!Array.isArray(data) || data.length === 0) return;
+        setApiSongs(prev => {
+          if (data.length !== prev.length || data.some((s: any, i: number) => s.id !== prev[i]?.id)) {
+            studioOfflineDB.saveSongs(data).catch(() => {});
+            addLog(`🔄 Chansons Mac: ${data.length} (était ${prev.length})`);
+            return data;
+          }
+          return prev;
+        });
+      } catch {}
+    };
+    const iv = setInterval(poll, 5 * 60 * 1000); // toutes les 5 minutes
+    return () => clearInterval(iv);
+  }, []);
   useEffect(() => {
     if (!selected || apiSongs.length === 0) return;
     const fresh = apiSongs.find(s => s.id === selected.id);
