@@ -227,16 +227,25 @@ export function useStudioAudio(selected: Song | null): AudioResult {
           }).catch(() => {});
         }).catch(() => {});
       } else {
-        // Pas en cache — URL réseau (Mac requis)
-        setInstUrl(getMediaUrl(inst.fileName!));
-        setInstCached(false);
-        console.warn('[Audio] inst NON EN CACHE — URL réseau');
-        // Pas de téléchargement auto en arrière-plan — évite la surcharge serveur avec 7-8 chansons
-        // L'utilisateur utilise le bouton ☁️ dans SongSelector pour mettre en cache
+        // Pas en cache — vérifier si Mac joignable avant de streamer
+        const macUrl = ((window as any).__CC_MAC_URL as string) || '';
+        if (macUrl.startsWith('http')) {
+          fetch(`${macUrl}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
+            .then(r => {
+              if (r.ok) { setInstUrl(getMediaUrl(inst.fileName!)); }
+              else { setInstUrl(null); console.error('[Audio] ❌ Mac injoignable — mets la chanson en cache via ☁️'); }
+              setInstCached(false);
+            })
+            .catch(() => { setInstUrl(null); setInstCached(false); console.error('[Audio] ❌ Mac hors ligne — mets la chanson en cache via ☁️'); });
+        } else {
+          setInstUrl(null); setInstCached(false);
+          console.error('[Audio] ❌ Mac non configuré — mets la chanson en cache via ☁️');
+        }
       }
     }).catch(() => {
-      setInstUrl(getMediaUrl(inst.fileName!));
+      setInstUrl(null);
       setInstCached(false);
+      console.error('[Audio] ❌ Erreur chargement inst depuis cache');
     }).finally(() => setInstLoading(false));
   }, [selected?.id, selected?.versions?.length]);
 
@@ -265,13 +274,22 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         }).catch(() => {});
         console.log(`[Audio] vocal CACHE: ${(blob.size/1024/1024).toFixed(1)} MB`);
       } else {
-        setVocalGuideUrl(getMediaUrl(vocal.fileName!));
-        setVocalCached(false);
-        console.warn('[Audio] vocal NON EN CACHE — URL réseau');
-        // Pas de téléchargement auto en arrière-plan — évite la surcharge avec plusieurs chansons
+        // Pas en cache — vérifier si Mac joignable avant de streamer
+        const macUrlV = ((window as any).__CC_MAC_URL as string) || '';
+        if (macUrlV.startsWith('http')) {
+          fetch(`${macUrlV}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
+            .then(r => {
+              if (r.ok) { setVocalGuideUrl(getMediaUrl(vocal.fileName!)); }
+              else { setVocalGuideUrl(null); }
+              setVocalCached(false);
+            })
+            .catch(() => { setVocalGuideUrl(null); setVocalCached(false); });
+        } else {
+          setVocalGuideUrl(null); setVocalCached(false);
+        }
       }
     }).catch(() => {
-      setVocalGuideUrl(getMediaUrl(vocal.fileName!));
+      setVocalGuideUrl(null);
       setVocalCached(false);
     }).finally(() => setVocalLoading(false));
   }, [selected?.id, selected?.versions?.length]);

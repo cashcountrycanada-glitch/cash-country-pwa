@@ -226,11 +226,37 @@ export function useStudioOffline(): OfflineResult {
   }, []);
 
   useEffect(() => {
-    const up   = () => setIsOnline(true);
+    // navigator.onLine détecte juste le WiFi, pas si le Mac répond
+    // On fait un vrai ping HTTP vers le Mac toutes les 15 secondes
+    const checkMacReachable = async () => {
+      const macUrl = ((window as any).__CC_MAC_URL as string) || '';
+      if (!macUrl.startsWith('http')) {
+        setIsOnline(false);
+        return;
+      }
+      try {
+        const ctrl = new AbortController();
+        const timeout = setTimeout(() => ctrl.abort(), 3000); // 3s max
+        const r = await fetch(`${macUrl}/api/songs`, { method: 'HEAD', signal: ctrl.signal });
+        clearTimeout(timeout);
+        setIsOnline(r.ok || r.status < 500);
+      } catch {
+        setIsOnline(false); // Mac fermé ou pas joignable
+      }
+    };
+
+    checkMacReachable(); // ping immédiat au démarrage
+    const interval = setInterval(checkMacReachable, 15000); // toutes les 15s
+    // Aussi écouter les events réseau natifs comme fallback
+    const up   = () => checkMacReachable();
     const down = () => setIsOnline(false);
     window.addEventListener('online', up);
     window.addEventListener('offline', down);
-    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('online', up);
+      window.removeEventListener('offline', down);
+    };
   }, []);
 
   useEffect(() => {
@@ -250,7 +276,18 @@ export function useStudioOffline(): OfflineResult {
   }, []);
 
   useEffect(() => {
-    studioOfflineDB.getCachedSongIds().then(setCachedSongs).catch(() => {});
+    // Charger les IDs connus, puis vérifier VRAIMENT si les blobs existent
+    studioOfflineDB.getCachedSongIds().then(async (ids) => {
+      if (ids.size === 0) { setCachedSongs(ids); return; }
+      // Vérifier chaque chanson marquée comme cachée
+      const verified = new Set<string>();
+      await Promise.all(Array.from(ids).map(async (songId) => {
+        const result = await studioOfflineDB.verifySongCache(songId).catch(() => ({ both: false }));
+        if (result.both) verified.add(songId);
+        // Si pas les deux blobs → markSongUncached est appelé dans verifySongCache automatiquement
+      }));
+      setCachedSongs(verified);
+    }).catch(() => {});
     refreshStorage();
   }, []);
 

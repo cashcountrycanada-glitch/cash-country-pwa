@@ -523,6 +523,9 @@ export default function SongSelector({
             {songs.map(s => {
               const hasProject   = studioService.getProjects().some(p => p.songId === s.id && p.tracks.length > 0);
               const isCached     = cachedSongs.has(s.id);
+              // Détail du cache pour cette chanson (inst + vocal séparément)
+              const cacheDetail  = stemCacheStatus[s.id]; // { inst: bool|null, vocal: bool|null }
+              const cachePartial = isCached && cacheDetail && !(cacheDetail.inst && cacheDetail.vocal);
               const isCaching    = cachingId === s.id;
               const hasError     = cacheError?.songId === s.id;
               const needsConfirm = confirmUncache === s.id;
@@ -568,7 +571,8 @@ export default function SongSelector({
                       {!isCaching && !hasError && (
                         <div className="flex items-center gap-2 mt-1">
                           {hasProject && <p className="text-[10px] text-red-400 font-black">🎛 Projet en cours</p>}
-                          {isCached   && <p className="text-[10px] text-emerald-500 font-black">✓ Hors-ligne</p>}
+                          {isCached && !cachePartial && <p className="text-[10px] text-emerald-500 font-black">✓ Hors-ligne</p>}
+                          {cachePartial && <p className="text-[10px] text-amber-400 font-black">⚠ Partiel</p>}
                         </div>
                       )}
 
@@ -666,6 +670,13 @@ export default function SongSelector({
                           </button>
                         ) : (
                           // Long press → menu, tap normal → confirm suppression
+                          // Bouton 📁 toujours visible même si en cache (pour remplacer un stem ou importer LRC)
+                          <div className="flex flex-col items-center gap-1.5">
+                          <button
+                            onClick={e => { e.preventDefault(); e.stopPropagation(); const next = showImport === s.id ? null : s.id; setShowImport(next); if (next) checkStemCache(next); }}
+                            className="w-8 h-8 rounded-full flex items-center justify-center active:scale-90 border bg-zinc-800 border-zinc-700">
+                            <span className="text-[12px]">📁</span>
+                          </button>
                           <button
                             onClick={e => {
                               e.stopPropagation();
@@ -675,6 +686,7 @@ export default function SongSelector({
                             className="w-10 h-10 rounded-full bg-emerald-900/30 border border-emerald-500/50 flex items-center justify-center active:scale-90 transition-all">
                             <CheckCircle2 size={14} className="text-emerald-400"/>
                           </button>
+                          </div>
                         )
                       ) : (
                         <div className="flex flex-col items-center gap-2">

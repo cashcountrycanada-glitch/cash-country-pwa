@@ -208,6 +208,22 @@ class StudioOfflineDatabase {
     return !!rec;
   }
 
+  // Vérification RÉELLE du cache — vérifie que les blobs audio existent vraiment
+  // (pas juste le flag cachedSongIds qui peut être désynchronisé si iOS vide le cache)
+  async verifySongCache(songId: string): Promise<{ inst: boolean; vocal: boolean; both: boolean }> {
+    const [inst, vocal] = await Promise.all([
+      this.hasAudio(`inst_${songId}`),
+      this.hasAudio(`vocal_${songId}`),
+    ]);
+    // Resynchroniser le flag si désynchronisé
+    if (inst && vocal) {
+      await this.markSongCached(songId);
+    } else if (!inst && !vocal) {
+      await this.markSongUncached(songId);
+    }
+    return { inst, vocal, both: inst && vocal };
+  }
+
   async deleteAudio(key: string): Promise<void> {
     const store = await this.tx(STORE_AUDIO, 'readwrite');
     await this.idbOp(store.delete(key));
