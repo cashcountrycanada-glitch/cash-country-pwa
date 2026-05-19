@@ -25,6 +25,15 @@ function isIOS(): boolean {
 class StudioOfflineDatabase {
   private db: IDBDatabase | null = null;
   private initPromise: Promise<void> | null = null;
+  // Queue d'écriture séquentielle — évite les transactions readwrite simultanées sur iOS
+  private writeQueue: Promise<any> = Promise.resolve();
+
+  private enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.writeQueue.then(() => fn()).catch(e => { throw e; });
+    // La queue continue même si une opération échoue
+    this.writeQueue = next.catch(() => {});
+    return next;
+  }
 
   static async requestPersistence(): Promise<void> {
     try {
@@ -101,9 +110,18 @@ class StudioOfflineDatabase {
   // ── Chansons ──────────────────────────────────────────────────────────────
 
   async saveSongs(songs: any[]): Promise<void> {
+    // Éviter d'écraser si le même nombre de chansons est déjà en DB
+    // (évite 7-8 clear()+put() simultanés quand on cache plusieurs chansons)
+    try {
+      const existing = await this.idbOp((await this.tx(STORE_SONGS)).count());
+      if (existing === songs.length) return; // déjà à jour
+    } catch {}
     const store = await this.tx(STORE_SONGS, 'readwrite');
     await this.idbOp(store.clear());
-    await Promise.all(songs.map(s => this.idbOp(store.put(s))));
+    // Écrire en séquence (pas en parallèle) pour éviter les conflits iOS
+    for (const s of songs) {
+      await this.idbOp(store.put(s));
+    }
   }
 
   async getAllSongs(): Promise<any[]> {
@@ -114,6 +132,10 @@ class StudioOfflineDatabase {
   // ── Audio ─────────────────────────────────────────────────────────────────
 
   async saveAudio(key: string, blob: Blob, meta: object = {}): Promise<void> {
+    return this.enqueueWrite(() => this._saveAudioImpl(key, blob, meta));
+  }
+
+  private async _saveAudioImpl(key: string, blob: Blob, meta: object = {}): Promise<void> {
     // Vérifier l'espace disponible AVANT d'écrire pour un feedback immédiat
     try {
       const est = await this.getStorageEstimate();
@@ -193,16 +215,30 @@ class StudioOfflineDatabase {
 
   // Supprimer tous les fichiers audio d'une chanson (nettoyage espace)
   async deleteAllForSong(songId: string): Promise<void> {
-    const store = await this.tx(STORE_AUDIO, 'readwrite');
-    // Chercher par clé manuelle (les clés commencent par inst_, vocal_, rec_)
-    const allKeys = await this.idbOp(store.getAllKeys()) as string[];
-    const toDelete = allKeys.filter(k =>
-      k === `inst_${songId}` ||
-      k === `vocal_${songId}` ||
-      (k as string).includes(`_${songId}_`)
-    );
-    const store2 = await this.tx(STORE_AUDIO, 'readwrite');
-    await Promise.all(toDelete.map(k => this.idbOp(store2.delete(k))));
+    // Une seule transaction pour lire + supprimer (évite conflit iOS)
+    await this.init(); const db = this.db!;
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([STORE_AUDIO], 'readwrite');
+      const store = tx.objectStore(STORE_AUDIO);
+      const req = store.getAllKeys();
+      req.onsuccess = () => {
+        const allKeys = req.result as string[];
+        const toDelete = allKeys.filter(k =>
+          k === `inst_${songId}` ||
+          k === `vocal_${songId}` ||
+          (k as string).includes(`_${songId}_`)
+        );
+        let pending = toDelete.length;
+        if (pending === 0) { resolve(); return; }
+        for (const k of toDelete) {
+          const d = store.delete(k);
+          d.onsuccess = () => { if (--pending === 0) resolve(); };
+          d.onerror   = () => { if (--pending === 0) resolve(); };
+        }
+      };
+      req.onerror = () => reject(req.error);
+      tx.onerror  = () => reject(tx.error);
+    });
     await this.markSongUncached(songId);
   }
 

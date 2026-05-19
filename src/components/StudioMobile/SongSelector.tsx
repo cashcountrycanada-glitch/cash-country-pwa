@@ -232,7 +232,7 @@ export default function SongSelector({
     if (!file) return;
     setImportingLrc(song.id);
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const text = reader.result as string;
         const lines: { time: number; text: string }[] = [];
@@ -240,16 +240,25 @@ export default function SongSelector({
           const m = line.match(/\[(\d+):(\d+(?:\.\d+)?)\](.*)/);
           if (m) lines.push({ time: parseInt(m[1]) * 60 + parseFloat(m[2]), text: m[3].trim() });
         });
-        if (lines.length === 0) { setImportingLrc(null); return; }
+        if (lines.length === 0) {
+          alert('❌ Fichier LRC invalide — aucune ligne avec timestamp trouvée.\nFormat attendu: [mm:ss.xx] Paroles');
+          setImportingLrc(null);
+          return;
+        }
         const blob = new Blob([JSON.stringify(lines)], { type: 'application/json' });
-        studioOfflineDB.saveAudio(`lrc_${song.id}`, blob, { songId: song.id, songTitle: song.title, type: 'lrc' })
-          .then(() => { setImportingLrc(null); })
-          .catch(() => { setImportingLrc(null); });
-      } catch {
+        // Passer par la writeQueue (await) pour éviter conflits avec imports stems simultanés
+        await studioOfflineDB.saveAudio(`lrc_${song.id}`, blob, { songId: song.id, songTitle: song.title, type: 'lrc' });
+        alert(`✅ Paroles importées — ${lines.length} lignes synchronisées pour "${song.title}"`);
+        setImportingLrc(null);
+      } catch (err: any) {
+        alert(`❌ Erreur import LRC: ${err?.message || 'Erreur inconnue'}`);
         setImportingLrc(null);
       }
     };
-    reader.onerror = () => setImportingLrc(null);
+    reader.onerror = () => {
+      alert('❌ Impossible de lire le fichier');
+      setImportingLrc(null);
+    };
     reader.readAsText(file);
     e.target.value = '';
   };

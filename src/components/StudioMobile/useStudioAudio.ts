@@ -196,6 +196,9 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     }
   }, [vocalGuideUrl, setVolumeIOS]);
 
+  const instBlobUrlRef  = useRef<string | null>(null);
+  const vocalBlobUrlRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!selected) { setInstUrl(null); setInstCached(false); return; }
     const inst = selected.versions?.find(v =>
@@ -208,7 +211,11 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     // iOS et Desktop : IndexedDB en priorité, réseau en fallback
     studioOfflineDB.getAudio(`inst_${selected.id}`).then(blob => {
       if (blob) {
-        setInstUrl(URL.createObjectURL(fixBlobType(blob)));
+        // Révoquer l'ancien blob URL avant d'en créer un nouveau (évite memory leak → crash iOS)
+        if (instBlobUrlRef.current) { URL.revokeObjectURL(instBlobUrlRef.current); }
+        const url = URL.createObjectURL(fixBlobType(blob));
+        instBlobUrlRef.current = url;
+        setInstUrl(url);
         setInstCached(true);
         console.log(`[Audio] inst CACHE: ${(blob.size/1024/1024).toFixed(1)} MB`);
         // Pré-décoder pour un play instantané (évite le délai fetch+decode au tap)
@@ -224,11 +231,8 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         setInstUrl(getMediaUrl(inst.fileName!));
         setInstCached(false);
         console.warn('[Audio] inst NON EN CACHE — URL réseau');
-        // Télécharger en arrière-plan pour mise en cache
-        fetch(getMediaUrl(inst.fileName!))
-          .then(r => r.ok ? r.blob() : null)
-          .then(b => b && studioOfflineDB.saveAudio(`inst_${selected.id}`, fixBlobType(b), { songId: selected.id, songTitle: selected.title, type: 'instrumental' }).catch(() => {}))
-          .catch(() => {});
+        // Pas de téléchargement auto en arrière-plan — évite la surcharge serveur avec 7-8 chansons
+        // L'utilisateur utilise le bouton ☁️ dans SongSelector pour mettre en cache
       }
     }).catch(() => {
       setInstUrl(getMediaUrl(inst.fileName!));
@@ -245,7 +249,11 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     // iOS et Desktop : IndexedDB en priorité, réseau en fallback
     studioOfflineDB.getAudio(`vocal_${selected.id}`).then(blob => {
       if (blob) {
-        setVocalGuideUrl(URL.createObjectURL(fixBlobType(blob)));
+        // Révoquer l'ancien blob URL avant d'en créer un nouveau
+        if (vocalBlobUrlRef.current) { URL.revokeObjectURL(vocalBlobUrlRef.current); }
+        const vurl = URL.createObjectURL(fixBlobType(blob));
+        vocalBlobUrlRef.current = vurl;
+        setVocalGuideUrl(vurl);
         setVocalCached(true);
         // Pré-décoder vocal aussi
         blob.arrayBuffer().then(buf => {
@@ -260,10 +268,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         setVocalGuideUrl(getMediaUrl(vocal.fileName!));
         setVocalCached(false);
         console.warn('[Audio] vocal NON EN CACHE — URL réseau');
-        fetch(getMediaUrl(vocal.fileName!))
-          .then(r => r.ok ? r.blob() : null)
-          .then(b => b && studioOfflineDB.saveAudio(`vocal_${selected.id}`, fixBlobType(b), { songId: selected.id, songTitle: selected.title, type: 'vocal' }).catch(() => {}))
-          .catch(() => {});
+        // Pas de téléchargement auto en arrière-plan — évite la surcharge avec plusieurs chansons
       }
     }).catch(() => {
       setVocalGuideUrl(getMediaUrl(vocal.fileName!));

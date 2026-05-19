@@ -333,7 +333,10 @@ export function useStudioOffline(): OfflineResult {
 
   // ── Cache principal ───────────────────────────────────────────────────────
   const cacheSongForOffline = useCallback(async (song: Song, allSongs: Song[], force = false) => {
-    if (cachingId) return; // déjà en cours
+    if (cachingId) {
+      console.warn('[Cache] Déjà en cours pour', cachingId, '— ignoré:', song.id);
+      return; // déjà en cours — une seule chanson à la fois
+    }
     setCachingId(song.id);
     setCacheProgress({ step: 'inst_download', label: 'Démarrage...', pct: 0 });
     setCacheError(null);
