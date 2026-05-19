@@ -442,11 +442,20 @@ export function useStudioOffline(): OfflineResult {
 
   const importFileToCache = useCallback(async (song: Song, type: 'inst' | 'vocal', file: File) => {
     const key = type === 'inst' ? `inst_${song.id}` : `vocal_${song.id}`;
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    const rawType = file.type || 'audio/flac';
-    // iOS ne supporte pas FLAC/WebM/OGG — forcer audio/mp4 pour que <audio> puisse lire
-    const blobType = isIOS && !rawType.includes('mp4') && !rawType.includes('mpeg') && !rawType.includes('aac')
-      ? 'audio/mp4' : rawType;
+    // Garder le type MIME original — iOS Safari supporte FLAC/WAV/MP3/M4A nativement.
+    // Ne PAS mentir sur le type (ex: forcer audio/mp4 sur du FLAC) — ça cause des erreurs de décodage.
+    const rawType = file.type || '';
+    // Seulement si le type est complètement vide (fichier sans extension reconnue), deviner depuis le nom
+    let blobType = rawType;
+    if (!blobType) {
+      const name = file.name.toLowerCase();
+      if (name.endsWith('.flac'))      blobType = 'audio/flac';
+      else if (name.endsWith('.mp3'))  blobType = 'audio/mpeg';
+      else if (name.endsWith('.m4a'))  blobType = 'audio/mp4';
+      else if (name.endsWith('.wav'))  blobType = 'audio/wav';
+      else if (name.endsWith('.aac'))  blobType = 'audio/aac';
+      else                             blobType = 'audio/flac'; // défaut raisonnable
+    }
     log(`📂 Import manuel: ${file.name} (${(file.size/1024).toFixed(0)} Ko) → clé: ${key} type: ${blobType}`);
     const blob = new Blob([await file.arrayBuffer()], { type: blobType });
     await studioOfflineDB.saveAudio(key, blob, { songId: song.id, songTitle: song.title, type: type === 'inst' ? 'instrumental' : 'vocal' });

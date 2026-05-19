@@ -58,14 +58,18 @@ interface StemRowProps {
   inCache: boolean | null;
   importing: string | null;
   testingAudio: string | null;
+  loadingAudio: string | null;   // clé 'songId:type' pendant chargement blob async
   onTest: (songId: string, type: 'inst' | 'vocal') => void;
   onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }
-function StemRow({ songId, type, fileName, inCache, importing, testingAudio, onTest, onImport }: StemRowProps) {
-  const isInst   = type === 'inst';
-  const testKey  = `${songId}:${type}`;
-  const isTesting = testingAudio === testKey;
+function StemRow({ songId, type, fileName, inCache, importing, testingAudio, loadingAudio, onTest, onImport }: StemRowProps) {
+  const isInst      = type === 'inst';
+  const testKey     = `${songId}:${type}`;
+  const isTesting   = testingAudio === testKey;
+  const isLoading   = loadingAudio === testKey;
   const isImporting = importing === `${songId}:${type}`;
+  // Bouton actif dès que inCache est true — même si blob pas encore en mémoire
+  const canListen   = inCache === true;
   return (
     <div className="mb-4">
       <div className="flex items-center gap-1.5 mb-1.5">
@@ -83,14 +87,15 @@ function StemRow({ songId, type, fileName, inCache, importing, testingAudio, onT
       <div className="flex gap-2">
         <button
           onClick={e => { e.stopPropagation(); onTest(songId, type); }}
-          disabled={!inCache}
+          disabled={!canListen || isLoading}
           className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl font-black text-[11px] uppercase transition-all active:scale-95 ${
-            !inCache   ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-40' :
+            !canListen ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-40' :
+            isLoading  ? 'bg-zinc-700 text-zinc-400 animate-pulse' :
             isTesting  ? 'bg-amber-600 text-white' :
             isInst     ? 'bg-blue-900/60 border border-blue-600/40 text-blue-300' :
                          'bg-emerald-900/60 border border-emerald-600/40 text-emerald-300'
           }`}>
-          {isTesting ? '⏹ Stop' : '🔊 Écouter'}
+          {isLoading ? '⏳ Chargement...' : isTesting ? '⏹ Stop' : '🔊 Écouter'}
         </button>
         <label className="flex-1">
           <input type="file" accept="audio/*,.flac,.wav,.mp3,.m4a,.mp4" className="hidden" onChange={onImport}/>
@@ -265,6 +270,7 @@ export default function SongSelector({
   // Cache status pour le panneau d'import: { inst: bool|null, vocal: bool|null }
   const [stemCacheStatus, setStemCacheStatus]     = useState<Record<string, { inst: boolean|null; vocal: boolean|null }>>({});
   const [testingAudio, setTestingAudio]           = useState<string | null>(null); // 'songId:inst' | 'songId:vocal'
+  const [loadingAudio, setLoadingAudio]           = useState<string | null>(null); // chargement blob async en cours
   const audioTestRef                              = useRef<HTMLAudioElement | null>(null);
   const stemBlobCache                             = useRef<Record<string, Blob>>({});
 
@@ -297,10 +303,44 @@ export default function SongSelector({
     setStemCacheStatus(prev => ({ ...prev, [songId]: { inst: !!instBlob, vocal: !!vocalBlob } }));
   };
 
-  // Lit un stem directement depuis IndexedDB pour le tester
+  // Joue un stem depuis le blob (appelé de façon synchrone depuis le tap)
+  const playStemBlob = (key: string, blob: Blob) => {
+    audioTestRef.current?.pause();
+    if (audioTestRef.current?.src) URL.revokeObjectURL(audioTestRef.current.src);
+
+    const url   = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audioTestRef.current = audio;
+    setTestingAudio(key);
+    setLoadingAudio(null);
+
+    const ctx = (window as any).__warmContext as AudioContext | undefined;
+    if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+
+    audio.onended = () => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
+    audio.onerror = () => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
+    audio.play().catch(() => {
+      // Fallback AudioContext si autoplay bloqué
+      const actx = (window as any).__warmContext as AudioContext | undefined;
+      if (!actx) { setTestingAudio(null); return; }
+      blob.arrayBuffer()
+        .then(buf => actx.decodeAudioData(buf))
+        .then(decoded => {
+          const src = actx.createBufferSource();
+          src.buffer = decoded;
+          src.connect(actx.destination);
+          src.onended = () => { setTestingAudio(null); audioTestRef.current = null; };
+          src.start(0);
+        }).catch(() => setTestingAudio(null));
+    });
+  };
+
+  // Lit un stem depuis IndexedDB pour le tester.
+  // Si le blob est déjà en mémoire → synchrone (iOS-safe).
+  // Sinon → charge async avec spinner, puis joue automatiquement.
   const testStemAudio = (songId: string, type: 'inst' | 'vocal') => {
-    const key    = `${songId}:${type}`;
-    const dbKey  = `${type}_${songId}`;
+    const key   = `${songId}:${type}`;
+    const dbKey = `${type}_${songId}`;
 
     // Stop si déjà en lecture
     if (testingAudio === key) {
@@ -311,47 +351,36 @@ export default function SongSelector({
       return;
     }
 
-    // Utiliser le blob pré-chargé — SYNCHRONE, pas de .then()
-    const blob = stemBlobCache.current[dbKey];
-    if (!blob) {
-      // Blob pas encore chargé — tenter le chargement et réessayer
-      studioOfflineDB.getAudio(dbKey).then(b => {
-        if (b) { stemBlobCache.current[dbKey] = b; }
-      }).catch(() => {});
+    // Annuler chargement en cours si on re-tape
+    if (loadingAudio === key) {
+      setLoadingAudio(null);
       return;
     }
 
-    // Tout synchrone dans le callstack du tap — iOS l'accepte
-    audioTestRef.current?.pause();
-    if (audioTestRef.current?.src) URL.revokeObjectURL(audioTestRef.current.src);
+    // Blob déjà en mémoire → jouer directement (synchrone, iOS-safe)
+    const cached = stemBlobCache.current[dbKey];
+    if (cached) {
+      playStemBlob(key, cached);
+      return;
+    }
 
-    const url   = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audioTestRef.current = audio;
-    setTestingAudio(key);
-
-    // Résumer le contexte audio global si nécessaire
-    const ctx = (window as any).__warmContext as AudioContext | undefined;
-    if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
-
-    audio.onended = () => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
-    audio.onerror = (e) => { setTestingAudio(null); URL.revokeObjectURL(url); audioTestRef.current = null; };
-    audio.play().catch((e) => {
-      // Fallback via AudioContext si play() bloqué
-      const actx = (window as any).__warmContext as AudioContext | undefined;
-      if (!actx) { setTestingAudio(null); return; }
-      blob.arrayBuffer().then(buf => actx.decodeAudioData(buf)).then(decoded => {
-        const src = actx.createBufferSource();
-        src.buffer = decoded;
-        src.connect(actx.destination);
-        src.onended = () => { setTestingAudio(null); audioTestRef.current = null; };
-        src.start(0);
-      }).catch(() => setTestingAudio(null));
-    });
+    // Blob absent de la mémoire → charger depuis IndexedDB avec spinner
+    // On montre "⏳ Chargement..." pendant la récupération
+    setLoadingAudio(key);
+    studioOfflineDB.getAudio(dbKey)
+      .then(b => {
+        if (!b) { setLoadingAudio(null); return; }
+        stemBlobCache.current[dbKey] = b;
+        // Note: play() ici est async (pas dans le callstack du tap originel).
+        // Sur iOS ça peut être bloqué par autoplay. Si bloqué, l'user devra
+        // retaper — mais au 2e tap le blob sera en cache et ça jouera synchrone.
+        playStemBlob(key, b);
+      })
+      .catch(() => setLoadingAudio(null));
   };
 
   // Cleanup audio au démontage
-  useEffect(() => { return () => { audioTestRef.current?.pause(); }; }, []);
+  useEffect(() => { return () => { audioTestRef.current?.pause(); setLoadingAudio(null); }; }, []);
 
   const progressColor = (progress: CacheProgress | null) => {
     if (!progress) return '#22c55e';
@@ -729,13 +758,13 @@ export default function SongSelector({
                         </div>
                         <StemRow
                           songId={s.id} type="inst" fileName={_iName} inCache={iHas}
-                          importing={importing} testingAudio={testingAudio}
+                          importing={importing} testingAudio={testingAudio} loadingAudio={loadingAudio}
                           onTest={testStemAudio}
                           onImport={e => handleFileImport(s, 'inst', e)}
                         />
                         <StemRow
                           songId={s.id} type="vocal" fileName={_vName} inCache={vHas}
-                          importing={importing} testingAudio={testingAudio}
+                          importing={importing} testingAudio={testingAudio} loadingAudio={loadingAudio}
                           onTest={testStemAudio}
                           onImport={e => handleFileImport(s, 'vocal', e)}
                         />

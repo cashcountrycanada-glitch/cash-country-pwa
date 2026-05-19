@@ -16,12 +16,24 @@ function isIOS(): boolean {
   return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
+// Teste une fois si iOS peut lire audio/flac nativement (iOS 11+)
+let _iosFlacSupported: boolean | null = null;
+function iosSupportsFlac(): boolean {
+  if (_iosFlacSupported !== null) return _iosFlacSupported;
+  try {
+    const a = document.createElement('audio');
+    _iosFlacSupported = a.canPlayType('audio/flac') !== '';
+  } catch { _iosFlacSupported = false; }
+  return _iosFlacSupported;
+}
+
 function fixBlobType(blob: Blob): Blob {
   if (isIOS()) {
-    // iOS Safari ne supporte que audio/mp4, audio/mpeg, audio/aac
-    // FLAC, WebM, OGG, et '' sont tous invalides → forcer audio/mp4
     const t = blob.type.toLowerCase();
-    if (!t.includes('mp4') && !t.includes('mpeg') && !t.includes('aac') && !t.includes('mp3')) {
+    // Si c'est du FLAC et qu'iOS le supporte nativement → garder tel quel
+    if ((t.includes('flac') || t === '') && iosSupportsFlac()) return blob;
+    // Sinon pour les types non supportés (WebM, OGG, etc.) → forcer audio/mp4
+    if (!t.includes('mp4') && !t.includes('mpeg') && !t.includes('aac') && !t.includes('mp3') && !t.includes('flac')) {
       return new Blob([blob], { type: 'audio/mp4' });
     }
   }
@@ -211,16 +223,16 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     // iOS et Desktop : IndexedDB en priorité, réseau en fallback
     studioOfflineDB.getAudio(`inst_${selected.id}`).then(blob => {
       if (blob) {
-        // Révoquer l'ancien blob URL avant d'en créer un nouveau (évite memory leak → crash iOS)
-        if (instBlobUrlRef.current) { URL.revokeObjectURL(instBlobUrlRef.current); }
-        const url = URL.createObjectURL(fixBlobType(blob));
-        instBlobUrlRef.current = url;
-        setInstUrl(url);
-        // Vérifier que le blob est valide (pas vide ni corrompu)
+        // Vérifier que le blob est valide AVANT de créer l'URL et de setter les états
         if (blob.size < 1000) {
           console.error(`[Audio] ❌ inst blob trop petit (${blob.size} bytes) — corrompu ou vide`);
           setInstUrl(null); setInstCached(false);
         } else {
+          // Révoquer l'ancien blob URL avant d'en créer un nouveau (évite memory leak → crash iOS)
+          if (instBlobUrlRef.current) { URL.revokeObjectURL(instBlobUrlRef.current); }
+          const url = URL.createObjectURL(fixBlobType(blob));
+          instBlobUrlRef.current = url;
+          setInstUrl(url);
           setInstCached(true);
           console.log(`[Audio] ✅ inst CACHE: ${(blob.size/1024/1024).toFixed(1)} MB | type=${blob.type} | key=inst_${selected.id}`);
         }
@@ -264,12 +276,19 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     // iOS et Desktop : IndexedDB en priorité, réseau en fallback
     studioOfflineDB.getAudio(`vocal_${selected.id}`).then(blob => {
       if (blob) {
-        // Révoquer l'ancien blob URL avant d'en créer un nouveau
-        if (vocalBlobUrlRef.current) { URL.revokeObjectURL(vocalBlobUrlRef.current); }
-        const vurl = URL.createObjectURL(fixBlobType(blob));
-        vocalBlobUrlRef.current = vurl;
-        setVocalGuideUrl(vurl);
-        setVocalCached(true);
+        // Vérifier que le blob est valide AVANT de créer l'URL et de setter les états
+        if (blob.size < 1000) {
+          console.error(`[Audio] ❌ vocal blob trop petit (${blob.size} bytes) — corrompu ou vide`);
+          setVocalGuideUrl(null); setVocalCached(false);
+        } else {
+          // Révoquer l'ancien blob URL avant d'en créer un nouveau
+          if (vocalBlobUrlRef.current) { URL.revokeObjectURL(vocalBlobUrlRef.current); }
+          const vurl = URL.createObjectURL(fixBlobType(blob));
+          vocalBlobUrlRef.current = vurl;
+          setVocalGuideUrl(vurl);
+          setVocalCached(true);
+          console.log(`[Audio] ✅ vocal CACHE: ${(blob.size/1024/1024).toFixed(1)} MB | type=${blob.type} | key=vocal_${selected.id}`);
+        }
         // Pré-décoder vocal aussi
         blob.arrayBuffer().then(buf => {
           const ctx = (window as any).__warmContext as AudioContext | undefined;
@@ -278,13 +297,6 @@ export function useStudioAudio(selected: Song | null): AudioResult {
             (window as any).__vocalDecodedBuf = decoded;
           }).catch(() => {});
         }).catch(() => {});
-        if (blob.size < 1000) {
-          console.error(`[Audio] ❌ vocal blob trop petit (${blob.size} bytes) — corrompu ou vide`);
-          setVocalGuideUrl(null); setVocalCached(false);
-        } else {
-          setVocalCached(true);
-          console.log(`[Audio] ✅ vocal CACHE: ${(blob.size/1024/1024).toFixed(1)} MB | type=${blob.type} | key=vocal_${selected.id}`);
-        }
       } else {
         // Pas en cache — vérifier si Mac joignable avant de streamer
         const macUrlV = ((window as any).__CC_MAC_URL as string) || '';
