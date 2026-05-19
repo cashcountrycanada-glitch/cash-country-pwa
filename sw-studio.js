@@ -1,12 +1,25 @@
 /**
- * sw-studio.js v37 — fix libs ESM : esm.sh au lieu de /libs/*.esm.js locaux
- * Correctif: "Identifier 'X' has already been declared" causé par dynamic import()
- * sur des fichiers ESM locaux qui s'exécutent dans le scope global de la page.
- * Solution: toutes les libs React/lucide/scheduler passent maintenant par esm.sh
- * qui les isole correctement en modules ES natifs.
+ * sw-studio.js — Service Worker PWA Cash Country Studio Mobile
+ *
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║  ARCHITECTURE STOCKAGE — DEUX SYSTÈMES DISTINCTS                ║
+ * ║                                                                  ║
+ * ║  SW CACHE (ici)     → La PWA elle-même                          ║
+ * ║    • index-pwa.html  • babel.min.js  • manifest.json            ║
+ * ║    • libs React/lucide/scheduler (esm.sh)                       ║
+ * ║    • lame.min.js  • recorder-worklet.js  • env_config.js        ║
+ * ║    → Vérifié par CHECK_CACHE / réparé par REPAIR_CACHE          ║
+ * ║                                                                  ║
+ * ║  INDEXEDDB (StudioOfflineDB.ts) → Les chansons                  ║
+ * ║    • Stems audio : inst_<id>, vocal_<id> (ArrayBuffer)          ║
+ * ║    • Métadonnées chansons (songs.json)                          ║
+ * ║    • Enregistrements vocaux                                      ║
+ * ║    → Géré par useStudioOffline.ts via studioOfflineDB            ║
+ * ║    → Le SW N'intervient PAS dans le stockage audio              ║
+ * ╚══════════════════════════════════════════════════════════════════╝
  */
 
-const CACHE = 'studio-v107'; // v94: lrcFile dans songs.json pour La Route 20 → Tunee_Cœur en Marche.lrc
+const CACHE = 'studio-v109';
 
 const CRITICAL = [
   '/index-pwa.html',
@@ -327,11 +340,6 @@ self.addEventListener('message', async event => {
     return;
   }
 
-  if (type === 'CACHE_SONG') {
-    const { songId, songTitle, urls = [] } = event.data;
-    const cache = await caches.open(CACHE);
-    await Promise.allSettled(['/api/songs', ...urls].map(u => cacheOne(cache, u)));
-    await broadcast({ type: 'SONG_CACHED', songId, songTitle });
-    return;
-  }
+  // NOTE: Le stockage audio des chansons est géré par IndexedDB (StudioOfflineDB.ts)
+  // via useStudioOffline.ts — le SW ne gère PAS le cache des chansons.
 });

@@ -462,52 +462,61 @@ export default function RecordScreen({
             <VUMeter analyser={analyser} vuLevel={vuLevel} active={isRecording} />
           </div>
 
-          {/* Stems */}
+          {/* Stems — badges et bouton Écouter basés sur IndexedDB (instCached/vocalCached),
+               PAS sur instUrl/vocalGuideUrl qui peuvent être null si Mac hors ligne */}
           <div className="flex gap-2 px-4 pb-3 flex-wrap items-center">
             {instLoading
               ? <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: '#1a1a1a' }}><Loader2 size={9} className="text-zinc-600 animate-spin" /><span className="text-[9px] text-zinc-600 font-black">Instrum...</span></div>
-              : instUrl
-                ? <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: instCached ? '#1e3a5f' : '#2a1f00', border: `1px solid ${instCached ? '#1d4ed880' : '#92400e80'}` }}>
-                    <Headphones size={9} className={instCached ? 'text-blue-400' : 'text-amber-500'} />
-                    <span className={`text-[9px] font-black uppercase ${instCached ? 'text-blue-400' : 'text-amber-500'}`}>
-                      INSTRUM {instCached ? '📦' : '🌐'}
-                    </span>
+              : instCached
+                ? <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: '#1e3a5f', border: '1px solid #1d4ed880' }}>
+                    <Headphones size={9} className="text-blue-400" />
+                    <span className="text-[9px] font-black uppercase text-blue-400">INSTRUM 📦</span>
                   </div>
-                : <button onClick={onRefreshSong} disabled={isRecording}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded-lg active:scale-95"
-                    style={{ background: '#2a1a00', border: '1px solid #92400e80' }}>
-                    <RefreshCw size={9} className="text-amber-500" />
-                    <span className="text-[9px] font-black uppercase text-amber-500">↺ Recharger stems</span>
-                  </button>
+                : instUrl
+                  ? <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: '#2a1f00', border: '1px solid #92400e80' }}>
+                      <Headphones size={9} className="text-amber-500" />
+                      <span className="text-[9px] font-black uppercase text-amber-500">INSTRUM 🌐</span>
+                    </div>
+                  : <button onClick={onRefreshSong} disabled={isRecording}
+                      className="flex items-center gap-1.5 px-2 py-1 rounded-lg active:scale-95"
+                      style={{ background: '#2a1a00', border: '1px solid #92400e80' }}>
+                      <RefreshCw size={9} className="text-amber-500" />
+                      <span className="text-[9px] font-black uppercase text-amber-500">↺ Recharger stems</span>
+                    </button>
             }
             {vocalLoading
               ? <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: '#1a1a1a' }}><Loader2 size={9} className="text-zinc-600 animate-spin" /><span className="text-[9px] text-zinc-600 font-black">Guide...</span></div>
-              : vocalGuideUrl
-                ? <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: vocalCached ? '#1e3a1e' : '#2a1f00', border: `1px solid ${vocalCached ? '#16a34a80' : '#92400e80'}` }}>
-                    <Mic size={9} className={vocalCached ? 'text-emerald-400' : 'text-amber-500'} />
-                    <span className={`text-[9px] font-black uppercase ${vocalCached ? 'text-emerald-400' : 'text-amber-500'}`}>
-                      GUIDE {vocalCached ? '📦' : '🌐'}
-                    </span>
+              : vocalCached
+                ? <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: '#1e3a1e', border: '1px solid #16a34a80' }}>
+                    <Mic size={9} className="text-emerald-400" />
+                    <span className="text-[9px] font-black uppercase text-emerald-400">GUIDE 📦</span>
                   </div>
-                : null
+                : vocalGuideUrl
+                  ? <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg" style={{ background: '#2a1f00', border: '1px solid #92400e80' }}>
+                      <Mic size={9} className="text-amber-500" />
+                      <span className="text-[9px] font-black uppercase text-amber-500">GUIDE 🌐</span>
+                    </div>
+                  : null
             }
-            {(instUrl || vocalGuideUrl) && !isRecording && !isSaving && (() => {
-              const allCached = (!instUrl || instCached) && (!vocalGuideUrl || vocalCached);
-              const noneCached = (instUrl && !instCached) || (vocalGuideUrl && !vocalCached);
+            {/* Bouton Écouter — toujours visible si stems en IndexedDB (instCached/vocalCached)
+                 ou si URL réseau disponible. JAMAIS conditionnel sur instUrl seul. */}
+            {(instCached || vocalCached || instUrl || vocalGuideUrl) && !isRecording && !isSaving && (() => {
+              const allCached = instCached && (!vocalGuideUrl || vocalCached) && (!instUrl || instCached);
+              const anyCached = instCached || vocalCached;
               return (
                 <button
                   onClick={onPreviewStems}
                   className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded-lg active:scale-90 transition-all"
                   style={{
-                    background: isPreviewing ? '#7c3aed20' : allCached ? '#0f2a0f' : noneCached ? '#2a1800' : '#1a1a1a',
-                    border: `1px solid ${isPreviewing ? '#7c3aed80' : allCached ? '#16a34a60' : noneCached ? '#d9770660' : '#2a2a2a'}`,
+                    background: isPreviewing ? '#7c3aed20' : anyCached ? '#0f2a0f' : '#2a1800',
+                    border: `1px solid ${isPreviewing ? '#7c3aed80' : anyCached ? '#16a34a60' : '#d9770660'}`,
                   }}>
                   {isPreviewing
                     ? <Square size={9} fill="currentColor" className="text-violet-400" />
-                    : <Headphones size={9} className={allCached ? 'text-emerald-400' : noneCached ? 'text-amber-500' : 'text-zinc-400'} />
+                    : <Headphones size={9} className={anyCached ? 'text-emerald-400' : 'text-amber-500'} />
                   }
-                  <span className="text-[9px] font-black uppercase" style={{ color: isPreviewing ? '#a78bfa' : allCached ? '#4ade80' : noneCached ? '#f59e0b' : '#71717a' }}>
-                    {isPreviewing ? 'Stop' : allCached ? 'Écouter 📦' : noneCached ? 'Écouter 🌐' : 'Écouter'}
+                  <span className="text-[9px] font-black uppercase" style={{ color: isPreviewing ? '#a78bfa' : anyCached ? '#4ade80' : '#f59e0b' }}>
+                    {isPreviewing ? 'Stop' : anyCached ? 'Écouter 📦' : 'Écouter 🌐'}
                   </span>
                 </button>
               );
@@ -534,8 +543,8 @@ export default function RecordScreen({
             </div>
           )}
 
-          {/* Punch In/Out */}
-          {(instUrl || vocalGuideUrl) && !isRecording && (
+          {/* Punch In/Out — visible dès que les stems sont en IndexedDB ou via réseau */}
+          {(instCached || vocalCached || instUrl || vocalGuideUrl) && !isRecording && (
             <div className="px-4 pb-3 flex items-center gap-2" style={{ borderTop: '1px solid #1a1a1a', paddingTop: 10 }}>
               <span className="text-[9px] text-zinc-600 font-black uppercase shrink-0">Punch</span>
               <div className="flex items-center gap-1 flex-1">
