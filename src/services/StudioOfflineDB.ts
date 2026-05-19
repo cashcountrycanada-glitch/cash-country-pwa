@@ -193,13 +193,16 @@ class StudioOfflineDatabase {
     const store = await this.tx(STORE_AUDIO);
     const rec   = await this.idbOp(store.get(key));
     if (!rec) return null;
+    // Vérifier que le buffer est valide
+    if (!rec.buffer || rec.buffer.byteLength === 0) {
+      console.error(`[DB] ❌ getAudio(${key}) buffer vide ou absent — entrée corrompue`);
+      return null;
+    }
     // Sur iOS Safari : forcer audio/mp4 TOUJOURS — webm/ogg/flac causent NotSupportedError.
-    // Sur desktop : respecter le type stocké.
     const storedType = rec.type || 'audio/mp4';
-    const type = isIOS()
-      ? 'audio/mp4'
-      : storedType;
-    return new Blob([rec.buffer], { type });
+    const type = isIOS() ? 'audio/mp4' : storedType;
+    const blob = new Blob([rec.buffer], { type });
+    return blob;
   }
 
   async hasAudio(key: string): Promise<boolean> {
@@ -215,10 +218,8 @@ class StudioOfflineDatabase {
       this.hasAudio(`inst_${songId}`),
       this.hasAudio(`vocal_${songId}`),
     ]);
-    // Resynchroniser le flag si désynchronisé
-    if (inst && vocal) {
-      await this.markSongCached(songId);
-    } else if (!inst && !vocal) {
+    // Marquer uncached seulement si vraiment rien — pas si partiel (upload manuel d'un seul stem)
+    if (!inst && !vocal) {
       await this.markSongUncached(songId);
     }
     return { inst, vocal, both: inst && vocal };

@@ -216,8 +216,14 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         const url = URL.createObjectURL(fixBlobType(blob));
         instBlobUrlRef.current = url;
         setInstUrl(url);
-        setInstCached(true);
-        console.log(`[Audio] inst CACHE: ${(blob.size/1024/1024).toFixed(1)} MB`);
+        // Vérifier que le blob est valide (pas vide ni corrompu)
+        if (blob.size < 1000) {
+          console.error(`[Audio] ❌ inst blob trop petit (${blob.size} bytes) — corrompu ou vide`);
+          setInstUrl(null); setInstCached(false);
+        } else {
+          setInstCached(true);
+          console.log(`[Audio] ✅ inst CACHE: ${(blob.size/1024/1024).toFixed(1)} MB | type=${blob.type} | key=inst_${selected.id}`);
+        }
         // Pré-décoder pour un play instantané (évite le délai fetch+decode au tap)
         blob.arrayBuffer().then(buf => {
           const ctx = (window as any).__warmContext as AudioContext | undefined;
@@ -272,7 +278,13 @@ export function useStudioAudio(selected: Song | null): AudioResult {
             (window as any).__vocalDecodedBuf = decoded;
           }).catch(() => {});
         }).catch(() => {});
-        console.log(`[Audio] vocal CACHE: ${(blob.size/1024/1024).toFixed(1)} MB`);
+        if (blob.size < 1000) {
+          console.error(`[Audio] ❌ vocal blob trop petit (${blob.size} bytes) — corrompu ou vide`);
+          setVocalGuideUrl(null); setVocalCached(false);
+        } else {
+          setVocalCached(true);
+          console.log(`[Audio] ✅ vocal CACHE: ${(blob.size/1024/1024).toFixed(1)} MB | type=${blob.type} | key=vocal_${selected.id}`);
+        }
       } else {
         // Pas en cache — vérifier si Mac joignable avant de streamer
         const macUrlV = ((window as any).__CC_MAC_URL as string) || '';

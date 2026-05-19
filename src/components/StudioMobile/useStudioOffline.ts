@@ -276,17 +276,24 @@ export function useStudioOffline(): OfflineResult {
   }, []);
 
   useEffect(() => {
-    // Charger les IDs connus, puis vérifier VRAIMENT si les blobs existent
+    // Charger les IDs — faire confiance à la liste existante comme base
+    // et vérifier en arrière-plan sans bloquer l'affichage
     studioOfflineDB.getCachedSongIds().then(async (ids) => {
-      if (ids.size === 0) { setCachedSongs(ids); return; }
-      // Vérifier chaque chanson marquée comme cachée
-      const verified = new Set<string>();
-      await Promise.all(Array.from(ids).map(async (songId) => {
-        const result = await studioOfflineDB.verifySongCache(songId).catch(() => ({ both: false }));
-        if (result.both) verified.add(songId);
-        // Si pas les deux blobs → markSongUncached est appelé dans verifySongCache automatiquement
-      }));
-      setCachedSongs(verified);
+      // Afficher immédiatement ce qu'on connaît
+      setCachedSongs(ids);
+      if (ids.size === 0) return;
+      // Vérification en arrière-plan — marquer ☁️ seulement si AUCUN blob (inst ni vocal)
+      // Une chanson avec juste l'inst ou juste le vocal uploadé reste considérée en cache
+      for (const songId of Array.from(ids)) {
+        studioOfflineDB.verifySongCache(songId)
+          .then(result => {
+            if (!result.inst && !result.vocal) {
+              // Vraiment vide — retirer du cache
+              setCachedSongs(prev => { const s = new Set(prev); s.delete(songId); return s; });
+            }
+          })
+          .catch(() => {}); // En cas d'erreur DB, garder comme caché
+      }
     }).catch(() => {});
     refreshStorage();
   }, []);
