@@ -22,7 +22,63 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.20';
+const BUILD_VERSION = 'v7.6.21';
+
+function ModeToggleButton() {
+  const [macUrl, setMacUrl] = React.useState<string>(() => (window as any).__CC_MAC_URL || '');
+  const isMacMode = macUrl.startsWith('http');
+
+  const toggle = () => {
+    if (isMacMode) {
+      // Passer en mode autonome → vider l'URL Mac
+      (window as any).__CC_MAC_URL = '';
+      setMacUrl('');
+    } else {
+      // Passer en mode Mac → récupérer l'URL sauvegardée dans env_config.js
+      const saved = (window as any).__CC_MAC_URL_SAVED || '';
+      if (saved.startsWith('http')) {
+        (window as any).__CC_MAC_URL = saved;
+        setMacUrl(saved);
+      } else {
+        // Demander l'IP du Mac
+        const ip = prompt('IP du Mac (ex: 192.168.1.100) :', '');
+        if (ip && ip.trim()) {
+          const url = `http://${ip.trim()}:3001`;
+          (window as any).__CC_MAC_URL = url;
+          (window as any).__CC_MAC_URL_SAVED = url;
+          setMacUrl(url);
+        }
+      }
+    }
+  };
+
+  // Sauvegarder l'URL Mac au démarrage si elle est configurée
+  React.useEffect(() => {
+    if (macUrl.startsWith('http')) {
+      (window as any).__CC_MAC_URL_SAVED = macUrl;
+    }
+  }, []);
+
+  return (
+    <button
+      onClick={toggle}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        padding: '6px 12px', borderRadius: 10, cursor: 'pointer',
+        background: isMacMode ? '#1e3a1e' : '#1a1a2e',
+        border: `1.5px solid ${isMacMode ? '#16a34a' : '#3b82f6'}`,
+        transition: 'all 0.2s',
+      }}>
+      <span style={{ fontSize: 13 }}>{isMacMode ? '💻' : '📡'}</span>
+      <span style={{
+        fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 1,
+        color: isMacMode ? '#4ade80' : '#60a5fa',
+      }}>
+        {isMacMode ? 'Mac' : 'Autonome'}
+      </span>
+    </button>
+  );
+}
 
 function DebugPanel({ debugLog, onClear }: { debugLog: string[]; onClear: () => void }) {
   const [minimized, setMinimized] = React.useState(true);
@@ -37,10 +93,13 @@ function DebugPanel({ debugLog, onClear }: { debugLog: string[]; onClear: () => 
       overflowY: minimized ? 'hidden' : 'auto',
     }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: minimized ? 0 : 4 }}>
-        <span style={{ color:'#f59e0b', fontSize:15, fontWeight:900, letterSpacing:2 }}>
-          {BUILD_VERSION}
-        </span>
-        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+        <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
+          <span style={{ color:'#f59e0b', fontSize:13, fontWeight:900, letterSpacing:2 }}>
+            {BUILD_VERSION}
+          </span>
+          <ModeToggleButton />
+        </div>
+        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
           {ctxRate && (
             <span style={{ color: rateColor, fontSize: 9, fontWeight: 900, fontFamily: 'monospace' }}>
               🎵 {ctxRate}Hz{ctxState === 'suspended' ? ' ⏸' : ''}
