@@ -112,14 +112,23 @@ function StemRow({ songId, type, fileName, inCache, importing, testingAudio, loa
 }
 
 function MacUrlConfig() {
-  const [macUrl, setMacUrl] = React.useState<string>(() => (window as any).__CC_MAC_URL || '');
+  const forceAutonomous = localStorage.getItem('cc_force_autonomous') === '1';
+  const [macUrl, setMacUrl] = React.useState<string>(() =>
+    forceAutonomous ? '' : ((window as any).__CC_MAC_URL || '')
+  );
   const [editing, setEditing] = React.useState(false);
   const [input, setInput] = React.useState('');
   const [testing, setTesting] = React.useState(false);
   const [testResult, setTestResult] = React.useState<'ok'|'fail'|null>(null);
   const [autoDetecting, setAutoDetecting] = React.useState(false);
+  const [autonomous, setAutonomous] = React.useState(forceAutonomous);
 
   React.useEffect(() => {
+    // Si mode autonome forcé → ne jamais auto-détecter le Mac
+    if (forceAutonomous) {
+      (window as any).__CC_MAC_URL = '';
+      return;
+    }
     const existing = (window as any).__CC_MAC_URL as string | undefined;
     if (existing && existing.startsWith('http')) return;
     setAutoDetecting(true);
@@ -130,7 +139,6 @@ function MacUrlConfig() {
         if (url && url.startsWith('http')) {
           const clean = url.replace(/\?.*$/, '').replace(/\/$/, '');
           (window as any).__CC_MAC_URL = clean;
-          // Aussi stocker version HTTP pour les téléchargements (pas besoin SSL)
           (window as any).__CC_MAC_HTTP_URL = clean.replace('https://', 'http://').replace(':8443', ':8080');
           localStorage.setItem('cc_mac_url', clean);
           setMacUrl(clean);
@@ -152,7 +160,8 @@ function MacUrlConfig() {
       if (res.ok) {
         (window as any).__CC_MAC_URL = url;
         localStorage.setItem('cc_mac_url', url);
-        setMacUrl(url); setTestResult('ok');
+        localStorage.removeItem('cc_force_autonomous');
+        setMacUrl(url); setTestResult('ok'); setAutonomous(false);
         setTimeout(() => { setEditing(false); setTestResult(null); }, 1500);
       } else { setTestResult('fail'); }
     } catch { setTestResult('fail'); }
@@ -162,7 +171,8 @@ function MacUrlConfig() {
   const clear = () => {
     (window as any).__CC_MAC_URL = '';
     localStorage.removeItem('cc_mac_url');
-    setMacUrl(''); setEditing(false);
+    localStorage.setItem('cc_force_autonomous', '1');
+    setMacUrl(''); setEditing(false); setAutonomous(true);
   };
 
   if (editing) return (

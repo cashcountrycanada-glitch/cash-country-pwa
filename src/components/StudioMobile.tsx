@@ -22,42 +22,31 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.23';
+const BUILD_VERSION = 'v7.6.24';
 
 function ModeToggleButton() {
-  const [macUrl, setMacUrl] = React.useState<string>(() => (window as any).__CC_MAC_URL || '');
-  const isMacMode = macUrl.startsWith('http');
+  const [autonomous, setAutonomous] = React.useState<boolean>(
+    () => localStorage.getItem('cc_force_autonomous') === '1'
+  );
 
   const toggle = () => {
-    if (isMacMode) {
-      // Passer en mode autonome → vider l'URL Mac
+    if (!autonomous) {
+      // → Mode autonome : bloquer l'auto-détection Mac
+      (window as any).__CC_MAC_URL_SAVED = (window as any).__CC_MAC_URL || localStorage.getItem('cc_mac_url') || '';
       (window as any).__CC_MAC_URL = '';
-      setMacUrl('');
+      localStorage.setItem('cc_force_autonomous', '1');
+      setAutonomous(true);
+      // Recharger pour que tout le code reparte sans URL Mac
+      window.location.reload();
     } else {
-      // Passer en mode Mac → récupérer l'URL sauvegardée dans env_config.js
-      const saved = (window as any).__CC_MAC_URL_SAVED || '';
-      if (saved.startsWith('http')) {
-        (window as any).__CC_MAC_URL = saved;
-        setMacUrl(saved);
-      } else {
-        // Demander l'IP du Mac
-        const ip = prompt('IP du Mac (ex: 192.168.1.100) :', '');
-        if (ip && ip.trim()) {
-          const url = `http://${ip.trim()}:3001`;
-          (window as any).__CC_MAC_URL = url;
-          (window as any).__CC_MAC_URL_SAVED = url;
-          setMacUrl(url);
-        }
-      }
+      // → Mode Mac : enlever le flag, recharger pour que l'auto-détection reparte
+      localStorage.removeItem('cc_force_autonomous');
+      const saved = (window as any).__CC_MAC_URL_SAVED || localStorage.getItem('cc_mac_url') || '';
+      if (saved) localStorage.setItem('cc_mac_url', saved);
+      setAutonomous(false);
+      window.location.reload();
     }
   };
-
-  // Sauvegarder l'URL Mac au démarrage si elle est configurée
-  React.useEffect(() => {
-    if (macUrl.startsWith('http')) {
-      (window as any).__CC_MAC_URL_SAVED = macUrl;
-    }
-  }, []);
 
   return (
     <button
@@ -65,16 +54,16 @@ function ModeToggleButton() {
       style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '6px 12px', borderRadius: 10, cursor: 'pointer',
-        background: isMacMode ? '#1e3a1e' : '#1a1a2e',
-        border: `1.5px solid ${isMacMode ? '#16a34a' : '#3b82f6'}`,
+        background: autonomous ? '#1a1a2e' : '#1e3a1e',
+        border: `1.5px solid ${autonomous ? '#3b82f6' : '#16a34a'}`,
         transition: 'all 0.2s',
       }}>
-      <span style={{ fontSize: 13 }}>{isMacMode ? '💻' : '📡'}</span>
+      <span style={{ fontSize: 13 }}>{autonomous ? '📡' : '💻'}</span>
       <span style={{
         fontSize: 10, fontWeight: 900, textTransform: 'uppercase', letterSpacing: 1,
-        color: isMacMode ? '#4ade80' : '#60a5fa',
+        color: autonomous ? '#60a5fa' : '#4ade80',
       }}>
-        {isMacMode ? 'Mac' : 'Autonome'}
+        {autonomous ? 'Autonome' : 'Mac'}
       </span>
     </button>
   );
