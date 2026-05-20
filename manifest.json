@@ -1,6 +1,6 @@
 {
   "name": "Cash Country Studio Mobile",
-  "short_name": "Studio Cash",
+  "short_name": "Cash Studio Mobile",
   "description": "Enregistrement vocal hors-ligne pour Cash Country Live",
   "start_url": "/?mode=studio",
   "scope": "/",

@@ -400,7 +400,7 @@ export default function SongSelector({
               <Mic size={16} className="text-white"/>
             </div>
             <div>
-              <p className="font-bebas text-2xl text-white tracking-widest leading-none">BUNKER STUDIO</p>
+              <p className="font-bebas text-2xl text-white tracking-widest leading-none">CASH STUDIO MOBILE</p>
               <p className="text-[9px] text-zinc-600 font-black uppercase tracking-widest">Multi-piste mobile</p>
             </div>
           </div>

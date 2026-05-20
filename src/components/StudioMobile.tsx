@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.21';
+const BUILD_VERSION = 'v7.6.23';
 
 function ModeToggleButton() {
   const [macUrl, setMacUrl] = React.useState<string>(() => (window as any).__CC_MAC_URL || '');
