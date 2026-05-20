@@ -51,6 +51,8 @@ window.process.env.OPENROUTER_API_KEY = "sk-or-v1-5302694d6bf3d0a5cc6225ab414c4f
 // Vide = pas de Mac configuré → le bouton vert demande la saisie.
 // Peut être surchargé par l'utilisateur via localStorage('cc_mac_url').
 window.__CC_MAC_URL = (function() {
+  // Mode autonome forcé → ne jamais restaurer l'URL Mac
+  if (localStorage.getItem('cc_force_autonomous') === '1') return '';
   const stored = localStorage.getItem('cc_mac_url');
   if (stored && stored.startsWith('http')) {
     const clean = stored.replace(/\/$/, '');

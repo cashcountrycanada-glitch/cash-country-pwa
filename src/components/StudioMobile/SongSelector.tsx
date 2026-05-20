@@ -217,6 +217,9 @@ function MacUrlConfig() {
     </div>
   );
 
+  // En mode autonome → ne rien afficher du tout (pas de bandeau Mac)
+  if (autonomous) return null;
+
   return (
     <div className="mx-5 mt-4 bg-amber-950/30 border border-amber-600/30 rounded-2xl px-4 py-3 flex items-center gap-3">
       <span className="text-xl shrink-0">💻</span>
