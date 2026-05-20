@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.27';
+const BUILD_VERSION = 'v7.6.28';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -439,9 +439,10 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       }
     };
 
-    if (inst && audio.instUrl) {
-      if (!inst.src || inst.src !== audio.instUrl) {
-        inst.src = audio.instUrl;
+    if (inst && (audio.instUrl || inst.src)) {
+      const srcToUse = audio.instUrl || inst.src;
+      if (inst.src !== srcToUse) {
+        inst.src = srcToUse;
         inst.load();
         inst.addEventListener('canplay', () => playEl(inst, 'inst'), { once: true });
       } else {

@@ -499,15 +499,17 @@ export default function RecordScreen({
                   : null
             }
             {/* Bouton Écouter — toujours visible si stems en IndexedDB (instCached/vocalCached)
-                 ou si URL réseau disponible. JAMAIS conditionnel sur instUrl seul. */}
-            {(instCached || vocalCached || instUrl || vocalGuideUrl) && !isRecording && !isSaving && (() => {
-              const allCached = instCached && (!vocalGuideUrl || vocalCached) && (!instUrl || instCached);
+                 ou si URL réseau disponible. Désactivé pendant REC/saving mais jamais caché. */}
+            {(instCached || vocalCached || instUrl || vocalGuideUrl) && (() => {
               const anyCached = instCached || vocalCached;
+              const disabled  = isRecording || isSaving;
               return (
                 <button
-                  onClick={onPreviewStems}
-                  className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded-lg active:scale-90 transition-all"
+                  onClick={disabled ? undefined : onPreviewStems}
+                  disabled={disabled}
+                  className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded-lg transition-all"
                   style={{
+                    opacity: disabled ? 0.35 : 1,
                     background: isPreviewing ? '#7c3aed20' : anyCached ? '#0f2a0f' : '#2a1800',
                     border: `1px solid ${isPreviewing ? '#7c3aed80' : anyCached ? '#16a34a60' : '#d9770660'}`,
                   }}>
