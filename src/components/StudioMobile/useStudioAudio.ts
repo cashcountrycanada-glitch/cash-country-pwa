@@ -223,6 +223,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     setInstLoading(true);
 
     const loadInst = async () => {
+      const dbLog = (msg: string) => { console.log(msg); (window as any).__addLog?.(msg); };
       const key = `inst_${selected.id}`;
       let blob = await studioOfflineDB.getAudio(key).catch(() => null);
 
@@ -241,7 +242,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         instBlobUrlRef.current = url;
         setInstUrl(url);
         setInstCached(true);
-        console.log(`[Audio] ✅ inst IndexedDB: ${(blob.size/1024/1024).toFixed(1)}MB type=${blob.type} key=${key}`);
+        dbLog(`[Audio] ✅ inst: ${(blob.size/1024/1024).toFixed(1)}MB type=${blob.type}`);
         // Pré-décoder pour play instantané
         blob.arrayBuffer().then(buf => {
           const ctx = (window as any).__warmContext as AudioContext | undefined;
@@ -252,7 +253,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         }).catch(() => {});
       } else {
         // ❌ Pas en IndexedDB — fallback réseau Mac
-        console.log(`[Audio] ℹ️ ${key} absent IndexedDB (blob=${blob?.size ?? 'null'}) — fallback Mac`);
+        dbLog(`[Audio] ❌ inst absent IndexedDB (size=${blob?.size ?? 'null'}) key=${key}`);
         if (instBlobUrlRef.current) { URL.revokeObjectURL(instBlobUrlRef.current); instBlobUrlRef.current = null; }
         const inst = selected.versions?.find((v: any) =>
           v.trackType === TrackType.STEM_INSTRUMENTAL ||
@@ -292,6 +293,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     setVocalLoading(true);
 
     const loadVocal = async () => {
+      const dbLog = (msg: string) => { console.log(msg); (window as any).__addLog?.(msg); };
       const key = `vocal_${selected.id}`;
       let blob = await studioOfflineDB.getAudio(key).catch(() => null);
 
@@ -310,7 +312,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         vocalBlobUrlRef.current = vurl;
         setVocalGuideUrl(vurl);
         setVocalCached(true);
-        console.log(`[Audio] ✅ vocal IndexedDB: ${(blob.size/1024/1024).toFixed(1)}MB type=${blob.type} key=${key}`);
+        dbLog(`[Audio] ✅ vocal: ${(blob.size/1024/1024).toFixed(1)}MB type=${blob.type}`);
         blob.arrayBuffer().then(buf => {
           const ctx = (window as any).__warmContext as AudioContext | undefined;
           if (ctx) ctx.decodeAudioData(buf).then(d => {
@@ -320,7 +322,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         }).catch(() => {});
       } else {
         // ❌ Pas en IndexedDB — fallback réseau Mac
-        console.log(`[Audio] ℹ️ ${key} absent IndexedDB (blob=${blob?.size ?? 'null'}) — fallback Mac`);
+        dbLog(`[Audio] ❌ vocal absent IndexedDB (size=${blob?.size ?? 'null'}) key=${key}`);
         if (vocalBlobUrlRef.current) { URL.revokeObjectURL(vocalBlobUrlRef.current); vocalBlobUrlRef.current = null; }
         const vocal = selected.versions?.find((v: any) => v.trackType === TrackType.STEM_VOCAL);
         const macUrlV = ((window as any).__CC_MAC_URL as string) || '';
