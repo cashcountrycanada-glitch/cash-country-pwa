@@ -222,52 +222,60 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     let cancelled = false;
     setInstLoading(true);
 
-    studioOfflineDB.getAudio(`inst_${selected.id}`)
-      .then(blob => {
-        if (cancelled) return;
-        if (blob && blob.size >= 1000) {
-          // ✅ IndexedDB — blob valide
-          if (instBlobUrlRef.current) URL.revokeObjectURL(instBlobUrlRef.current);
-          const url = URL.createObjectURL(fixBlobType(blob));
-          instBlobUrlRef.current = url;
-          setInstUrl(url);
-          setInstCached(true);
-          console.log(`[Audio] ✅ inst IndexedDB: ${(blob.size/1024/1024).toFixed(1)}MB | key=inst_${selected.id}`);
-          // Pré-décoder pour play instantané
-          blob.arrayBuffer().then(buf => {
-            const ctx = (window as any).__warmContext as AudioContext | undefined;
-            if (ctx) ctx.decodeAudioData(buf).then(d => {
-              instDecodedBufRef.current = d;
-              (window as any).__instDecodedBuf = d;
-            }).catch(() => {});
+    const loadInst = async () => {
+      const key = `inst_${selected.id}`;
+      let blob = await studioOfflineDB.getAudio(key).catch(() => null);
+
+      // Retry une fois si null — iOS peut avoir besoin d'un 2e essai après init DB
+      if (!blob) {
+        await new Promise(r => setTimeout(r, 300));
+        blob = await studioOfflineDB.getAudio(key).catch(() => null);
+      }
+
+      if (cancelled) return;
+
+      if (blob && blob.size >= 1000) {
+        // ✅ IndexedDB — blob valide
+        if (instBlobUrlRef.current) URL.revokeObjectURL(instBlobUrlRef.current);
+        const url = URL.createObjectURL(fixBlobType(blob));
+        instBlobUrlRef.current = url;
+        setInstUrl(url);
+        setInstCached(true);
+        console.log(`[Audio] ✅ inst IndexedDB: ${(blob.size/1024/1024).toFixed(1)}MB type=${blob.type} key=${key}`);
+        // Pré-décoder pour play instantané
+        blob.arrayBuffer().then(buf => {
+          const ctx = (window as any).__warmContext as AudioContext | undefined;
+          if (ctx) ctx.decodeAudioData(buf).then(d => {
+            instDecodedBufRef.current = d;
+            (window as any).__instDecodedBuf = d;
           }).catch(() => {});
+        }).catch(() => {});
+      } else {
+        // ❌ Pas en IndexedDB — fallback réseau Mac
+        console.log(`[Audio] ℹ️ ${key} absent IndexedDB (blob=${blob?.size ?? 'null'}) — fallback Mac`);
+        if (instBlobUrlRef.current) { URL.revokeObjectURL(instBlobUrlRef.current); instBlobUrlRef.current = null; }
+        const inst = selected.versions?.find((v: any) =>
+          v.trackType === TrackType.STEM_INSTRUMENTAL ||
+          v.trackType === 'Instrumental Stem (Export ZIP)' ||
+          v.trackType === 'Instrumentale Pure (Copie IA)'
+        );
+        const macUrl = ((window as any).__CC_MAC_URL as string) || '';
+        if (inst?.fileName && macUrl.startsWith('http')) {
+          fetch(`${macUrl}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
+            .then(r => {
+              if (cancelled) return;
+              if (r.ok) { setInstUrl(getMediaUrl(inst.fileName!)); setInstCached(false); }
+              else { setInstUrl(null); setInstCached(false); }
+            })
+            .catch(() => { if (!cancelled) { setInstUrl(null); setInstCached(false); } });
         } else {
-          // ❌ Pas en IndexedDB — fallback réseau Mac
-          if (instBlobUrlRef.current) { URL.revokeObjectURL(instBlobUrlRef.current); instBlobUrlRef.current = null; }
-          const inst = selected.versions?.find((v: any) =>
-            v.trackType === TrackType.STEM_INSTRUMENTAL ||
-            v.trackType === 'Instrumental Stem (Export ZIP)' ||
-            v.trackType === 'Instrumentale Pure (Copie IA)'
-          );
-          const macUrl = ((window as any).__CC_MAC_URL as string) || '';
-          if (inst?.fileName && macUrl.startsWith('http')) {
-            fetch(`${macUrl}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
-              .then(r => {
-                if (cancelled) return;
-                if (r.ok) { setInstUrl(getMediaUrl(inst.fileName!)); setInstCached(false); }
-                else { setInstUrl(null); setInstCached(false); }
-              })
-              .catch(() => { if (!cancelled) { setInstUrl(null); setInstCached(false); } });
-          } else {
-            setInstUrl(null); setInstCached(false);
-            console.log(`[Audio] ℹ️ inst_${selected.id} absent d'IndexedDB — Mac non dispo ou non configuré`);
-          }
+          setInstUrl(null); setInstCached(false);
         }
-      })
-      .catch(() => {
-        if (!cancelled) { setInstUrl(null); setInstCached(false); }
-        console.error('[Audio] ❌ Erreur lecture IndexedDB inst');
-      })
+      }
+    };
+
+    loadInst()
+      .catch(() => { if (!cancelled) { setInstUrl(null); setInstCached(false); } })
       .finally(() => { if (!cancelled) setInstLoading(false); });
 
     return () => { cancelled = true; };
@@ -283,47 +291,55 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     let cancelled = false;
     setVocalLoading(true);
 
-    studioOfflineDB.getAudio(`vocal_${selected.id}`)
-      .then(blob => {
-        if (cancelled) return;
-        if (blob && blob.size >= 1000) {
-          // ✅ IndexedDB — blob valide
-          if (vocalBlobUrlRef.current) URL.revokeObjectURL(vocalBlobUrlRef.current);
-          const vurl = URL.createObjectURL(fixBlobType(blob));
-          vocalBlobUrlRef.current = vurl;
-          setVocalGuideUrl(vurl);
-          setVocalCached(true);
-          console.log(`[Audio] ✅ vocal IndexedDB: ${(blob.size/1024/1024).toFixed(1)}MB | key=vocal_${selected.id}`);
-          blob.arrayBuffer().then(buf => {
-            const ctx = (window as any).__warmContext as AudioContext | undefined;
-            if (ctx) ctx.decodeAudioData(buf).then(d => {
-              vocalDecodedBufRef.current = d;
-              (window as any).__vocalDecodedBuf = d;
-            }).catch(() => {});
+    const loadVocal = async () => {
+      const key = `vocal_${selected.id}`;
+      let blob = await studioOfflineDB.getAudio(key).catch(() => null);
+
+      // Retry une fois si null — iOS peut avoir besoin d'un 2e essai après init DB
+      if (!blob) {
+        await new Promise(r => setTimeout(r, 300));
+        blob = await studioOfflineDB.getAudio(key).catch(() => null);
+      }
+
+      if (cancelled) return;
+
+      if (blob && blob.size >= 1000) {
+        // ✅ IndexedDB — blob valide
+        if (vocalBlobUrlRef.current) URL.revokeObjectURL(vocalBlobUrlRef.current);
+        const vurl = URL.createObjectURL(fixBlobType(blob));
+        vocalBlobUrlRef.current = vurl;
+        setVocalGuideUrl(vurl);
+        setVocalCached(true);
+        console.log(`[Audio] ✅ vocal IndexedDB: ${(blob.size/1024/1024).toFixed(1)}MB type=${blob.type} key=${key}`);
+        blob.arrayBuffer().then(buf => {
+          const ctx = (window as any).__warmContext as AudioContext | undefined;
+          if (ctx) ctx.decodeAudioData(buf).then(d => {
+            vocalDecodedBufRef.current = d;
+            (window as any).__vocalDecodedBuf = d;
           }).catch(() => {});
+        }).catch(() => {});
+      } else {
+        // ❌ Pas en IndexedDB — fallback réseau Mac
+        console.log(`[Audio] ℹ️ ${key} absent IndexedDB (blob=${blob?.size ?? 'null'}) — fallback Mac`);
+        if (vocalBlobUrlRef.current) { URL.revokeObjectURL(vocalBlobUrlRef.current); vocalBlobUrlRef.current = null; }
+        const vocal = selected.versions?.find((v: any) => v.trackType === TrackType.STEM_VOCAL);
+        const macUrlV = ((window as any).__CC_MAC_URL as string) || '';
+        if (vocal?.fileName && macUrlV.startsWith('http')) {
+          fetch(`${macUrlV}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
+            .then(r => {
+              if (cancelled) return;
+              if (r.ok) { setVocalGuideUrl(getMediaUrl(vocal.fileName!)); setVocalCached(false); }
+              else { setVocalGuideUrl(null); setVocalCached(false); }
+            })
+            .catch(() => { if (!cancelled) { setVocalGuideUrl(null); setVocalCached(false); } });
         } else {
-          // ❌ Pas en IndexedDB — fallback réseau Mac
-          if (vocalBlobUrlRef.current) { URL.revokeObjectURL(vocalBlobUrlRef.current); vocalBlobUrlRef.current = null; }
-          const vocal = selected.versions?.find((v: any) => v.trackType === TrackType.STEM_VOCAL);
-          const macUrlV = ((window as any).__CC_MAC_URL as string) || '';
-          if (vocal?.fileName && macUrlV.startsWith('http')) {
-            fetch(`${macUrlV}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
-              .then(r => {
-                if (cancelled) return;
-                if (r.ok) { setVocalGuideUrl(getMediaUrl(vocal.fileName!)); setVocalCached(false); }
-                else { setVocalGuideUrl(null); setVocalCached(false); }
-              })
-              .catch(() => { if (!cancelled) { setVocalGuideUrl(null); setVocalCached(false); } });
-          } else {
-            setVocalGuideUrl(null); setVocalCached(false);
-            console.log(`[Audio] ℹ️ vocal_${selected.id} absent d'IndexedDB — Mac non dispo ou non configuré`);
-          }
+          setVocalGuideUrl(null); setVocalCached(false);
         }
-      })
-      .catch(() => {
-        if (!cancelled) { setVocalGuideUrl(null); setVocalCached(false); }
-        console.error('[Audio] ❌ Erreur lecture IndexedDB vocal');
-      })
+      }
+    };
+
+    loadVocal()
+      .catch(() => { if (!cancelled) { setVocalGuideUrl(null); setVocalCached(false); } })
       .finally(() => { if (!cancelled) setVocalLoading(false); });
 
     return () => { cancelled = true; };

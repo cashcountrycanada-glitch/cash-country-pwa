@@ -92,12 +92,45 @@ class StudioOfflineDatabase {
 
   private async getDB(): Promise<IDBDatabase> {
     if (!this.db) await this.init();
-    return this.db!;
+    if (!this.db) throw new Error('[StudioDB] DB non disponible après init');
+    return this.db;
   }
 
   private async tx(store: string, mode: IDBTransactionMode = 'readonly') {
     const db = await this.getDB();
     return db.transaction([store], mode).objectStore(store);
+  }
+
+  // getAudio avec retry complet de la transaction (iOS peut tuer la connexion mid-op)
+  async getAudio(key: string): Promise<Blob | null> {
+    const attempt = async (): Promise<Blob | null> => {
+      const store = await this.tx(STORE_AUDIO);
+      const rec   = await this.idbOp(store.get(key));
+      if (!rec) return null;
+      if (!rec.buffer || rec.buffer.byteLength === 0) {
+        console.error(`[DB] ❌ getAudio(${key}) buffer vide — entrée corrompue`);
+        return null;
+      }
+      // Retourner le type ORIGINAL stocké — fixBlobType dans useStudioAudio décide
+      const storedType = rec.type || 'audio/flac';
+      return new Blob([rec.buffer], { type: storedType });
+    };
+
+    try {
+      return await attempt();
+    } catch (e) {
+      // Retry après reset de la connexion DB
+      console.warn(`[DB] getAudio(${key}) échoué, retry...`, e);
+      this.db = null;
+      this.initPromise = null;
+      await new Promise(r => setTimeout(r, 200));
+      try {
+        return await attempt();
+      } catch (e2) {
+        console.error(`[DB] getAudio(${key}) échec définitif:`, e2);
+        return null;
+      }
+    }
   }
 
   private idbOp<T>(req: IDBRequest<T>): Promise<T> {
@@ -187,22 +220,6 @@ class StudioOfflineDatabase {
       }
       throw e;
     }
-  }
-
-  async getAudio(key: string): Promise<Blob | null> {
-    const store = await this.tx(STORE_AUDIO);
-    const rec   = await this.idbOp(store.get(key));
-    if (!rec) return null;
-    // Vérifier que le buffer est valide
-    if (!rec.buffer || rec.buffer.byteLength === 0) {
-      console.error(`[DB] ❌ getAudio(${key}) buffer vide ou absent — entrée corrompue`);
-      return null;
-    }
-    // Sur iOS Safari : forcer audio/mp4 TOUJOURS — webm/ogg/flac causent NotSupportedError.
-    const storedType = rec.type || 'audio/mp4';
-    const type = isIOS() ? 'audio/mp4' : storedType;
-    const blob = new Blob([rec.buffer], { type });
-    return blob;
   }
 
   async hasAudio(key: string): Promise<boolean> {

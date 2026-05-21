@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.33';
+const BUILD_VERSION = 'v7.6.35';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -155,8 +155,11 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   };
   (window as any).__addLog = addLog;
 
-  // Brancher addLog dans le hook offline dès le premier render
-  useEffect(() => { offline.setOfflineLog(addLog); });
+  // Pré-initialiser IndexedDB dès le premier render — évite le délai au premier getAudio
+  // iOS peut prendre 200-500ms pour ouvrir la DB, ce qui cause un faux "blob absent"
+  useEffect(() => {
+    studioOfflineDB.init().catch(() => {});
+  }, []);
 
   // Forcer la mise à jour du SW immédiatement sans attendre fermeture des onglets
   useEffect(() => {
