@@ -229,17 +229,19 @@ class StudioOfflineDatabase {
     return !!rec && !!rec.buffer && rec.buffer.byteLength > 1000;
   }
 
+
+
   async listAllAudioKeys(): Promise<string[]> {
+    // UNE seule transaction getAll() — lit clés ET vérifie buffer en une passe
+    // Ne pas faire de boucle de transactions séparées → crash iOS
     const store = await this.tx(STORE_AUDIO);
-    // Lire toutes les entrées pour vérifier que le contenu est valide
-    const allKeys = await this.idbOp(store.getAllKeys()) as string[];
-    const result: string[] = [];
-    for (const key of allKeys) {
-      const rec = await this.idbOp((await this.tx(STORE_AUDIO)).get(key));
-      if (rec?.buffer && rec.buffer.byteLength > 1000) result.push(key);
-      else result.push(`${key} ⚠️VIDE`);
-    }
-    return result;
+    const all = await this.idbOp(store.getAll()) as Array<{key?: string; buffer?: ArrayBuffer; type?: string}>;
+    const keys = await this.idbOp((await this.tx(STORE_AUDIO)).getAllKeys()) as string[];
+    return keys.map((k, i) => {
+      const buf = all[i]?.buffer;
+      const ok = buf && buf.byteLength > 1000;
+      return ok ? k : `${k} ⚠️VIDE`;
+    });
   }
 
   // Vérification RÉELLE du cache — vérifie que les blobs audio existent vraiment

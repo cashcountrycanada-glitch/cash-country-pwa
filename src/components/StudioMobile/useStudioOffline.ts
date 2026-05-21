@@ -160,7 +160,7 @@ export function useStudioOffline(): OfflineResult {
   const [cacheHealth, setCacheHealth]     = useState<'ok'|'incomplete'|'checking'|'repairing'>('checking');
   const [missingModules, setMissingModules] = useState(0);
   const [repairProgress, setRepairProgress] = useState(0);
-
+  const [purgedSongs, setPurgedSongs]     = useState<Array<{songId: string; missingInst: boolean; missingVocal: boolean}>>([]);
   // Écouter les messages du SW (CACHE_STATUS, REPAIR_*)
   useEffect(() => {
     const handler = (e: MessageEvent) => {

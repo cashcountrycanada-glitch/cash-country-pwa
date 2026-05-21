@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.42';
+const BUILD_VERSION = 'v7.6.44';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -155,18 +155,23 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   };
   (window as any).__addLog = addLog;
 
-  // Pré-initialiser IndexedDB ET lister toutes les clés audio pour diagnostic
+  // Pré-initialiser IndexedDB dès le premier render
+  // Lister les clés après 2s pour diagnostic — sans bloquer l'init
   useEffect(() => {
     studioOfflineDB.init().then(() => {
-      studioOfflineDB.listAllAudioKeys().then(keys => {
-        const dbLog = (window as any).__addLog;
-        if (keys.length === 0) {
-          dbLog?.('[DB] ⚠️ IndexedDB audio: VIDE — aucun stem stocké');
-        } else {
-          dbLog?.(`[DB] 📦 ${keys.length} entrées IndexedDB audio:`);
-          keys.slice(0, 20).forEach(k => dbLog?.(`  • ${k}`));
-        }
-      }).catch(e => (window as any).__addLog?.(`[DB] ❌ listAllAudioKeys: ${e}`));
+      setTimeout(() => {
+        studioOfflineDB.listAllAudioKeys().then(keys => {
+          const dbLog = (window as any).__addLog;
+          if (keys.length === 0) {
+            dbLog?.('[DB] ⚠️ IndexedDB VIDE — aucun stem stocké');
+          } else {
+            const vides = keys.filter(k => k.includes('⚠️VIDE'));
+            const ok    = keys.filter(k => !k.includes('⚠️VIDE'));
+            dbLog?.(`[DB] 📦 ${ok.length} stems OK, ${vides.length} purgés par iOS`);
+            if (vides.length > 0) vides.forEach(k => dbLog?.(`  ❌ ${k}`));
+          }
+        }).catch(() => {});
+      }, 2000); // délai pour ne pas interférer avec le chargement initial
     }).catch(() => {});
   }, []);
 
