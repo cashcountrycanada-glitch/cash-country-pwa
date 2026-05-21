@@ -37,6 +37,7 @@ interface OfflineResult {
   cacheError:      CacheError | null;
   storage:         StorageInfo | null;
   storageWarning:  boolean;
+  storageCritical: boolean;
   cacheHealth:     'ok' | 'incomplete' | 'checking' | 'repairing';
   missingModules:  number;
   repairProgress:  number; // 0-100
@@ -218,7 +219,8 @@ export function useStudioOffline(): OfflineResult {
     if (sw) { setCacheHealth('repairing'); sw.postMessage({ type: 'REPAIR_CACHE' }); }
     else window.location.reload();
   };
-  const storageWarning = storage ? storage.pct > 90 : false;
+  const storageWarning = storage ? storage.pct > 60 : false;
+  const storageCritical = storage ? storage.pct > 85 : false;
   const cachedCount    = cachedSongs.size;
 
   const refreshStorage = useCallback(async () => {
@@ -484,7 +486,7 @@ export function useStudioOffline(): OfflineResult {
   return {
     isOnline, isInstalled, httpsUrl, installPrompt,
     cachedSongs, cachedCount, cachingId, cacheProgress, cacheError,
-    storage, storageWarning,
+    storage, storageWarning, storageCritical,
     cacheHealth, missingModules, repairProgress,
     installPWA, cacheSongForOffline, forceRefreshSong,
     uncacheSong, clearAllCache, clearCacheError, repairCache,

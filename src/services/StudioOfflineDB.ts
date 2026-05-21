@@ -225,14 +225,21 @@ class StudioOfflineDatabase {
   async hasAudio(key: string): Promise<boolean> {
     const store = await this.tx(STORE_AUDIO);
     const rec   = await this.idbOp(store.get(key));
-    return !!rec;
+    // Vérifier que le buffer existe ET n'est pas vide (iOS peut garder la clé mais purger le contenu)
+    return !!rec && !!rec.buffer && rec.buffer.byteLength > 1000;
   }
 
   async listAllAudioKeys(): Promise<string[]> {
     const store = await this.tx(STORE_AUDIO);
-    const req   = store.getAllKeys();
-    const keys  = await this.idbOp(req);
-    return (keys as string[]);
+    // Lire toutes les entrées pour vérifier que le contenu est valide
+    const allKeys = await this.idbOp(store.getAllKeys()) as string[];
+    const result: string[] = [];
+    for (const key of allKeys) {
+      const rec = await this.idbOp((await this.tx(STORE_AUDIO)).get(key));
+      if (rec?.buffer && rec.buffer.byteLength > 1000) result.push(key);
+      else result.push(`${key} ⚠️VIDE`);
+    }
+    return result;
   }
 
   // Vérification RÉELLE du cache — vérifie que les blobs audio existent vraiment

@@ -257,7 +257,8 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         if (instBlobUrlRef.current) { URL.revokeObjectURL(instBlobUrlRef.current); instBlobUrlRef.current = null; }
         const inst = selected.versions?.find((v: any) =>
           v.trackType === TrackType.STEM_INSTRUMENTAL ||
-          v.trackType === 'Instrumental Stem (Export ZIP)' ||
+          v.trackType === 'Instrumental Stem (Export ZIP)'
+        ) || selected.versions?.find((v: any) =>
           v.trackType === 'Instrumentale Pure (Copie IA)'
         );
         const macUrl = ((window as any).__CC_MAC_URL as string) || '';

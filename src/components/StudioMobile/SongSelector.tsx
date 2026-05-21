@@ -33,6 +33,7 @@ interface Props {
   cacheError:     CacheError | null;
   storage:        StorageInfo | null;
   storageWarning: boolean;
+  storageCritical: boolean;
   pendingCount:   number;
   cacheHealth:    'ok' | 'incomplete' | 'checking' | 'repairing';
   missingModules: number;
@@ -242,7 +243,7 @@ function MacUrlConfig() {
 
 export default function SongSelector({
   songs, isOnline, isInstalled, httpsUrl, cachedSongs, cachedCount,
-  cachingId, cacheProgress, cacheError, storage, storageWarning, pendingCount,
+  cachingId, cacheProgress, cacheError, storage, storageWarning, storageCritical, pendingCount,
   cacheHealth, missingModules, repairProgress,
   onSelect, onInstall, onCache, onForceRefresh, onImportFile, onUncache, onClearAll,
   onViewRecordings, onClearCacheError, onRepairCache,
@@ -505,53 +506,78 @@ export default function SongSelector({
 
       {/* Panneau de stockage iPhone */}
       {storage && (
-        <div className={`mx-5 mt-3 rounded-2xl px-4 py-3 border ${storageWarning ? 'bg-red-950/30 border-red-600/40' : 'bg-zinc-900/40 border-zinc-800'}`}>
+        <div className={`mx-5 mt-3 rounded-2xl px-4 py-3 border ${storageCritical ? 'bg-red-950/40 border-red-500/50' : storageWarning ? 'bg-amber-950/30 border-amber-600/40' : 'bg-zinc-900/40 border-zinc-800'}`}>
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-1.5">
-              {storageWarning ? <AlertTriangle size={11} className="text-red-400"/> : <HardDrive size={11} className="text-zinc-500"/>}
-              <p className={`text-[10px] font-black uppercase tracking-widest ${storageWarning ? 'text-red-400' : 'text-zinc-500'}`}>
-                {storageWarning ? '⚠️ Stockage presque plein' : 'Stockage iPhone'}
+              {storageCritical ? <AlertTriangle size={11} className="text-red-400"/> : storageWarning ? <AlertTriangle size={11} className="text-amber-400"/> : <HardDrive size={11} className="text-zinc-500"/>}
+              <p className={`text-[10px] font-black uppercase tracking-widest ${storageCritical ? 'text-red-400' : storageWarning ? 'text-amber-400' : 'text-zinc-500'}`}>
+                {storageCritical ? '🚨 CRITIQUE — iOS va purger' : storageWarning ? '⚠️ Stockage serré' : 'Stockage stems'}
               </p>
             </div>
-            <p className={`text-[10px] font-black ${storageWarning ? 'text-red-400' : 'text-zinc-400'}`}>
+            <p className={`text-[10px] font-black ${storageCritical ? 'text-red-400' : storageWarning ? 'text-amber-400' : 'text-zinc-400'}`}>
               {formatMB(storage.quota - storage.used)} libre
             </p>
           </div>
 
-          {/* Barre principale iPhone */}
-          <div className="h-2 bg-zinc-800 rounded-full overflow-hidden mb-2">
+          {/* Barre principale */}
+          <div className="h-2.5 bg-zinc-800 rounded-full overflow-hidden mb-2">
             <div
-              className={`h-full rounded-full transition-all duration-500 ${storageWarning ? 'bg-red-500' : storage.pct > 70 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+              className={`h-full rounded-full transition-all duration-500 ${storageCritical ? 'bg-red-500' : storageWarning ? 'bg-amber-500' : storage.pct > 40 ? 'bg-blue-500' : 'bg-emerald-500'}`}
               style={{ width: `${Math.min(storage.pct, 100)}%` }}/>
           </div>
 
           {/* Détail chiffres */}
           <div className="flex justify-between text-[9px] font-black mb-2">
-            <span className="text-zinc-600">App: <span className="text-zinc-400">{formatMB(storage.used)}</span></span>
+            <span className="text-zinc-600">Utilisé: <span className="text-zinc-300">{formatMB(storage.used)}</span></span>
+            <span className={`font-black ${storageCritical ? 'text-red-400' : storageWarning ? 'text-amber-400' : 'text-zinc-500'}`}>{storage.pct}%</span>
             <span className="text-zinc-600">Quota: <span className="text-zinc-400">{formatMB(storage.quota)}</span></span>
-            <span className="text-zinc-600">Libre: <span className={storageWarning ? 'text-red-400' : 'text-emerald-400'}>{formatMB(storage.quota - storage.used)}</span></span>
           </div>
 
-          {/* Conseil si faible espace */}
-          {storageWarning && (
-            <div className="bg-red-950/40 rounded-xl px-3 py-2 mb-2">
-              <p className="text-[9px] text-red-300 leading-relaxed">
-                💡 Libère de l'espace dans <span className="font-black">Réglages → Général → Stockage iPhone</span> pour éviter les blocages durant l'enregistrement.
+          {/* Estimation chansons restantes */}
+          {(() => {
+            const avgSongMB = storage.used > 0 && cachedSongs.size > 0
+              ? storage.used / cachedSongs.size
+              : 80 * 1024 * 1024;
+            const freeMB = storage.quota - storage.used;
+            const songsLeft = Math.floor(freeMB / avgSongMB);
+            return (
+              <p className={`text-[9px] font-black mb-2 ${storageCritical ? 'text-red-300' : storageWarning ? 'text-amber-300' : 'text-zinc-500'}`}>
+                {cachedSongs.size} chanson{cachedSongs.size > 1 ? 's' : ''} en cache
+                {songsLeft > 0
+                  ? ` · ~${songsLeft} de plus possible${songsLeft > 1 ? 's' : ''}`
+                  : ' · Plus de place'}
+                {storageCritical ? ' 🚨 iOS risque de purger !' : ''}
+              </p>
+            );
+          })()}
+
+          {/* Avertissements */}
+          {storageCritical && (
+            <div className="bg-red-950/60 rounded-xl px-3 py-2 mb-2 border border-red-500/30">
+              <p className="text-[9px] text-red-200 leading-relaxed font-black">
+                🚨 iOS purge les stems automatiquement quand le stockage est plein. Libère de l'espace ou supprime des chansons.
+              </p>
+            </div>
+          )}
+          {storageWarning && !storageCritical && (
+            <div className="bg-amber-950/40 rounded-xl px-3 py-2 mb-2">
+              <p className="text-[9px] text-amber-200 leading-relaxed">
+                ⚠️ iOS peut commencer à purger des stems. Évite de télécharger plus de chansons pour l'instant.
               </p>
             </div>
           )}
 
           {/* Boutons libérer */}
           <div className="flex gap-2">
-            {storageWarning && (
-              <button onClick={onClearAll} className="flex-1 py-1.5 bg-red-900/30 border border-red-600/40 rounded-xl text-[10px] font-black text-red-400 uppercase active:scale-95">
-                🗑 Vider cache ({cachedSongs.size} chansons)
+            {(storageWarning || storageCritical) && (
+              <button onClick={onClearAll} className={`flex-1 py-1.5 rounded-xl text-[10px] font-black uppercase active:scale-95 ${storageCritical ? 'bg-red-900/50 border border-red-500/50 text-red-300' : 'bg-amber-900/30 border border-amber-600/40 text-amber-400'}`}>
+                🗑 Vider cache ({cachedSongs.size})
               </button>
             )}
             <button
               onClick={async () => { await studioOfflineDB.clearOldRecordings?.(5); }}
               className="flex-1 py-1.5 bg-zinc-800 border border-zinc-700 rounded-xl text-[10px] font-black text-zinc-400 uppercase active:scale-95">
-              🎙 Nettoyer vieilles prises
+              🎙 Nettoyer prises
             </button>
           </div>
         </div>
@@ -761,7 +787,8 @@ export default function SongSelector({
 
                   {/* Import depuis Fichiers */}
                   {showImport === s.id && !isCaching && (() => {
-                    const _inst  = s.versions?.find((v: any) => v.trackType === 'Instrumental Stem (Export ZIP)' || (v.trackType === TrackType.STEM_INSTRUMENTAL || v.trackType === 'Instrumental Stem (Export ZIP)' || v.trackType === 'Instrumentale Pure (Copie IA)'));
+                    const _inst  = s.versions?.find((v: any) => v.trackType === 'Instrumental Stem (Export ZIP)' || v.trackType === TrackType.STEM_INSTRUMENTAL)
+                                || s.versions?.find((v: any) => v.trackType === 'Instrumentale Pure (Copie IA)');
                     const _vocal = s.versions?.find((v: any) => v.trackType === 'Vocal Stem (Export ZIP)'        || v.trackType === TrackType.STEM_VOCAL);
                     const _iName = _inst?.fileName  || null;
                     const _vName = _vocal?.fileName || null;
