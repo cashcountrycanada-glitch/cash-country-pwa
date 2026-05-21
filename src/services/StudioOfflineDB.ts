@@ -228,6 +228,13 @@ class StudioOfflineDatabase {
     return !!rec;
   }
 
+  async listAllAudioKeys(): Promise<string[]> {
+    const store = await this.tx(STORE_AUDIO);
+    const req   = store.getAllKeys();
+    const keys  = await this.idbOp(req);
+    return (keys as string[]);
+  }
+
   // Vérification RÉELLE du cache — vérifie que les blobs audio existent vraiment
   // (pas juste le flag cachedSongIds qui peut être désynchronisé si iOS vide le cache)
   async verifySongCache(songId: string): Promise<{ inst: boolean; vocal: boolean; both: boolean }> {

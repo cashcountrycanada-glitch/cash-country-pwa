@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.36';
+const BUILD_VERSION = 'v7.6.37';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -155,10 +155,19 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   };
   (window as any).__addLog = addLog;
 
-  // Pré-initialiser IndexedDB dès le premier render — évite le délai au premier getAudio
-  // iOS peut prendre 200-500ms pour ouvrir la DB, ce qui cause un faux "blob absent"
+  // Pré-initialiser IndexedDB ET lister toutes les clés audio pour diagnostic
   useEffect(() => {
-    studioOfflineDB.init().catch(() => {});
+    studioOfflineDB.init().then(() => {
+      studioOfflineDB.listAllAudioKeys().then(keys => {
+        const dbLog = (window as any).__addLog;
+        if (keys.length === 0) {
+          dbLog?.('[DB] ⚠️ IndexedDB audio: VIDE — aucun stem stocké');
+        } else {
+          dbLog?.(`[DB] 📦 ${keys.length} entrées IndexedDB audio:`);
+          keys.slice(0, 20).forEach(k => dbLog?.(`  • ${k}`));
+        }
+      }).catch(e => (window as any).__addLog?.(`[DB] ❌ listAllAudioKeys: ${e}`));
+    }).catch(() => {});
   }, []);
 
   // Forcer la mise à jour du SW immédiatement sans attendre fermeture des onglets
