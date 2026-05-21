@@ -530,6 +530,8 @@ export default function RecordScreen({
                     {isLoading && !hasStems ? 'Chargement...' : isPreviewing ? 'Stop' : anyCached ? 'Écouter 📦' : 'Écouter 🌐'}
                   </span>
                 </button>
+              );
+            })()}
           </div>
 
           {/* Sections punch */}
