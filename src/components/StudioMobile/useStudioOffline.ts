@@ -229,6 +229,11 @@ export function useStudioOffline(): OfflineResult {
     // navigator.onLine détecte juste le WiFi, pas si le Mac répond
     // On fait un vrai ping HTTP vers le Mac toutes les 15 secondes
     const checkMacReachable = async () => {
+      // Mode autonome forcé → jamais pinguer le Mac
+      if (localStorage.getItem('cc_force_autonomous') === '1') {
+        setIsOnline(false);
+        return;
+      }
       const macUrl = ((window as any).__CC_MAC_URL as string) || '';
       if (!macUrl.startsWith('http')) {
         setIsOnline(false);

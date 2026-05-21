@@ -161,6 +161,7 @@ function MacUrlConfig() {
         (window as any).__CC_MAC_URL = url;
         localStorage.setItem('cc_mac_url', url);
         localStorage.removeItem('cc_force_autonomous');
+        window.dispatchEvent(new Event('cc_mode_changed'));
         setMacUrl(url); setTestResult('ok'); setAutonomous(false);
         setTimeout(() => { setEditing(false); setTestResult(null); }, 1500);
       } else { setTestResult('fail'); }
@@ -172,6 +173,7 @@ function MacUrlConfig() {
     (window as any).__CC_MAC_URL = '';
     localStorage.removeItem('cc_mac_url');
     localStorage.setItem('cc_force_autonomous', '1');
+    window.dispatchEvent(new Event('cc_mode_changed'));
     setMacUrl(''); setEditing(false); setAutonomous(true);
   };
 

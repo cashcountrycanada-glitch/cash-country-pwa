@@ -22,28 +22,32 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.28';
+const BUILD_VERSION = 'v7.6.30';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
     () => localStorage.getItem('cc_force_autonomous') === '1'
   );
 
+  // Synchroniser si MacUrlConfig change le flag dans le même onglet
+  React.useEffect(() => {
+    const sync = () => setAutonomous(localStorage.getItem('cc_force_autonomous') === '1');
+    window.addEventListener('cc_mode_changed', sync);
+    return () => window.removeEventListener('cc_mode_changed', sync);
+  }, []);
+
   const toggle = () => {
     if (!autonomous) {
-      // → Mode autonome : bloquer l'auto-détection Mac
       (window as any).__CC_MAC_URL_SAVED = (window as any).__CC_MAC_URL || localStorage.getItem('cc_mac_url') || '';
       (window as any).__CC_MAC_URL = '';
       localStorage.setItem('cc_force_autonomous', '1');
-      setAutonomous(true);
-      // Recharger pour que tout le code reparte sans URL Mac
+      window.dispatchEvent(new Event('cc_mode_changed'));
       window.location.reload();
     } else {
-      // → Mode Mac : enlever le flag, recharger pour que l'auto-détection reparte
       localStorage.removeItem('cc_force_autonomous');
       const saved = (window as any).__CC_MAC_URL_SAVED || localStorage.getItem('cc_mac_url') || '';
       if (saved) localStorage.setItem('cc_mac_url', saved);
-      setAutonomous(false);
+      window.dispatchEvent(new Event('cc_mode_changed'));
       window.location.reload();
     }
   };
