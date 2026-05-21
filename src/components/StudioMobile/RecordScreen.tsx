@@ -498,31 +498,38 @@ export default function RecordScreen({
                     </div>
                   : null
             }
-            {/* Bouton Écouter — toujours visible si stems en IndexedDB (instCached/vocalCached)
-                 ou si URL réseau disponible. Désactivé pendant REC/saving mais jamais caché. */}
-            {(instCached || vocalCached || instUrl || vocalGuideUrl) && (() => {
-              const anyCached = instCached || vocalCached;
-              const disabled  = isRecording || isSaving;
+            {/* Bouton Écouter — visible pendant le chargement ET quand stems dispo.
+                 JAMAIS conditionnel sur instCached/instUrl seuls — pendant instLoading
+                 ces états sont false/null mais les stems arrivent dans quelques ms. */}
+            {(() => {
+              const anyCached  = instCached || vocalCached;
+              const anyUrl     = instUrl || vocalGuideUrl;
+              const isLoading  = instLoading || vocalLoading;
+              const hasStems   = anyCached || anyUrl;
+              const disabled   = isRecording || isSaving || (isLoading && !hasStems);
+              if (!hasStems && !isLoading) return null; // vraiment rien → cacher
               return (
                 <button
                   onClick={disabled ? undefined : onPreviewStems}
                   disabled={disabled}
                   className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded-lg transition-all"
                   style={{
-                    opacity: disabled ? 0.35 : 1,
-                    background: isPreviewing ? '#7c3aed20' : anyCached ? '#0f2a0f' : '#2a1800',
-                    border: `1px solid ${isPreviewing ? '#7c3aed80' : anyCached ? '#16a34a60' : '#d9770660'}`,
+                    opacity: disabled ? 0.4 : 1,
+                    background: isPreviewing ? '#7c3aed20' : anyCached ? '#0f2a0f' : isLoading ? '#1a1a1a' : '#2a1800',
+                    border: `1px solid ${isPreviewing ? '#7c3aed80' : anyCached ? '#16a34a60' : isLoading ? '#2a2a2a' : '#d9770660'}`,
                   }}>
-                  {isPreviewing
-                    ? <Square size={9} fill="currentColor" className="text-violet-400" />
-                    : <Headphones size={9} className={anyCached ? 'text-emerald-400' : 'text-amber-500'} />
+                  {isLoading && !hasStems
+                    ? <Loader2 size={9} className="text-zinc-500 animate-spin" />
+                    : isPreviewing
+                      ? <Square size={9} fill="currentColor" className="text-violet-400" />
+                      : <Headphones size={9} className={anyCached ? 'text-emerald-400' : 'text-amber-500'} />
                   }
-                  <span className="text-[9px] font-black uppercase" style={{ color: isPreviewing ? '#a78bfa' : anyCached ? '#4ade80' : '#f59e0b' }}>
-                    {isPreviewing ? 'Stop' : anyCached ? 'Écouter 📦' : 'Écouter 🌐'}
+                  <span className="text-[9px] font-black uppercase" style={{
+                    color: isLoading && !hasStems ? '#52525b' : isPreviewing ? '#a78bfa' : anyCached ? '#4ade80' : '#f59e0b'
+                  }}>
+                    {isLoading && !hasStems ? 'Chargement...' : isPreviewing ? 'Stop' : anyCached ? 'Écouter 📦' : 'Écouter 🌐'}
                   </span>
                 </button>
-              );
-            })()}
           </div>
 
           {/* Sections punch */}
