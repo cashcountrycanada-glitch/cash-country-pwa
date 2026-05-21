@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.37';
+const BUILD_VERSION = 'v7.6.39';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -455,36 +455,50 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       }
     };
 
-    if (inst && (audio.instUrl || inst.src)) {
-      const srcToUse = audio.instUrl || inst.src;
-      if (inst.src !== srcToUse) {
-        inst.src = srcToUse;
-        inst.load();
-        inst.addEventListener('canplay', () => playEl(inst, 'inst'), { once: true });
-      } else {
-        playEl(inst, 'inst');
-      }
-      inst.onended = () => { vocal?.pause(); setIsPreviewing(false); inst.onended = null; };
-    } else {
-      addLog(`PREVIEW: inst manquant | instUrl=${audio.instUrl} | instRef=${!!inst}`);
-    }
+    const hasInst  = inst  && (audio.instUrl  || inst.src);
+    const hasVocal = vocal && audio.vocalGuideUrl;
 
-    if (vocal && audio.vocalGuideUrl) {
-      try { vocal.volume = audio.vocalVolRef.current; } catch {}
-      if (!vocal.src || vocal.src !== audio.vocalGuideUrl) {
-        vocal.src = audio.vocalGuideUrl;
-        vocal.load();
-        vocal.addEventListener('canplay', () => {
-          playEl(vocal, 'vocal');
-          audio.setVocalGuideVol(audio.vocalGuideVol);
-        }, { once: true });
-      } else {
-        playEl(vocal, 'vocal');
-        audio.setVocalGuideVol(audio.vocalGuideVol);
-      }
+    if (!hasInst && !hasVocal) {
+      addLog('PREVIEW: aucun stem disponible');
+      return;
     }
 
     setIsPreviewing(true);
+
+    if (hasInst) {
+      const srcToUse = audio.instUrl || inst!.src;
+      if (inst!.src !== srcToUse) {
+        inst!.src = srcToUse;
+        inst!.load();
+        inst!.addEventListener('canplay', () => playEl(inst!, 'inst'), { once: true });
+      } else {
+        playEl(inst!, 'inst');
+      }
+      inst!.onended = () => {
+        vocal?.pause();
+        setIsPreviewing(false);
+        inst!.onended = null;
+      };
+    }
+
+    if (hasVocal) {
+      try { vocal!.volume = audio.vocalVolRef.current; } catch {}
+      if (!vocal!.src || vocal!.src !== audio.vocalGuideUrl) {
+        vocal!.src = audio.vocalGuideUrl!;
+        vocal!.load();
+        vocal!.addEventListener('canplay', () => {
+          playEl(vocal!, 'vocal');
+          audio.setVocalGuideVol(audio.vocalGuideVol);
+        }, { once: true });
+      } else {
+        playEl(vocal!, 'vocal');
+        audio.setVocalGuideVol(audio.vocalGuideVol);
+      }
+      // Si inst absent, c'est le vocal qui gère la fin
+      if (!hasInst) {
+        vocal!.onended = () => { setIsPreviewing(false); vocal!.onended = null; };
+      }
+    }
   };
 
   const handleDeleteRecording = (id: string) => { studioService.deleteLocalRecording(id); reloadRecordings(); };

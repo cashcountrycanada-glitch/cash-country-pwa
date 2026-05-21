@@ -68,8 +68,8 @@ function StemRow({ songId, type, fileName, inCache, importing, testingAudio, loa
   const isTesting   = testingAudio === testKey;
   const isLoading   = loadingAudio === testKey;
   const isImporting = importing === `${songId}:${type}`;
-  // Bouton actif dès que inCache est true — même si blob pas encore en mémoire
-  const canListen   = inCache === true;
+  // Bouton actif si inCache=true OU si blob fraîchement importé en mémoire
+  const canListen = inCache === true;
   return (
     <div className="mb-4">
       <div className="flex items-center gap-1.5 mb-1.5">
@@ -98,7 +98,13 @@ function StemRow({ songId, type, fileName, inCache, importing, testingAudio, loa
           {isLoading ? '⏳ Chargement...' : isTesting ? '⏹ Stop' : '🔊 Écouter'}
         </button>
         <label className="flex-1">
-          <input type="file" accept="audio/*,.flac,.wav,.mp3,.m4a,.mp4" className="hidden" onChange={onImport}/>
+          <input
+            type="file"
+            accept="audio/*,.flac,.wav,.mp3,.m4a,.mp4"
+            className="hidden"
+            onClick={e => { (e.target as HTMLInputElement).value = ''; }}
+            onChange={onImport}
+          />
           <span className={`flex items-center justify-center gap-1.5 py-2 rounded-xl font-black text-[11px] uppercase active:scale-95 cursor-pointer transition-all ${
             isImporting ? 'bg-zinc-700 text-zinc-400' :
             isInst      ? 'bg-blue-700 text-white' : 'bg-emerald-700 text-white'
