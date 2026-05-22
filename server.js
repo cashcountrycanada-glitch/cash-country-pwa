@@ -87,14 +87,22 @@ const GITHUB_STEMS_BASE = process.env.GITHUB_STEMS_URL ||
   'https://github.com/cashcountrycanada-glitch/cash-country-pwa/releases/download/stems-v1';
 
 app.get('/api/media/:filename', (req, res) => {
+  // Décoder d'abord (les espaces arrivent comme %20)
   const filename = decodeURIComponent(req.params.filename);
   if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
-  // GitHub Releases remplace les espaces par des points dans les noms de fichiers
-  const githubFilename = filename.replace(/ /g, '.');
+  // GitHub Releases transforme les noms de fichiers :
+  //   1. Espaces → points
+  //   2. Accents retirés (œ→oe, é→e, è→e, à→a, etc.)
+  const githubFilename = filename
+    .replace(/ /g, '.')
+    .normalize('NFD')                    // décompose les accents (é → e + ´)
+    .replace(/[\u0300-\u036f]/g, '')    // supprime les diacritiques
+    .replace(/œ/gi, 'oe')               // œ non couvert par NFD
+    .replace(/æ/gi, 'ae');              // æ non couvert par NFD
   const url = `${GITHUB_STEMS_BASE}/${encodeURIComponent(githubFilename)}`;
-  console.log(`[MEDIA] → redirect: ${filename} → ${githubFilename}`);
+  console.log(`[MEDIA] → redirect: "${filename}" → "${githubFilename}"`);
   res.redirect(302, url);
 });
 
