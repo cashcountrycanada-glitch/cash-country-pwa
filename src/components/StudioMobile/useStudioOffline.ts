@@ -98,7 +98,11 @@ async function fetchWithProgress(
     const allChunks = new Uint8Array(received);
     let pos = 0;
     for (const chunk of chunks) { allChunks.set(chunk, pos); pos += chunk.length; }
-    blob = new Blob([allChunks]);
+    // Récupérer le Content-Type de la réponse pour conserver le MIME type correct
+    // Sans ça, new Blob([bytes]) donne blob.type = '' → stocké comme 'audio/mp4' sur iOS
+    // → iOS essaie de décoder du FLAC comme MP4 → NotSupportedError silencieux
+    const mimeFromHeader = res.headers.get('Content-Type')?.split(';')[0].trim() || '';
+    blob = new Blob([allChunks], mimeFromHeader ? { type: mimeFromHeader } : undefined);
   }
 
   // Vérifier que le blob est bien un fichier audio — pas une page HTML du routeur
