@@ -91,8 +91,10 @@ app.get('/api/media/:filename', (req, res) => {
   if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
-  const url = `${GITHUB_STEMS_BASE}/${encodeURIComponent(filename)}`;
-  console.log(`[MEDIA] → redirect: ${filename}`);
+  // GitHub Releases remplace les espaces par des points dans les noms de fichiers
+  const githubFilename = filename.replace(/ /g, '.');
+  const url = `${GITHUB_STEMS_BASE}/${encodeURIComponent(githubFilename)}`;
+  console.log(`[MEDIA] → redirect: ${filename} → ${githubFilename}`);
   res.redirect(302, url);
 });
 
