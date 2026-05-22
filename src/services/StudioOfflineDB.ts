@@ -111,21 +111,8 @@ class StudioOfflineDatabase {
         console.error(`[DB] ❌ getAudio(${key}) buffer vide — entrée corrompue`);
         return null;
       }
-      // Corriger le type MIME si mal stocké (ex: FLAC enregistré comme 'audio/mp4')
-      // Vérifier les magic bytes : FLAC commence par 0x66 0x4C 0x61 0x43 ("fLaC")
-      let storedType = rec.type || 'audio/flac';
-      const headerBytes = new Uint8Array(rec.buffer, 0, 4);
-      const isFlac = headerBytes[0] === 0x66 && headerBytes[1] === 0x4C &&
-                     headerBytes[2] === 0x61 && headerBytes[3] === 0x43;
-      const isMp3  = headerBytes[0] === 0xFF && (headerBytes[1] & 0xE0) === 0xE0;
-      const isId3  = headerBytes[0] === 0x49 && headerBytes[1] === 0x44 && headerBytes[2] === 0x33;
-      if (isFlac && storedType !== 'audio/flac') {
-        storedType = 'audio/flac';
-        console.log(`[DB] 🔧 Type corrigé: ${rec.type} → audio/flac pour clé ${key}`);
-      } else if ((isMp3 || isId3) && !storedType.includes('mpeg') && !storedType.includes('mp3')) {
-        storedType = 'audio/mpeg';
-        console.log(`[DB] 🔧 Type corrigé: ${rec.type} → audio/mpeg pour clé ${key}`);
-      }
+      // Retourner le type ORIGINAL stocké — fixBlobType dans useStudioAudio décide
+      const storedType = rec.type || 'audio/flac';
       return new Blob([rec.buffer], { type: storedType });
     };
 
@@ -216,14 +203,7 @@ class StudioOfflineDatabase {
         key,
         buffer,
         size:    blob.size,
-        // Ne jamais forcer 'audio/mp4' sur un blob sans type — cf README
-        // Le fallback doit deviner depuis la clé (inst_/vocal_ → FLAC par défaut sur ce projet)
-        // iOS Safari lit FLAC nativement — pas besoin de conversion
-        type:    blob.type || (() => {
-          if (key.startsWith('inst_') || key.startsWith('vocal_')) return 'audio/flac';
-          if (key.startsWith('rec_')) return isIOS() ? 'audio/mp4' : 'audio/webm';
-          return isIOS() ? 'audio/mp4' : 'audio/webm';
-        })(),
+        type:    blob.type || (isIOS() ? 'audio/mp4' : 'audio/webm'),
         savedAt: Date.now(),
         ...meta,
       }));

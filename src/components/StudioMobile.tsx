@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.48';
+const BUILD_VERSION = 'v7.6.46';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -175,38 +175,13 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     }).catch(() => {});
   }, []);
 
-  // Mise à jour SW — reporter le reload si une session est en cours
-  // Le SW peut détecter un update N'IMPORTE QUAND (le ping toutes les 15s suffit).
-  // Si on recharge en pleine session (chanson sélectionnée ou enregistrement actif),
-  // l'état React est perdu et les blobs IndexedDB en cours de chargement sont abandonnés.
-  // Solution : SKIP_WAITING immédiat (le SW est prêt), mais reload seulement si inactif.
-  // Si actif → flag sessionStorage → reload au prochain lancement.
-  const swPendingReloadRef = useRef(false);
-  // Mettre à jour le ref dès que screen change — session active = pas de reload immédiat
-  useEffect(() => {
-    swPendingReloadRef.current = screen !== 'songs';
-  }, [screen]);
+  // Forcer la mise à jour du SW immédiatement sans attendre fermeture des onglets
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
-    // Si un reload était en attente depuis la session précédente → recharger maintenant
-    // (on est au mount, selected = null, aucune session active)
-    if (sessionStorage.getItem('sw_reload_pending') === '1') {
-      sessionStorage.removeItem('sw_reload_pending');
-      window.location.reload();
-      return;
-    }
     navigator.serviceWorker.ready.then(reg => {
       const activate = (sw: ServiceWorker) => {
         sw.postMessage({ type: 'SKIP_WAITING' });
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          // Recharger seulement si aucune session active (selected = null, pas d'enregistrement)
-          if (!swPendingReloadRef.current) {
-            window.location.reload();
-          } else {
-            // Session active — reporter au prochain lancement
-            sessionStorage.setItem('sw_reload_pending', '1');
-          }
-        }, { once: true });
+        navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload(), { once: true });
       };
       if (reg.waiting) { activate(reg.waiting); return; }
       reg.addEventListener('updatefound', () => {

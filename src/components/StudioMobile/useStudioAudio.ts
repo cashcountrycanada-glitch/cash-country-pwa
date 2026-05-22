@@ -262,14 +262,30 @@ export function useStudioAudio(selected: Song | null): AudioResult {
           v.trackType === 'Instrumentale Pure (Copie IA)'
         );
         const macUrl = ((window as any).__CC_MAC_URL as string) || '';
-        if (inst?.fileName && macUrl.startsWith('http')) {
-          fetch(`${macUrl}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
-            .then(r => {
-              if (cancelled) return;
-              if (r.ok) { setInstUrl(getMediaUrl(inst.fileName!)); setInstCached(false); }
-              else { setInstUrl(null); setInstCached(false); }
-            })
-            .catch(() => { if (!cancelled) { setInstUrl(null); setInstCached(false); } });
+        if (inst?.fileName) {
+          if (macUrl.startsWith('http')) {
+            // Mac dispo → vérifier et utiliser
+            fetch(`${macUrl}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
+              .then(r => {
+                if (cancelled) return;
+                if (r.ok) { setInstUrl(getMediaUrl(inst.fileName!)); setInstCached(false); }
+                else {
+                  // Mac KO → fallback Railway /api/media/
+                  dbLog(`[Audio] Mac KO → fallback Railway pour inst`);
+                  setInstUrl(`/api/media/${encodeURIComponent(inst.fileName!)}`); setInstCached(false);
+                }
+              })
+              .catch(() => {
+                if (!cancelled) {
+                  dbLog(`[Audio] Mac timeout → fallback Railway pour inst`);
+                  setInstUrl(`/api/media/${encodeURIComponent(inst.fileName!)}`); setInstCached(false);
+                }
+              });
+          } else {
+            // Pas de Mac configuré → Railway directement
+            dbLog(`[Audio] Pas de Mac → Railway /api/media/ pour inst`);
+            setInstUrl(`/api/media/${encodeURIComponent(inst.fileName!)}`); setInstCached(false);
+          }
         } else {
           setInstUrl(null); setInstCached(false);
         }
@@ -327,14 +343,28 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         if (vocalBlobUrlRef.current) { URL.revokeObjectURL(vocalBlobUrlRef.current); vocalBlobUrlRef.current = null; }
         const vocal = selected.versions?.find((v: any) => v.trackType === TrackType.STEM_VOCAL);
         const macUrlV = ((window as any).__CC_MAC_URL as string) || '';
-        if (vocal?.fileName && macUrlV.startsWith('http')) {
-          fetch(`${macUrlV}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
-            .then(r => {
-              if (cancelled) return;
-              if (r.ok) { setVocalGuideUrl(getMediaUrl(vocal.fileName!)); setVocalCached(false); }
-              else { setVocalGuideUrl(null); setVocalCached(false); }
-            })
-            .catch(() => { if (!cancelled) { setVocalGuideUrl(null); setVocalCached(false); } });
+        if (vocal?.fileName) {
+          if (macUrlV.startsWith('http')) {
+            fetch(`${macUrlV}/api/songs`, { method: 'HEAD', signal: AbortSignal.timeout(2500) })
+              .then(r => {
+                if (cancelled) return;
+                if (r.ok) { setVocalGuideUrl(getMediaUrl(vocal.fileName!)); setVocalCached(false); }
+                else {
+                  dbLog(`[Audio] Mac KO → fallback Railway pour vocal`);
+                  setVocalGuideUrl(`/api/media/${encodeURIComponent(vocal.fileName!)}`); setVocalCached(false);
+                }
+              })
+              .catch(() => {
+                if (!cancelled) {
+                  dbLog(`[Audio] Mac timeout → fallback Railway pour vocal`);
+                  setVocalGuideUrl(`/api/media/${encodeURIComponent(vocal.fileName!)}`); setVocalCached(false);
+                }
+              });
+          } else {
+            // Pas de Mac → Railway directement
+            dbLog(`[Audio] Pas de Mac → Railway /api/media/ pour vocal`);
+            setVocalGuideUrl(`/api/media/${encodeURIComponent(vocal.fileName!)}`); setVocalCached(false);
+          }
         } else {
           setVocalGuideUrl(null); setVocalCached(false);
         }
