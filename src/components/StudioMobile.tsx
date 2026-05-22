@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.54';
+const BUILD_VERSION = 'v7.6.55';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -410,55 +410,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       return;
     }
 
-    // Résumer AudioContext en fire-and-forget — ne PAS attendre la Promise
-    // play() doit rester dans la callstack synchrone du tap
     const ctx = (window as any).__warmContext as AudioContext | undefined;
-    if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
-
-    const playEl = (el: HTMLAudioElement, label: string) => {
-      el.currentTime = 0;
-      const p = el.play();
-      if (p) {
-        p.then(() => addLog(`${label}.play() OK`))
-         .catch((e: Error) => {
-           addLog(`${label}.play() ERREUR: ${e.name} | src=${el.src.slice(0,40)}`);
-           // Fallback AudioContext decodeAudioData (contourne les restrictions iOS sur <audio>)
-           if (ctx && (e.name === 'NotSupportedError' || e.name === 'NotAllowedError')) {
-             const bufKey = label === 'inst' ? '__instDecodedBuf' : '__vocalDecodedBuf';
-             const playDecoded = (buf: AudioBuffer) => {
-               const bsrc = ctx.createBufferSource();
-               bsrc.buffer = buf;
-               if (label === 'inst') {
-                 bsrc.connect(ctx.destination);
-                 (window as any).__instCtxStartTime = ctx.currentTime;
-                 (window as any).__instCtxOffset    = 0;
-                 (window as any).__instCtxActive    = true;
-                 (window as any).__instWallStart    = Date.now();
-                 (window as any).__instBufSrc       = bsrc;
-                 bsrc.onended = () => { setIsPreviewing(false); (window as any).__instCtxActive = false; (window as any).__instBufSrc = null; (window as any).__instWallStart = null; };
-               } else {
-                 const vGain = ctx.createGain();
-                 vGain.gain.value = audio.vocalVolRef.current;
-                 bsrc.connect(vGain);
-                 vGain.connect(ctx.destination);
-                 (window as any).__vocalBufGain = vGain;
-                 (window as any).__vocalBufSrc  = bsrc;
-                 bsrc.onended = () => { (window as any).__vocalBufSrc = null; (window as any).__vocalBufGain = null; };
-               }
-               bsrc.start(0);
-               addLog(label + ' AudioContext OK');
-             };
-             const tryPlay = (attempts: number) => {
-               const decoded: AudioBuffer | null = (window as any)[bufKey] || null;
-               if (decoded) { playDecoded(decoded); }
-               else if (attempts > 0) { setTimeout(() => tryPlay(attempts - 1), 300); }
-               else { fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(playDecoded).catch(e2 => addLog(label + ' ERREUR: ' + e2.message)); }
-             };
-             tryPlay(10);
-           }
-         });
-      }
-    };
 
     const hasInst  = inst  && (audio.instUrl  || inst.src);
     const hasVocal = vocal && audio.vocalGuideUrl;
@@ -470,50 +422,103 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
 
     setIsPreviewing(true);
 
-    // Préparer les deux éléments en parallèle, puis lancer simultanément
-    const prepInst = (): Promise<HTMLAudioElement | null> => new Promise(resolve => {
-      if (!hasInst) { resolve(null); return; }
-      const srcToUse = audio.instUrl || inst!.src;
-      if (inst!.src !== srcToUse) {
-        inst!.src = srcToUse;
-        inst!.load();
-        inst!.addEventListener('canplay', () => resolve(inst!), { once: true });
-      } else {
-        resolve(inst!);
-      }
-    });
-
-    const prepVocal = (): Promise<HTMLAudioElement | null> => new Promise(resolve => {
-      if (!hasVocal) { resolve(null); return; }
-      try { vocal!.volume = audio.vocalVolRef.current; } catch {}
-      if (!vocal!.src || vocal!.src !== audio.vocalGuideUrl) {
-        vocal!.src = audio.vocalGuideUrl!;
-        vocal!.load();
-        vocal!.addEventListener('canplay', () => resolve(vocal!), { once: true });
-      } else {
-        resolve(vocal!);
-      }
-    });
-
-    const [readyInst, readyVocal] = await Promise.all([prepInst(), prepVocal()]);
-
-    // Lancer les deux simultanément
-    if (readyInst) {
-      readyInst.currentTime = 0;
-      playEl(readyInst, 'inst');
-      readyInst.onended = () => {
-        readyVocal?.pause();
-        setIsPreviewing(false);
-        readyInst.onended = null;
-      };
+    // ── Résumer le contexte d'abord (nécessaire sur iOS après inactivité) ─────
+    if (ctx && ctx.state === 'suspended') {
+      try { await ctx.resume(); } catch {}
     }
-    if (readyVocal) {
-      readyVocal.currentTime = 0;
-      playEl(readyVocal, 'vocal');
-      audio.setVocalGuideVol(audio.vocalGuideVol);
-      if (!readyInst) {
-        readyVocal.onended = () => { setIsPreviewing(false); readyVocal.onended = null; };
+
+    // ── Charger les ArrayBuffer des deux stems en parallèle ──────────────────
+    // On utilise fetch() + decodeAudioData pour obtenir deux AudioBuffer
+    // synchronisables via ctx.currentTime (horloge commune, sample-accurate).
+    const fetchAndDecode = async (url: string, label: string): Promise<AudioBuffer | null> => {
+      try {
+        addLog(`${label} fetch → ${url.slice(0, 50)}`);
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const ab = await resp.arrayBuffer();
+        if (!ctx) throw new Error('no ctx');
+        const buf = await ctx.decodeAudioData(ab);
+        addLog(`${label} décodé: ${buf.duration.toFixed(1)}s`);
+        return buf;
+      } catch (e: any) {
+        addLog(`${label} ERREUR decode: ${e.message}`);
+        return null;
       }
+    };
+
+    const instSrc  = audio.instUrl  || inst?.src  || null;
+    const vocalSrc = audio.vocalGuideUrl || null;
+
+    // Si pas de contexte AudioContext disponible → fallback <audio> séquentiel
+    if (!ctx) {
+      addLog('PREVIEW: pas de ctx → fallback <audio>');
+      const playElFallback = (el: HTMLAudioElement, label: string) => {
+        el.currentTime = 0;
+        el.play().then(() => addLog(`${label}.play() OK`)).catch((e: Error) => addLog(`${label}.play() ERR: ${e.message}`));
+      };
+      if (inst && instSrc) { if (inst.src !== instSrc) { inst.src = instSrc; inst.load(); } playElFallback(inst, 'inst'); }
+      if (vocal && vocalSrc) { if (vocal.src !== vocalSrc) { vocal.src = vocalSrc; vocal.load(); } try { vocal.volume = audio.vocalVolRef.current; } catch {} playElFallback(vocal, 'vocal'); }
+      return;
+    }
+
+    // ── Décoder les deux stems en parallèle ───────────────────────────────────
+    const [instBuf, vocalBuf] = await Promise.all([
+      hasInst  && instSrc  ? fetchAndDecode(instSrc, 'inst')   : Promise.resolve(null),
+      hasVocal && vocalSrc ? fetchAndDecode(vocalSrc, 'vocal') : Promise.resolve(null),
+    ]);
+
+    // Vérifier que l'utilisateur n'a pas annulé pendant le chargement
+    if (!isPreviewing) { addLog('PREVIEW: annulé pendant chargement'); return; }
+
+    // ── Planifier les deux BufferSourceNode au MÊME instant ctx ──────────────
+    // startAt dans le futur de 80ms pour laisser le temps au scheduler audio
+    const startAt = ctx.currentTime + 0.08;
+
+    if (instBuf) {
+      const bsrc = ctx.createBufferSource();
+      bsrc.buffer = instBuf;
+      bsrc.connect(ctx.destination);
+      (window as any).__instCtxStartTime = startAt;
+      (window as any).__instCtxOffset    = 0;
+      (window as any).__instCtxActive    = true;
+      (window as any).__instWallStart    = Date.now() + 80;
+      (window as any).__instBufSrc       = bsrc;
+      bsrc.onended = () => {
+        setIsPreviewing(false);
+        (window as any).__instCtxActive = false;
+        (window as any).__instBufSrc    = null;
+        (window as any).__instWallStart = null;
+        // Arrêter le vocal s'il tourne encore
+        try { (window as any).__vocalBufSrc?.stop(); } catch {}
+        (window as any).__vocalBufSrc = null;
+        (window as any).__vocalBufGain = null;
+      };
+      bsrc.start(startAt);
+      addLog(`inst BufferSource → start @ ctx+80ms`);
+    }
+
+    if (vocalBuf) {
+      const vGain = ctx.createGain();
+      vGain.gain.value = audio.vocalVolRef.current;
+      const vsrc = ctx.createBufferSource();
+      vsrc.buffer = vocalBuf;
+      vsrc.connect(vGain);
+      vGain.connect(ctx.destination);
+      (window as any).__vocalBufGain = vGain;
+      (window as any).__vocalBufSrc  = vsrc;
+      vsrc.onended = () => {
+        (window as any).__vocalBufSrc  = null;
+        (window as any).__vocalBufGain = null;
+        if (!instBuf) setIsPreviewing(false);
+      };
+      vsrc.start(startAt); // ← même startAt que inst : synchronisation sample-accurate
+      addLog(`vocal BufferSource → start @ ctx+80ms (même timestamp)`);
+    }
+
+    // Si aucun buffer n'a pu être décodé → setIsPreviewing(false)
+    if (!instBuf && !vocalBuf) {
+      addLog('PREVIEW: échec décodage des deux stems');
+      setIsPreviewing(false);
     }
   };
 
