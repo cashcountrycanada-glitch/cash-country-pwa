@@ -87,23 +87,52 @@ const GITHUB_STEMS_BASE = process.env.GITHUB_STEMS_URL ||
   'https://github.com/cashcountrycanada-glitch/cash-country-pwa/releases/download/stems-v1';
 
 app.get('/api/media/:filename', (req, res) => {
-  // Décoder d'abord (les espaces arrivent comme %20)
   const filename = decodeURIComponent(req.params.filename);
   if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
-  // GitHub Releases transforme les noms de fichiers :
-  //   1. Espaces → points
-  //   2. Accents retirés (œ→oe, é→e, è→e, à→a, etc.)
+  // GitHub Releases transforme les noms : espaces→points, accents retirés
   const githubFilename = filename
     .replace(/ /g, '.')
-    .normalize('NFD')                    // décompose les accents (é → e + ´)
-    .replace(/[\u0300-\u036f]/g, '')    // supprime les diacritiques
-    .replace(/œ/gi, 'oe')               // œ non couvert par NFD
-    .replace(/æ/gi, 'ae');              // æ non couvert par NFD
-  const url = `${GITHUB_STEMS_BASE}/${encodeURIComponent(githubFilename)}`;
-  console.log(`[MEDIA] → redirect: "${filename}" → "${githubFilename}"`);
-  res.redirect(302, url);
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/œ/gi, 'oe')
+    .replace(/æ/gi, 'ae');
+  const githubUrl = `${GITHUB_STEMS_BASE}/${encodeURIComponent(githubFilename)}`;
+  console.log(`[MEDIA] proxy: "${filename}" → "${githubFilename}"`);
+
+  // PROXY au lieu de redirect — iOS bloque les redirects 302 cross-origin sur <audio>
+  const https = require('https');
+  https.get(githubUrl, (githubRes) => {
+    // GitHub redirige vers release-assets.githubusercontent.com — suivre la redirection
+    if (githubRes.statusCode === 302 && githubRes.headers.location) {
+      https.get(githubRes.headers.location, (assetRes) => {
+        const mime = filename.toLowerCase().endsWith('.flac') ? 'audio/flac'
+          : filename.toLowerCase().endsWith('.wav') ? 'audio/wav'
+          : 'audio/mpeg';
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        if (assetRes.headers['content-length']) {
+          res.setHeader('Content-Length', assetRes.headers['content-length']);
+        }
+        res.status(200);
+        assetRes.pipe(res);
+        assetRes.on('error', () => res.end());
+      }).on('error', (e) => {
+        console.error('[MEDIA] asset error:', e.message);
+        res.status(502).json({ error: 'Asset fetch failed' });
+      });
+    } else if (githubRes.statusCode === 404) {
+      console.warn(`[MEDIA] 404: ${githubFilename}`);
+      res.status(404).json({ error: 'File not found', filename: githubFilename });
+    } else {
+      res.status(githubRes.statusCode || 500).json({ error: 'Unexpected response' });
+    }
+  }).on('error', (e) => {
+    console.error('[MEDIA] github error:', e.message);
+    res.status(502).json({ error: 'GitHub fetch failed' });
+  });
 });
 
 // Diagnostic
