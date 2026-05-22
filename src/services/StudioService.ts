@@ -437,10 +437,22 @@ export const studioService = {
     const rendered = await offline.startRendering(); return audioBufferToBlob(rendered);
   },
   async generateLayersFromVoice(mainVoice: MobileRecording, project: TrackProject, onProgress?: (label: string, pct: number) => void): Promise<MobileRecording[]> {
-    if (!mainVoice.dataUrl) throw new Error('Voix principale sans données audio');
     const progress = (label: string, pct: number) => onProgress?.(label, pct);
     progress('Décodage voix principale', 5);
-    const srcBlob = this.dataUrlToBlob(mainVoice.dataUrl); const srcAb = await srcBlob.arrayBuffer();
+
+    // Récupérer le blob : priorité dataUrl en mémoire, sinon IndexedDB
+    let srcBlob: Blob | null = null;
+    if (mainVoice.dataUrl) {
+      srcBlob = this.dataUrlToBlob(mainVoice.dataUrl);
+    } else {
+      try {
+        const db = getOfflineDB();
+        srcBlob = await db.getAudio(`rec_${mainVoice.id}`);
+      } catch {}
+    }
+    if (!srcBlob || srcBlob.size === 0) throw new Error('Voix principale sans données audio (ni dataUrl ni IndexedDB)');
+
+    const srcAb = await srcBlob.arrayBuffer();
     const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext());
     let srcBuffer: AudioBuffer;
     try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); } finally { tmpCtx.close(); }

@@ -126,7 +126,16 @@ export default function MixerScreen({
       const wanted = generated.find(r => r.trackIndex === harmonyDef.trackIndex);
       if (wanted) {
         const u = studioService.addTrackToProject(project.id, wanted);
-        if (u) onProjectUpdate(u);
+        if (u) {
+          // Réinjecter la voix principale avec son dataUrl
+          const uFixed = {
+            ...u,
+            tracks: u.tracks.map(t =>
+              t.id === mainVoice.id ? { ...t, dataUrl: mainVoice.dataUrl } : t
+            ),
+          };
+          onProjectUpdate(uFixed);
+        }
         setGeneratedDone(prev => new Set([...prev, harmonyDef.trackIndex]));
         setTimeout(() => setGeneratedDone(prev => {
           const s = new Set(prev); s.delete(harmonyDef.trackIndex); return s;
@@ -157,6 +166,13 @@ export default function MixerScreen({
           const u = studioService.addTrackToProject(project.id, rec);
           if (u) up = u;
         }
+        // Réinjecter la voix principale avec son dataUrl (addTrackToProject stocke sans dataUrl en localStorage)
+        up = {
+          ...up,
+          tracks: up.tracks.map(t =>
+            t.id === mainVoice.id ? { ...t, dataUrl: mainVoice.dataUrl } : t
+          ),
+        };
         onProjectUpdate(up);
       }
     } catch (e: any) {

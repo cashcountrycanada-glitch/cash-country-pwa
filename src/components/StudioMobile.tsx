@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.52';
+const BUILD_VERSION = 'v7.6.53';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -470,38 +470,49 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
 
     setIsPreviewing(true);
 
-    if (hasInst) {
+    // Préparer les deux éléments en parallèle, puis lancer simultanément
+    const prepInst = (): Promise<HTMLAudioElement | null> => new Promise(resolve => {
+      if (!hasInst) { resolve(null); return; }
       const srcToUse = audio.instUrl || inst!.src;
       if (inst!.src !== srcToUse) {
         inst!.src = srcToUse;
         inst!.load();
-        inst!.addEventListener('canplay', () => playEl(inst!, 'inst'), { once: true });
+        inst!.addEventListener('canplay', () => resolve(inst!), { once: true });
       } else {
-        playEl(inst!, 'inst');
+        resolve(inst!);
       }
-      inst!.onended = () => {
-        vocal?.pause();
-        setIsPreviewing(false);
-        inst!.onended = null;
-      };
-    }
+    });
 
-    if (hasVocal) {
+    const prepVocal = (): Promise<HTMLAudioElement | null> => new Promise(resolve => {
+      if (!hasVocal) { resolve(null); return; }
       try { vocal!.volume = audio.vocalVolRef.current; } catch {}
       if (!vocal!.src || vocal!.src !== audio.vocalGuideUrl) {
         vocal!.src = audio.vocalGuideUrl!;
         vocal!.load();
-        vocal!.addEventListener('canplay', () => {
-          playEl(vocal!, 'vocal');
-          audio.setVocalGuideVol(audio.vocalGuideVol);
-        }, { once: true });
+        vocal!.addEventListener('canplay', () => resolve(vocal!), { once: true });
       } else {
-        playEl(vocal!, 'vocal');
-        audio.setVocalGuideVol(audio.vocalGuideVol);
+        resolve(vocal!);
       }
-      // Si inst absent, c'est le vocal qui gère la fin
-      if (!hasInst) {
-        vocal!.onended = () => { setIsPreviewing(false); vocal!.onended = null; };
+    });
+
+    const [readyInst, readyVocal] = await Promise.all([prepInst(), prepVocal()]);
+
+    // Lancer les deux simultanément
+    if (readyInst) {
+      readyInst.currentTime = 0;
+      playEl(readyInst, 'inst');
+      readyInst.onended = () => {
+        readyVocal?.pause();
+        setIsPreviewing(false);
+        readyInst.onended = null;
+      };
+    }
+    if (readyVocal) {
+      readyVocal.currentTime = 0;
+      playEl(readyVocal, 'vocal');
+      audio.setVocalGuideVol(audio.vocalGuideVol);
+      if (!readyInst) {
+        readyVocal.onended = () => { setIsPreviewing(false); readyVocal.onended = null; };
       }
     }
   };
