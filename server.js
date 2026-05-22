@@ -79,68 +79,26 @@ app.get('/api/songs', (req, res) => {
   }
 });
 
-// ── Stems audio (FLAC / WAV / MP4) stockés dans public/media/ via Git LFS ──
-// Route: GET /api/media/:filename
-// Ces fichiers sont trackés par Git LFS et déployés automatiquement sur Railway.
-const MEDIA_DIR = path.join(ROOT, 'public', 'media');
-const AUDIO_MIME = {
-  '.flac': 'audio/flac',
-  '.wav':  'audio/wav',
-  '.mp3':  'audio/mpeg',
-  '.mp4':  'audio/mp4',
-  '.m4a':  'audio/mp4',
-  '.aac':  'audio/aac',
-  '.ogg':  'audio/ogg',
-  '.webm': 'audio/webm',
-};
+// ── Stems audio — redirige vers GitHub Releases ─────────────────────────────
+// Les FLAC/WAV sont stockés comme assets dans une GitHub Release (tag: stems-v1).
+// Railway ne stocke rien — il redirige simplement vers l'URL GitHub publique.
+// Pour ajouter/mettre à jour des stems : GitHub → Releases → stems-v1 → Edit → upload
+const GITHUB_STEMS_BASE = process.env.GITHUB_STEMS_URL ||
+  'https://github.com/cashcountrycanada-glitch/cash-country-pwa/releases/download/stems-v1';
+
 app.get('/api/media/:filename', (req, res) => {
   const filename = decodeURIComponent(req.params.filename);
-  // Sécurité : interdire les chemins relatifs
   if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
-  const filePath = path.join(MEDIA_DIR, filename);
-  if (!fs.existsSync(filePath)) {
-    console.warn(`[MEDIA] ❌ Fichier introuvable: ${filePath}`);
-    return res.status(404).json({ error: 'File not found', filename });
-  }
-  const ext = path.extname(filename).toLowerCase();
-  const mime = AUDIO_MIME[ext] || 'application/octet-stream';
-  const stat = fs.statSync(filePath);
-  const fileSize = stat.size;
-  const range = req.headers.range;
-
-  if (range) {
-    // Support Range requests pour iOS (seekable audio)
-    const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end   = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    const chunkSize = (end - start) + 1;
-    const stream = fs.createReadStream(filePath, { start, end });
-    res.writeHead(206, {
-      'Content-Range':  `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges':  'bytes',
-      'Content-Length': chunkSize,
-      'Content-Type':   mime,
-      'Cache-Control':  'public, max-age=3600',
-    });
-    stream.pipe(res);
-  } else {
-    res.writeHead(200, {
-      'Content-Length': fileSize,
-      'Content-Type':   mime,
-      'Accept-Ranges':  'bytes',
-      'Cache-Control':  'public, max-age=3600',
-    });
-    fs.createReadStream(filePath).pipe(res);
-  }
+  const url = `${GITHUB_STEMS_BASE}/${encodeURIComponent(filename)}`;
+  console.log(`[MEDIA] → redirect: ${filename}`);
+  res.redirect(302, url);
 });
 
-// Diagnostic — liste les médias disponibles
+// Diagnostic
 app.get('/api/media', (req, res) => {
-  const exists = fs.existsSync(MEDIA_DIR);
-  const files  = exists ? fs.readdirSync(MEDIA_DIR) : [];
-  res.json({ mediaDir: MEDIA_DIR, exists, count: files.length, files });
+  res.json({ mode: 'github-releases', base: GITHUB_STEMS_BASE });
 });
 
 // API local-ip
