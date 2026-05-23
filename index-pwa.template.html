@@ -579,6 +579,26 @@ const depRegex = /import[\s\S]*?from\s+['"](.*?)['"]|require\s*\(\s*['"](.*?)['"
                 banner.appendChild(btn);
             }
 
+            // Bouton collapse ▲/▼
+            const collapseBtn = document.createElement('button');
+            collapseBtn.textContent = '▲';
+            collapseBtn.title = 'Réduire';
+            collapseBtn.style.cssText = 'margin-left:auto;padding:2px 8px;background:transparent;color:inherit;border:none;font-size:10px;cursor:pointer;opacity:0.6;font-family:monospace;line-height:1';
+            let collapsed = false;
+            collapseBtn.onclick = () => {
+                collapsed = !collapsed;
+                collapseBtn.textContent = collapsed ? '▼' : '▲';
+                Array.from(banner.childNodes).forEach(n => {
+                    if (n !== collapseBtn) {
+                        if (collapsed) { n._origDisplay = n.style ? n.style.display : ''; if (n.style) n.style.display = 'none'; }
+                        else { if (n.style) n.style.display = n._origDisplay || ''; }
+                    }
+                });
+                banner.style.padding = collapsed ? '2px 8px' : '8px 16px';
+                banner.style.justifyContent = collapsed ? 'flex-end' : 'center';
+            };
+            banner.appendChild(collapseBtn);
+
             document.body.appendChild(banner);
 
             // Bannière online disparaît après 4s
