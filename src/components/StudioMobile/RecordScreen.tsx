@@ -43,8 +43,25 @@ interface Props {
 }
 
 function parseLyricsWithChords(raw: string): { text: string; isChord: boolean; isSection: boolean }[] {
-  return raw.split('\
-').map(line => {
+  // Fusion automatique des lignes coupées par l'OCR :
+  // fragment court (≤15 car) sans majuscule/ponctuation au début = suite de la ligne précédente
+  const rawLines = raw.split('\n');
+  const merged: string[] = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    const cur = rawLines[i];
+    const next = rawLines[i + 1];
+    const nextIsFragment = next !== undefined
+      && next.trim().length > 0
+      && next.trim().length <= 15
+      && !next.trim().match(/^[A-ZÀ-Ö«»—–\-•\[]/);
+    if (nextIsFragment) {
+      merged.push(cur + next.trim());
+      i++;
+    } else {
+      merged.push(cur);
+    }
+  }
+  return merged.map(line => {
     const isChord = /^[\s][A-G][#b]?[^\s,!?.]{0,6}(\s+[A-G][#b]?[^\s,!?.]{0,6})\s*$/.test(line);
     const isSection = /^[.+]$|^(Couplet|Refrain|Pont|Intro|Outro|Verse|Chorus|Bridge)/i.test(line.trim());
     return { text: line, isChord, isSection };
@@ -188,8 +205,11 @@ export default function RecordScreen({
         for (let i = 0; i < raw.length; i++) {
           const cur = raw[i];
           const next = raw[i + 1];
-          if (next && (next.time - cur.time) < 3.5 && cur.text.length < 40 && !cur.text.match(/[.!?…]$/)) {
-            merged.push({ time: cur.time, text: cur.text + ' ' + next.text });
+          // Fusion si : gap < 3.5s ET (ligne suivante courte sans majuscule = fragment OCR coupé)
+          const isOcrFragment = next && next.text.trim().length <= 15 && !next.text.trim().match(/^[A-ZÀ-Ö«»\u2014\u2013\-]/);
+          const isShortContinuation = next && (next.time - cur.time) < 3.5 && cur.text.length < 40 && !cur.text.match(/[.!?…]$/);
+          if (next && (isOcrFragment || isShortContinuation)) {
+            merged.push({ time: cur.time, text: cur.text + (isOcrFragment ? '' : ' ') + next.text.trim() });
             i++; // sauter la ligne suivante déjà fusionnée
           } else {
             merged.push(cur);
