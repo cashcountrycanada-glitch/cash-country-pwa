@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.56';
+const BUILD_VERSION = 'v7.6.57';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(

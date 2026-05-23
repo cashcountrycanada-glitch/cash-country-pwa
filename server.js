@@ -91,8 +91,11 @@ app.get('/api/media/:filename', (req, res) => {
   if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
-  // GitHub Releases transforme les noms : espaces→points, accents retirés
+  // GitHub Releases transforme les noms : espaces→points, accents retirés,
+  // apostrophes ('' `) → point, virgules → supprimées
   const githubFilename = filename
+    .replace(/[''`]/g, '.')
+    .replace(/,/g, '')
     .replace(/ /g, '.')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
