@@ -536,7 +536,8 @@ export default function MasteringEngine({
   const runMastering = async () => {
     setIsMastering(true); setProgress(0);
     setVocalMastered(null); setFullMastered(null);
-    setSentToMac(false); setExportedMp3(false); setExportedMp4(false); setExportedWav(false);
+    setSentToMac(false);
+    // On ne remet PAS les flags export à zéro — l'utilisateur sait qu'il a déjà partagé
 
     try {
       // 1. Décoder le mix vocal
@@ -965,6 +966,17 @@ export default function MasteringEngine({
         {hasResult && (
           <div className="space-y-3">
 
+            {/* Guide workflow */}
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-3">
+              <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mb-2">Quoi exporter ?</p>
+              <div className="space-y-1.5">
+                <p className="text-[10px] text-white">🎤 <span className="font-black">Pour le spectacle</span> — Envoyer au Mac (Mode A)</p>
+                <p className="text-[10px] text-white">🎵 <span className="font-black">Pour Spotify/Apple Music</span> — WAV 24-bit (meilleure qualité)</p>
+                <p className="text-[10px] text-white">📱 <span className="font-black">Pour partager / YouTube</span> — MP3 320kbps</p>
+                <p className="text-[10px] text-white">🎛️ <span className="font-black">Pour produire davantage</span> — Stems séparés</p>
+              </div>
+            </div>
+
             {/* Séparateur */}
             <div className="flex items-center gap-3">
               <div className="flex-1 h-px bg-zinc-800"/>
@@ -1051,14 +1063,14 @@ export default function MasteringEngine({
                     }
                   </button>
 
-                  {/* Export MP4 natif iOS */}
+                  {/* Export MP4 natif iOS — masqué par défaut */}
                   <button onClick={exportAsMP4} disabled={exportingMp4}
-                    className="w-full py-3.5 font-black text-[12px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all text-blue-400 disabled:opacity-60">
+                    className="w-full py-3 font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all text-blue-300/70 disabled:opacity-60">
                     {exportingMp4
-                      ? <><Loader2 size={14} className="animate-spin"/> Export MP4...</>
+                      ? <><Loader2 size={13} className="animate-spin"/> Export MP4...</>
                       : exportedMp4
-                      ? <><CheckCircle2 size={14}/> MP4 partagé !</>
-                      : <><Share2 size={14}/> Exporter MP4 — AirDrop / iCloud</>
+                      ? <><CheckCircle2 size={13}/> MP4 partagé !</>
+                      : <><Share2 size={13}/> MP4 (AirDrop / iCloud)</>
                     }
                   </button>
                 </div>

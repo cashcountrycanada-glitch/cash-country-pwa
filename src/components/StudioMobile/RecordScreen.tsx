@@ -33,6 +33,7 @@ interface Props {
   takeSlot: 'A' | 'B' | 'C'; onTakeSlotChange: (slot: 'A' | 'B' | 'C') => void;
   slotTakes: { A?: any; B?: any; C?: any };
   onToggleMonitor: () => void; onVocalVolumeChange: (v: number) => void; onToggleLyrics: () => void;
+  onSlotGuide: (slot: 'A' | 'B' | 'C' | null) => void; slotGuideActive: 'A' | 'B' | 'C' | null;
   onPreviewStems: () => void; onPreWarmMic: () => Promise<void>; isPreviewing: boolean;
   audioDevices: AudioDevice[]; selectedDevice: string | null; onSelectDevice: (id: string | null) => void;
   onRefreshDevices: () => void; punchIn: number | null; punchOut: number | null;
@@ -126,7 +127,7 @@ export default function RecordScreen({
   selected, project, currentPreset, reverb, isRecording, isSaving, duration, analyser, vuLevel,
   monitoring, permError, httpsUrl, instUrl, instLoading, instCached, vocalGuideUrl, vocalLoading, vocalCached,
   vocalGuideVol, showLyrics, instRef, vocalGuideRef, getInstPlaybackTime, onRefreshSong,
-  takeSlot, onTakeSlotChange, slotTakes,
+  takeSlot, onTakeSlotChange, slotTakes, onSlotGuide, slotGuideActive,
   onBack, onGoMixer, onPresetChange, onReverbChange,
   onStartRecording, onStopRecording, onToggleMonitor, onVocalVolumeChange, onToggleLyrics,
   onPreviewStems, isPreviewing, onPreWarmMic,
@@ -350,6 +351,40 @@ export default function RecordScreen({
                 );
               })}
             </div>
+            {/* Guide vocal slot — jouer un autre slot comme référence */}
+            {(['A','B','C'] as const).some(s => s !== takeSlot && !!slotTakes[s]) && (
+              <div className="mt-2">
+                <p className="text-[8px] text-zinc-600 font-black uppercase tracking-widest mb-1.5">🎧 Écouter un autre slot comme guide</p>
+                <div className="flex gap-1.5">
+                  {(['A','B','C'] as const).map(slot => {
+                    if (!slotTakes[slot] || slot === takeSlot) return null;
+                    const isGuide = slotGuideActive === slot;
+                    return (
+                      <button key={slot}
+                        onClick={() => onSlotGuide(isGuide ? null : slot)}
+                        disabled={isRecording}
+                        className="px-3 py-1.5 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-40 flex items-center gap-1"
+                        style={{
+                          background: isGuide ? '#16a34a30' : '#141414',
+                          border: `1.5px solid ${isGuide ? '#16a34a' : '#333'}`,
+                          color: isGuide ? '#4ade80' : '#71717a',
+                        }}>
+                        {isGuide ? '🎧' : '▶'} Slot {slot}
+                      </button>
+                    );
+                  })}
+                  {slotGuideActive && !isRecording && (
+                    <button onClick={() => onSlotGuide(null)}
+                      className="px-2 py-1.5 rounded-lg font-black text-[10px] uppercase text-zinc-600 border border-zinc-800 active:scale-95 transition-all">
+                      ✕ Arrêter
+                    </button>
+                  )}
+                  {isRecording && slotGuideActive && (
+                    <span className="text-[9px] text-emerald-500 font-black uppercase animate-pulse self-center">🎧 Guide actif</span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

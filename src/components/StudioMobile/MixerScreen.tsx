@@ -13,7 +13,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   ChevronLeft, Plus, Layers, Scissors, Loader2, CheckCircle2,
-  Send, Pause, Play, Sparkles, Music2, RefreshCw, BarChart2,
+  Send, Pause, Play, Sparkles, Music2, RefreshCw, BarChart2, Download, Shield,
 } from 'lucide-react';
 import { MobileRecording, TrackProject, Take, studioService } from '../../services/StudioService';
 import { Song } from '../../types';
@@ -40,7 +40,7 @@ interface Props {
   onVolume:        (trackIndex: number, gain: number) => void;
   onPan:           (trackIndex: number, pan: number) => void;
   onDelete:        (trackIndex: number) => void;
-  onMix:           () => void;
+  onMix:           (layerIds: string[]) => void;
   onPlayMix:       () => void;
   onMasterize:     (vocalBlob: Blob, instBlob: Blob | null) => void;
   onUploadMix:     () => void;
@@ -66,6 +66,9 @@ export default function MixerScreen({
   onProjectUpdate, instBlob,
 }: Props) {
   const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
+  const [backupDone, setBackupDone]           = useState(false);
+  const [exportingVoice, setExportingVoice]   = useState(false);
+  const [layerSlots, setLayerSlots]           = useState<Set<string>>(new Set());
   const [generateLabel, setGenerateLabel]     = useState('');
   const [generatePct, setGeneratePct]         = useState(0);
   const [generatedDone, setGeneratedDone]     = useState<Set<number>>(new Set());
@@ -77,7 +80,9 @@ export default function MixerScreen({
   );
 
   const tracks    = project?.tracks || [];
-  const mainVoice = tracks.find(t => t.trackIndex === 0 && !(t as any).isGenerated);
+  // mainVoice = la voix principale non-muted (priorité : non-muted, sinon première)
+  const slotVoices = tracks.filter(t => t.trackIndex === 0 && !(t as any).isGenerated && t.dataUrl);
+  const mainVoice  = slotVoices.find(t => !t.muted) ?? slotVoices[0];
   const totalDuration = mainVoice?.duration || Math.max(...tracks.map(t => t.duration), 0);
 
   // Charger la waveform du mix dès qu'il est prêt
@@ -102,9 +107,52 @@ export default function MixerScreen({
     onGoComp(takes);
   };
 
+  // Backup de la voix principale en localStorage
+  const backupMainVoice = () => {
+    if (!mainVoice?.dataUrl) return;
+    const key = `backup_voice_${project.id}_${mainVoice.id}`;
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        dataUrl: mainVoice.dataUrl,
+        backedUpAt: Date.now(),
+        fileName: mainVoice.fileName,
+        duration: mainVoice.duration,
+        songTitle: mainVoice.songTitle,
+      }));
+      setBackupDone(true);
+      setTimeout(() => setBackupDone(false), 3000);
+    } catch { alert('Espace insuffisant pour le backup'); }
+  };
+
+  // Export audio de la voix principale vers iPhone
+  const exportMainVoice = async () => {
+    if (!mainVoice?.dataUrl || exportingVoice) return;
+    setExportingVoice(true);
+    try {
+      const res  = await fetch(mainVoice.dataUrl);
+      const blob = await res.blob();
+      const safeTitle = (mainVoice.songTitle || 'voix').replace(/[^a-zA-Z0-9]/g, '_');
+      const ext  = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('mpeg') ? 'mp3' : 'wav';
+      const fileName = `${safeTitle}_VOIX_PRINCIPALE.${ext}`;
+      const file = new File([blob], fileName, { type: blob.type });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: fileName, files: [file] });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fileName; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
+    } catch (e: any) {
+      if (!e.message?.includes('cancel')) alert('Erreur export : ' + e.message);
+    } finally { setExportingVoice(false); }
+  };
+
   // Générer une harmonie individuelle
   const generateOne = async (harmonyDef: typeof HARMONY_DEFS[0]) => {
     if (!mainVoice || generatingIndex !== null) return;
+    // Backup automatique avant génération
+    backupMainVoice();
     setGeneratingIndex(harmonyDef.trackIndex);
     setGeneratePct(0);
     setGenerateLabel(`${harmonyDef.emoji} ${harmonyDef.label}...`);
@@ -153,6 +201,8 @@ export default function MixerScreen({
   // Générer toutes les harmonies
   const generateAll = async () => {
     if (!mainVoice || generatingIndex !== null) return;
+    // Backup automatique avant génération
+    backupMainVoice();
     setGeneratingIndex(-1); // -1 = toutes
     setGeneratePct(0);
     try {
@@ -580,6 +630,69 @@ export default function MixerScreen({
                 </div>
               )}
 
+              {/* ── Layering A/B/C ── */}
+              {slotVoices.length > 1 && (
+                <div className="mb-3 p-3 rounded-xl" style={{ background: '#0f172a', border: '1px solid #1e293b' }}>
+                  <p className="text-[9px] text-zinc-500 font-black uppercase tracking-widest mb-2">🎙 Layering — inclure dans le mix</p>
+                  <div className="flex gap-2">
+                    {slotVoices.map(sv => {
+                      const slot = sv.takeSlot as string;
+                      const isMain = sv.id === mainVoice?.id;
+                      const included = isMain || layerSlots.has(sv.id);
+                      return (
+                        <button key={sv.id}
+                          onClick={() => {
+                            if (isMain) return; // slot actif = toujours inclus
+                            setLayerSlots(prev => {
+                              const n = new Set(prev);
+                              n.has(sv.id) ? n.delete(sv.id) : n.add(sv.id);
+                              return n;
+                            });
+                          }}
+                          className="flex-1 py-2 rounded-lg font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 flex flex-col items-center gap-0.5"
+                          style={{
+                            background: included ? '#16a34a20' : '#141414',
+                            border: `1.5px solid ${included ? '#16a34a' : '#27272a'}`,
+                            color: included ? '#4ade80' : '#52525b',
+                          }}>
+                          <span>Slot {slot}</span>
+                          <span className="text-[7px] font-black" style={{ color: included ? '#4ade80' : '#3f3f46' }}>
+                            {isMain ? '● PRINCIPAL' : included ? '✓ INCLUS' : '+ AJOUTER'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {layerSlots.size > 0 && (
+                    <p className="text-[8px] text-emerald-500 font-black uppercase mt-1.5">
+                      ✓ {layerSlots.size + 1} voix mixées — appuie sur MIXER pour générer
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Bouton backup + export voix principale */}
+              {mainVoice && (
+                <div className="flex gap-2 mb-2">
+                  <button
+                    onClick={backupMainVoice}
+                    className={`flex-1 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-1.5 active:scale-95 transition-all ${
+                      backupDone ? 'bg-green-800 text-green-300' : 'bg-zinc-800 text-zinc-400'
+                    }`}>
+                    {backupDone ? <><CheckCircle2 size={12}/> Sauvegardé</> : <><Shield size={12}/> Backup voix</>}
+                  </button>
+                  <button
+                    onClick={exportMainVoice}
+                    disabled={exportingVoice}
+                    className="flex-1 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-1.5 active:scale-95 transition-all bg-zinc-800 text-zinc-400 disabled:opacity-50">
+                    {exportingVoice
+                      ? <><Loader2 size={12} className="animate-spin"/> Export...</>
+                      : <><Download size={12}/> Exporter voix</>
+                    }
+                  </button>
+                </div>
+              )}
+
               {/* Bouton Tout générer */}
               <button
                 onClick={generateAll}
@@ -640,7 +753,7 @@ export default function MixerScreen({
           <div className="space-y-3 pt-2">
 
             {/* Bouton Mixer */}
-            <button onClick={onMix} disabled={isMixing}
+            <button onClick={() => onMix([...layerSlots])} disabled={isMixing}
               className="w-full py-4 bg-red-600 rounded-2xl font-black text-[14px] uppercase tracking-widest flex items-center justify-center gap-3 active:scale-95 transition-all disabled:opacity-60">
               {isMixing
                 ? <><Loader2 size={18} className="animate-spin"/> Mixage...</>
