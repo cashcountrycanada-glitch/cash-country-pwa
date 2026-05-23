@@ -186,7 +186,7 @@ export default function RecordScreen({
     }).catch(() => {}).finally(() => setServerLrcLoading(false));
   }, [selected?.id]);
 
-  const rawLrc = selected.lrcData || serverLrc || selected.lrcDense || [];
+  const rawLrc = selected.lrcData || serverLrc || selected.lrcDense || (selected as any).lyricsOCR || [];
   // DEBUG — à retirer après diagnostic
   if (rawLrc && (window as any).__lastLrcDebug !== selected.id) {
     (window as any).__lastLrcDebug = selected.id;
