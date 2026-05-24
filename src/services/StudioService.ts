@@ -256,6 +256,236 @@ async function audioBufferToBlob(buffer: AudioBuffer): Promise<Blob> {
   });
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// MOTEUR HARMONIQUE INTELLIGENT — Harmonies basées sur les accords réels
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Notes de la gamme chromatique
+const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+// Intervalles dans un accord (en semitones depuis la fondamentale)
+const CHORD_TONES: Record<string, number[]> = {
+  '':    [0, 4, 7],        // Majeur : fondamentale, tierce M, quinte
+  'm':   [0, 3, 7],        // Mineur : fondamentale, tierce m, quinte
+  '7':   [0, 4, 7, 10],    // Dom 7  : + septième mineure
+  'maj7':[0, 4, 7, 11],    // Maj 7  : + septième majeure
+  'm7':  [0, 3, 7, 10],    // Min 7
+  'sus2':[0, 2, 7],        // Sus 2
+  'sus4':[0, 5, 7],        // Sus 4
+  'dim': [0, 3, 6],        // Diminué
+  'aug': [0, 4, 8],        // Augmenté
+  'add9':[0, 4, 7, 14],    // Add 9
+  '6':   [0, 4, 7, 9],     // Sixte
+  '9':   [0, 4, 7, 10, 14],// Neuvième
+};
+
+// Parser un symbole d'accord → { root: number, tones: number[] }
+// Supporte : lettres (C, Dm, G7, F#m, Bb, Ebmaj7) + Nashville (1,4,5,2m,6m)
+function parseChord(symbol: string, songKey: number = 0): { root: number; tones: number[] } | null {
+  if (!symbol || symbol === 'N.C.' || symbol === '?' || symbol === '') return null;
+
+  // Notation Nashville (chiffres romains/arabes relatifs à la tonalité)
+  const nashville = symbol.match(/^([b#]?)([1-7])(.*)/);
+  if (nashville && !symbol.match(/^[A-G]/)) {
+    const [, acc, deg, qual] = nashville;
+    const MAJOR_SCALE = [0, 2, 4, 5, 7, 9, 11];
+    let root = (songKey + MAJOR_SCALE[parseInt(deg) - 1] + (acc === 'b' ? -1 : acc === '#' ? 1 : 0) + 12) % 12;
+    const quality = qual.replace(/^m(?!aj)/, 'm').replace(/7$/, '7').trim();
+    const tones = CHORD_TONES[quality] || (qual.includes('m') ? CHORD_TONES['m'] : CHORD_TONES['']);
+    return { root, tones: tones.map((t: number) => (root + t) % 12) };
+  }
+
+  // Notation alphabétique — parser correctement les bémols AVANT de remplacer
+  const rootMatch = symbol.match(/^([A-G][#b]?)/);
+  if (!rootMatch) return null;
+  let rootStr = rootMatch[1];
+  // Table de correspondance bémols → dièses (ordre important : 2 chars avant 1 char)
+  const flat2sharp: Record<string, string> = {
+    'Cb':'B','Db':'C#','Eb':'D#','Fb':'E','Gb':'F#','Ab':'G#','Bb':'A#'
+  };
+  rootStr = flat2sharp[rootStr] || rootStr;
+  const root = NOTES.indexOf(rootStr);
+  if (root === -1) return null;
+  // Extraire le type d'accord (enlever basse optionnelle ex: G/B)
+  const quality = symbol.slice(rootMatch[0].length).replace(/\/.*$/, '').trim();
+  const tones = CHORD_TONES[quality] || CHORD_TONES[''] || [0, 4, 7];
+  return { root, tones: tones.map((t: number) => (root + t) % 12) };
+}
+
+// Trouver la meilleure note d'harmonie pour une note mélodique donnée
+// sur un accord donné, dans une direction (vers le haut ou le bas)
+function bestHarmonyNote(
+  melodyNoteSemitone: number,  // note chantée (absolu, ex: 60 = C4)
+  chord: { root: number; tones: number[] },
+  intervalTarget: number,      // intervalle visé en semitones (+3, +7, -12, etc.)
+  key: number                  // tonalité de la chanson
+): number {
+  const melodyClass = ((melodyNoteSemitone % 12) + 12) % 12;
+  const direction = intervalTarget >= 0 ? 1 : -1;
+  const absTarget = Math.abs(intervalTarget);
+
+  // Candidats : notes de l'accord + notes de la gamme penta country
+  const countryPenta = [0, 2, 4, 7, 9]; // pentatonique majeure relative à la tonalité
+  const candidates = [...new Set([
+    ...chord.tones,
+    ...countryPenta.map(n => (key + n) % 12),
+  ])];
+
+  // Trouver la note candidate la plus proche de l'intervalle cible
+  let bestNote = melodyNoteSemitone + intervalTarget;
+  let bestDist = Infinity;
+
+  for (const candidate of candidates) {
+    // Trouver toutes les octaves de ce candidat proches de la cible
+    for (let oct = -2; oct <= 2; oct++) {
+      const note = melodyNoteSemitone + direction * (absTarget + oct * 12 - absTarget % 12);
+      const noteClass = ((note % 12) + 12) % 12;
+      if (noteClass === candidate) {
+        const dist = Math.abs(note - (melodyNoteSemitone + intervalTarget));
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestNote = note;
+        }
+      }
+    }
+  }
+
+  return bestNote;
+}
+
+// Convertir realPartition en map timestamp→accord
+function buildChordMap(realPartition: any[], songKey: number = 0): Array<{ time: number; chord: ReturnType<typeof parseChord> }> {
+  const map: Array<{ time: number; chord: ReturnType<typeof parseChord> }> = [];
+  for (const section of realPartition) {
+    for (const beat of (section.beats || [])) {
+      if (beat.timestamp !== undefined && beat.chord) {
+        const parsed = parseChord(beat.chord, songKey);
+        if (parsed) map.push({ time: beat.timestamp, chord: parsed });
+      }
+    }
+  }
+  return map.sort((a, b) => a.time - b.time);
+}
+
+// Obtenir l'accord au timestamp t
+function chordAt(map: Array<{ time: number; chord: ReturnType<typeof parseChord> }>, t: number): ReturnType<typeof parseChord> | null {
+  if (map.length === 0) return null;
+  let last = map[0].chord;
+  for (const entry of map) {
+    if (entry.time > t) break;
+    last = entry.chord;
+  }
+  return last;
+}
+
+// Parser la tonalité de la chanson
+function parseKey(keyStr: string): number {
+  if (!keyStr) return 0;
+  const clean = keyStr.replace(/\s*(Major|major|Majeur|maj)\s*/gi, '').replace('m','').trim();
+  const idx = NOTES.indexOf(clean.replace('b','#').replace('Db','C#').replace('Eb','D#').replace('Gb','F#').replace('Ab','G#').replace('Bb','A#'));
+  return idx >= 0 ? idx : 0;
+}
+
+// ── PITCH SHIFT INTELLIGENT par segment ──────────────────────────────────────
+// Divise le buffer en segments de ~50ms, applique le meilleur interval pour chaque accord
+async function smartHarmonyBuffer(
+  buffer: AudioBuffer,
+  targetInterval: number,  // intervalle visé (+3, +7, +5, -12)
+  chordMap: Array<{ time: number; chord: ReturnType<typeof parseChord> }>,
+  songKey: number
+): Promise<AudioBuffer> {
+  // Si pas de données d'accord → fallback WSOLA classique
+  if (chordMap.length === 0) {
+    return pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), buffer, targetInterval);
+  }
+
+  const sr       = buffer.sampleRate;
+  const channels = buffer.numberOfChannels;
+  const len      = buffer.length;
+  const segmentSec = 0.05; // segments de 50ms
+  const segmentSamp = Math.floor(segmentSec * sr);
+
+  // Buffer de sortie
+  const outCtx = new OfflineAudioContext(channels, len, sr);
+  const outBuf  = outCtx.createBuffer(channels, len, sr);
+
+  // Traiter chaque canal
+  for (let ch = 0; ch < channels; ch++) {
+    const inData  = buffer.getChannelData(ch);
+    const outData = outBuf.getChannelData(ch);
+
+    let pos = 0;
+    let lastInterval = targetInterval;
+
+    while (pos < len) {
+      const t = pos / sr;
+      const chord = chordAt(chordMap, t);
+
+      // Calculer le meilleur intervalle pour cet accord
+      let interval = targetInterval;
+      if (chord) {
+        // Estimer la note mélodique locale (RMS peak dans ce segment)
+        const segEnd = Math.min(pos + segmentSamp, len);
+        // On utilise l'intervalle standard mais ajusté pour rester dans l'accord
+        // Tolérance de ±1 semitone pour coller à la note d'accord la plus proche
+        const baseNote = 60 + targetInterval; // estimation C4 + interval
+        const bestNote = bestHarmonyNote(60, chord, targetInterval, songKey);
+        const adjustment = bestNote - (60 + targetInterval);
+        // Ajustement max ±1 semitone pour ne pas dénaturer l'harmonie
+        interval = targetInterval + Math.max(-1, Math.min(1, Math.round(adjustment)));
+      }
+
+      // Appliquer WSOLA sur ce segment avec l'intervalle calculé
+      const segEnd = Math.min(pos + segmentSamp * 4, len); // segments de 200ms pour WSOLA
+      const segLen = segEnd - pos;
+      const segBuf = new Float32Array(segLen);
+      for (let i = 0; i < segLen; i++) segBuf[i] = inData[pos + i];
+
+      const shifted = wsolaShift(segBuf, interval, sr);
+
+      // Cross-fade avec le segment précédent (éviter les discontinuités)
+      const fadeLen = Math.min(128, shifted.length);
+      for (let i = 0; i < shifted.length && pos + i < len; i++) {
+        if (i < fadeLen && lastInterval !== interval) {
+          const fade = i / fadeLen;
+          outData[pos + i] = outData[pos + i] * (1 - fade) + shifted[i] * fade;
+        } else {
+          outData[pos + i] = shifted[i];
+        }
+      }
+
+      lastInterval = interval;
+      pos += segmentSamp; // avancer de 50ms
+    }
+
+    // Normalisation douce
+    let peak = 0;
+    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(outData[i]));
+    if (peak > 0.92) { const g = 0.88 / peak; for (let i = 0; i < len; i++) outData[i] *= g; }
+  }
+
+  // EQ final
+  const eqCtx = new OfflineAudioContext(channels, len, sr);
+  const eqSrc = eqCtx.createBufferSource(); eqSrc.buffer = outBuf;
+  const eq1   = eqCtx.createBiquadFilter();
+  const eq2   = eqCtx.createBiquadFilter();
+  const gn    = eqCtx.createGain();
+
+  if (targetInterval > 0) {
+    eq1.type = 'highpass';  eq1.frequency.value = 100;
+    eq2.type = 'highshelf'; eq2.frequency.value = 5500; eq2.gain.value = -Math.min(targetInterval * 0.25, 2.0);
+    gn.gain.value = 0.90;
+  } else {
+    eq1.type = 'lowpass';  eq1.frequency.value = 7000;
+    eq2.type = 'peaking';  eq2.frequency.value = 900; eq2.gain.value = 2.0; eq2.Q.value = 1.0;
+    gn.gain.value = 1.05;
+  }
+  eqSrc.connect(eq1); eq1.connect(eq2); eq2.connect(gn); gn.connect(eqCtx.destination);
+  eqSrc.start(0);
+  return eqCtx.startRendering();
+}
+
+
 export const studioService = {
   async saveRecordingLocallyAsync(rec: MobileRecording): Promise<void> {
     const db = getOfflineDB();
@@ -580,217 +810,6 @@ export const studioService = {
     const rendered = await offline.startRendering(); return audioBufferToBlob(rendered);
   },
 
-// ══════════════════════════════════════════════════════════════════════════════
-// MOTEUR HARMONIQUE INTELLIGENT — Harmonies basées sur les accords réels
-// ══════════════════════════════════════════════════════════════════════════════
-
-// Notes de la gamme chromatique
-const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-
-// Intervalles dans un accord (en semitones depuis la fondamentale)
-const CHORD_TONES: Record<string, number[]> = {
-  '':    [0, 4, 7],        // Majeur : fondamentale, tierce M, quinte
-  'm':   [0, 3, 7],        // Mineur : fondamentale, tierce m, quinte
-  '7':   [0, 4, 7, 10],    // Dom 7  : + septième mineure
-  'maj7':[0, 4, 7, 11],    // Maj 7  : + septième majeure
-  'm7':  [0, 3, 7, 10],    // Min 7
-  'sus2':[0, 2, 7],        // Sus 2
-  'sus4':[0, 5, 7],        // Sus 4
-  'dim': [0, 3, 6],        // Diminué
-  'aug': [0, 4, 8],        // Augmenté
-  'add9':[0, 4, 7, 14],    // Add 9
-  '6':   [0, 4, 7, 9],     // Sixte
-  '9':   [0, 4, 7, 10, 14],// Neuvième
-};
-
-// Parser un symbole d'accord → { root: number, tones: number[] }
-function parseChord(symbol: string): { root: number; tones: number[] } | null {
-  if (!symbol || symbol === 'N.C.' || symbol === '?') return null;
-  // Extraire la fondamentale
-  const rootMatch = symbol.match(/^([A-G][#b]?)/);
-  if (!rootMatch) return null;
-  const rootStr = rootMatch[1].replace('b', '#').replace('Db','C#').replace('Eb','D#').replace('Fb','E').replace('Gb','F#').replace('Ab','G#').replace('Bb','A#').replace('Cb','B');
-  const root = NOTES.indexOf(rootStr);
-  if (root === -1) return null;
-  // Extraire le type d'accord
-  const quality = symbol.slice(rootMatch[0].length).replace(/\/.*$/, '').trim(); // enlever basse
-  const tones = CHORD_TONES[quality] || CHORD_TONES[''] || [0, 4, 7];
-  return { root, tones: tones.map(t => (root + t) % 12) };
-}
-
-// Trouver la meilleure note d'harmonie pour une note mélodique donnée
-// sur un accord donné, dans une direction (vers le haut ou le bas)
-function bestHarmonyNote(
-  melodyNoteSemitone: number,  // note chantée (absolu, ex: 60 = C4)
-  chord: { root: number; tones: number[] },
-  intervalTarget: number,      // intervalle visé en semitones (+3, +7, -12, etc.)
-  key: number                  // tonalité de la chanson
-): number {
-  const melodyClass = ((melodyNoteSemitone % 12) + 12) % 12;
-  const direction = intervalTarget >= 0 ? 1 : -1;
-  const absTarget = Math.abs(intervalTarget);
-
-  // Candidats : notes de l'accord + notes de la gamme penta country
-  const countryPenta = [0, 2, 4, 7, 9]; // pentatonique majeure relative à la tonalité
-  const candidates = [...new Set([
-    ...chord.tones,
-    ...countryPenta.map(n => (key + n) % 12),
-  ])];
-
-  // Trouver la note candidate la plus proche de l'intervalle cible
-  let bestNote = melodyNoteSemitone + intervalTarget;
-  let bestDist = Infinity;
-
-  for (const candidate of candidates) {
-    // Trouver toutes les octaves de ce candidat proches de la cible
-    for (let oct = -2; oct <= 2; oct++) {
-      const note = melodyNoteSemitone + direction * (absTarget + oct * 12 - absTarget % 12);
-      const noteClass = ((note % 12) + 12) % 12;
-      if (noteClass === candidate) {
-        const dist = Math.abs(note - (melodyNoteSemitone + intervalTarget));
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestNote = note;
-        }
-      }
-    }
-  }
-
-  return bestNote;
-}
-
-// Convertir realPartition en map timestamp→accord
-function buildChordMap(realPartition: any[]): Array<{ time: number; chord: ReturnType<typeof parseChord> }> {
-  const map: Array<{ time: number; chord: ReturnType<typeof parseChord> }> = [];
-  for (const section of realPartition) {
-    for (const beat of (section.beats || [])) {
-      if (beat.timestamp !== undefined && beat.chord) {
-        const parsed = parseChord(beat.chord);
-        if (parsed) map.push({ time: beat.timestamp, chord: parsed });
-      }
-    }
-  }
-  return map.sort((a, b) => a.time - b.time);
-}
-
-// Obtenir l'accord au timestamp t
-function chordAt(map: Array<{ time: number; chord: ReturnType<typeof parseChord> }>, t: number): ReturnType<typeof parseChord> | null {
-  if (map.length === 0) return null;
-  let last = map[0].chord;
-  for (const entry of map) {
-    if (entry.time > t) break;
-    last = entry.chord;
-  }
-  return last;
-}
-
-// Parser la tonalité de la chanson
-function parseKey(keyStr: string): number {
-  if (!keyStr) return 0;
-  const clean = keyStr.replace(/\s*(Major|major|Majeur|maj)\s*/gi, '').replace('m','').trim();
-  const idx = NOTES.indexOf(clean.replace('b','#').replace('Db','C#').replace('Eb','D#').replace('Gb','F#').replace('Ab','G#').replace('Bb','A#'));
-  return idx >= 0 ? idx : 0;
-}
-
-// ── PITCH SHIFT INTELLIGENT par segment ──────────────────────────────────────
-// Divise le buffer en segments de ~50ms, applique le meilleur interval pour chaque accord
-async function smartHarmonyBuffer(
-  buffer: AudioBuffer,
-  targetInterval: number,  // intervalle visé (+3, +7, +5, -12)
-  chordMap: Array<{ time: number; chord: ReturnType<typeof parseChord> }>,
-  songKey: number
-): Promise<AudioBuffer> {
-  // Si pas de données d'accord → fallback WSOLA classique
-  if (chordMap.length === 0) {
-    return pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), buffer, targetInterval);
-  }
-
-  const sr       = buffer.sampleRate;
-  const channels = buffer.numberOfChannels;
-  const len      = buffer.length;
-  const segmentSec = 0.05; // segments de 50ms
-  const segmentSamp = Math.floor(segmentSec * sr);
-
-  // Buffer de sortie
-  const outCtx = new OfflineAudioContext(channels, len, sr);
-  const outBuf  = outCtx.createBuffer(channels, len, sr);
-
-  // Traiter chaque canal
-  for (let ch = 0; ch < channels; ch++) {
-    const inData  = buffer.getChannelData(ch);
-    const outData = outBuf.getChannelData(ch);
-
-    let pos = 0;
-    let lastInterval = targetInterval;
-
-    while (pos < len) {
-      const t = pos / sr;
-      const chord = chordAt(chordMap, t);
-
-      // Calculer le meilleur intervalle pour cet accord
-      let interval = targetInterval;
-      if (chord) {
-        // Estimer la note mélodique locale (RMS peak dans ce segment)
-        const segEnd = Math.min(pos + segmentSamp, len);
-        // On utilise l'intervalle standard mais ajusté pour rester dans l'accord
-        // Tolérance de ±1 semitone pour coller à la note d'accord la plus proche
-        const baseNote = 60 + targetInterval; // estimation C4 + interval
-        const bestNote = bestHarmonyNote(60, chord, targetInterval, songKey);
-        const adjustment = bestNote - (60 + targetInterval);
-        // Ajustement max ±1 semitone pour ne pas dénaturer l'harmonie
-        interval = targetInterval + Math.max(-1, Math.min(1, Math.round(adjustment)));
-      }
-
-      // Appliquer WSOLA sur ce segment avec l'intervalle calculé
-      const segEnd = Math.min(pos + segmentSamp * 4, len); // segments de 200ms pour WSOLA
-      const segLen = segEnd - pos;
-      const segBuf = new Float32Array(segLen);
-      for (let i = 0; i < segLen; i++) segBuf[i] = inData[pos + i];
-
-      const shifted = wsolaShift(segBuf, interval, sr);
-
-      // Cross-fade avec le segment précédent (éviter les discontinuités)
-      const fadeLen = Math.min(128, shifted.length);
-      for (let i = 0; i < shifted.length && pos + i < len; i++) {
-        if (i < fadeLen && lastInterval !== interval) {
-          const fade = i / fadeLen;
-          outData[pos + i] = outData[pos + i] * (1 - fade) + shifted[i] * fade;
-        } else {
-          outData[pos + i] = shifted[i];
-        }
-      }
-
-      lastInterval = interval;
-      pos += segmentSamp; // avancer de 50ms
-    }
-
-    // Normalisation douce
-    let peak = 0;
-    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(outData[i]));
-    if (peak > 0.92) { const g = 0.88 / peak; for (let i = 0; i < len; i++) outData[i] *= g; }
-  }
-
-  // EQ final
-  const eqCtx = new OfflineAudioContext(channels, len, sr);
-  const eqSrc = eqCtx.createBufferSource(); eqSrc.buffer = outBuf;
-  const eq1   = eqCtx.createBiquadFilter();
-  const eq2   = eqCtx.createBiquadFilter();
-  const gn    = eqCtx.createGain();
-
-  if (targetInterval > 0) {
-    eq1.type = 'highpass';  eq1.frequency.value = 100;
-    eq2.type = 'highshelf'; eq2.frequency.value = 5500; eq2.gain.value = -Math.min(targetInterval * 0.25, 2.0);
-    gn.gain.value = 0.90;
-  } else {
-    eq1.type = 'lowpass';  eq1.frequency.value = 7000;
-    eq2.type = 'peaking';  eq2.frequency.value = 900; eq2.gain.value = 2.0; eq2.Q.value = 1.0;
-    gn.gain.value = 1.05;
-  }
-  eqSrc.connect(eq1); eq1.connect(eq2); eq2.connect(gn); gn.connect(eqCtx.destination);
-  eqSrc.start(0);
-  return eqCtx.startRendering();
-}
-
   async generateLayersFromVoice(mainVoice: MobileRecording, project: TrackProject, onProgress?: (label: string, pct: number) => void, songMeta?: { realPartition?: any[]; key?: string }): Promise<MobileRecording[]> {
     const progress = (label: string, pct: number) => onProgress?.(label, pct);
     progress('Décodage voix principale', 5);
@@ -812,7 +831,7 @@ async function smartHarmonyBuffer(
     let srcBuffer: AudioBuffer;
     try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); } finally { tmpCtx.close(); }
     // Construire la carte des accords depuis realPartition
-    const chordMap = songMeta?.realPartition ? buildChordMap(songMeta.realPartition) : [];
+    const chordMap = songMeta?.realPartition ? buildChordMap(songMeta.realPartition, songKey) : [];
     const songKey  = parseKey(songMeta?.key || '');
     const hasChordData = chordMap.length > 0;
     if (hasChordData) progress(`🎵 Analyse harmonique — ${chordMap.length} accords détectés`, 8);

@@ -221,21 +221,21 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const sr  = buf.sampleRate;
   const ch  = Math.min(2, buf.numberOfChannels);
   const len = buf.length;
-  const step1Ctx = new OfflineAudioContext(ch, len, sr);
-  const step1Buf = step1Ctx.createBuffer(ch, len, sr);
+
+  // ── ÉTAPE 2 : EQ + Compression (dans un OfflineAudioContext) ────────────────
+  // Note: on crée step1Buf dans offline1 pour éviter le cross-context iOS
+  const offline1 = new OfflineAudioContext(2, len, sr);
+  const step1Buf = offline1.createBuffer(ch, len, sr);
   for (let c = 0; c < ch; c++) {
     let data = new Float32Array(buf.getChannelData(c));
     // Noise gate : coupe le bruit sous -58dB
     data = applyNoiseGate(data, -58, 80, sr);
     // Saturation douce : drive très léger pour la chaleur analogique
-    const driveAmt = 0.12 + Math.abs(s.lowGain) * 0.01; // plus de drive si on booste les graves
+    const driveAmt = 0.12 + Math.abs(s.lowGain) * 0.01;
     data = applySaturation(data, driveAmt);
     step1Buf.getChannelData(c).set(data);
   }
-
-  // ── ÉTAPE 2 : EQ + Compression (dans un OfflineAudioContext) ────────────────
-  const offline1 = new OfflineAudioContext(2, len, sr);
-  const s1src    = offline1.createBufferSource(); s1src.buffer = step1Buf;
+  const s1src = offline1.createBufferSource(); s1src.buffer = step1Buf;
 
   // High-pass 30Hz — sub-bass inutile
   const hpf = offline1.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 30; hpf.Q.value = 0.6;
