@@ -276,7 +276,11 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           (window as any).__instBufSrc    = bsrc;
           (window as any).__instCtxActive = true;
           (window as any).__instCtxOffset = t;
-          (window as any).__instWallStart = performance.now() - (t * 1000);
+          (window as any).__instCtxStartTime = startAt;
+          // __instWallStart calculé pour que "performance.now() - __instWallStart" = t au moment startAt
+          // startAt est dans le futur de (startAt - ctx.currentTime) secondes
+          const msUntilStart = (startAt - ctx.currentTime) * 1000;
+          (window as any).__instWallStart = performance.now() + msUntilStart - (t * 1000);
           bsrc.onended = () => {
             (window as any).__instCtxActive = false;
             (window as any).__instBufSrc    = null;

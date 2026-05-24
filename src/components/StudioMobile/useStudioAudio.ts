@@ -103,12 +103,12 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     if (ctx && (window as any).__instCtxActive) {
       const elapsed = ctx.currentTime - ((window as any).__instCtxStartTime || ctx.currentTime);
       const t = ((window as any).__instCtxOffset || 0) + elapsed;
-      if (t >= 0) return t;
+      return Math.max(0, t); // pendant les ~50ms de buffer, retourner 0 plutôt que négatif
     }
-    // Priorité 2 : tracker Date.now() (fallback si AudioContext suspendu)
+    // Priorité 2 : tracker performance.now() (fallback si AudioContext suspendu)
     if ((window as any).__instWallStart) {
-      const elapsed = (Date.now() - (window as any).__instWallStart) / 1000;
-      return ((window as any).__instCtxOffset || 0) + elapsed;
+      const elapsed = (performance.now() - (window as any).__instWallStart) / 1000;
+      return Math.max(0, elapsed);
     }
     // Priorité 3 : <audio> element joue normalement
     if (instRef.current && !isNaN(instRef.current.currentTime) && instRef.current.currentTime > 0) {
