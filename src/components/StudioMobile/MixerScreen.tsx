@@ -107,21 +107,32 @@ export default function MixerScreen({
     onGoComp(takes);
   };
 
-  // Backup de la voix principale en localStorage
-  const backupMainVoice = () => {
+  // Backup de la voix principale — export fichier audio directement
+  // (localStorage trop limité pour les blobs audio sur iOS)
+  const backupMainVoice = async () => {
     if (!mainVoice?.dataUrl) return;
-    const key = `backup_voice_${project.id}_${mainVoice.id}`;
     try {
-      localStorage.setItem(key, JSON.stringify({
-        dataUrl: mainVoice.dataUrl,
-        backedUpAt: Date.now(),
-        fileName: mainVoice.fileName,
-        duration: mainVoice.duration,
-        songTitle: mainVoice.songTitle,
-      }));
+      const res  = await fetch(mainVoice.dataUrl);
+      const blob = await res.blob();
+      const safeTitle = (mainVoice.songTitle || 'voix').replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
+      const ext  = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('mpeg') ? 'mp3' : 'wav';
+      const ts   = new Date().toISOString().slice(0,16).replace('T','_').replace(':','h');
+      const fileName = `BACKUP_${safeTitle}_${ts}.${ext}`;
+      const file = new File([blob], fileName, { type: blob.type });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: `Backup — ${mainVoice.songTitle}`, files: [file] });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fileName; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
       setBackupDone(true);
-      setTimeout(() => setBackupDone(false), 3000);
-    } catch { alert('Espace insuffisant pour le backup'); }
+      setTimeout(() => setBackupDone(false), 4000);
+    } catch (e: any) {
+      if (!e.message?.includes('cancel') && e.name !== 'AbortError')
+        alert('Erreur backup : ' + e.message);
+    }
   };
 
   // Export audio de la voix principale vers iPhone
@@ -151,8 +162,6 @@ export default function MixerScreen({
   // Générer une harmonie individuelle
   const generateOne = async (harmonyDef: typeof HARMONY_DEFS[0]) => {
     if (!mainVoice || generatingIndex !== null) return;
-    // Backup automatique avant génération
-    backupMainVoice();
     setGeneratingIndex(harmonyDef.trackIndex);
     setGeneratePct(0);
     setGenerateLabel(`${harmonyDef.emoji} ${harmonyDef.label}...`);
@@ -201,8 +210,6 @@ export default function MixerScreen({
   // Générer toutes les harmonies
   const generateAll = async () => {
     if (!mainVoice || generatingIndex !== null) return;
-    // Backup automatique avant génération
-    backupMainVoice();
     setGeneratingIndex(-1); // -1 = toutes
     setGeneratePct(0);
     try {

@@ -165,7 +165,7 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
 
           {/* Delete */}
           <button onClick={() => onDelete(track.trackIndex!)}
-            className="w-8 h-8 rounded-xl bg-zinc-950 flex items-center justify-center text-zinc-700 active:text-red-500 active:scale-90">
+            className="w-8 h-8 rounded-xl bg-red-950/60 flex items-center justify-center text-red-700 active:text-red-400 active:scale-90 active:bg-red-900/60 transition-all">
             <Trash2 size={13}/>
           </button>
         </div>
