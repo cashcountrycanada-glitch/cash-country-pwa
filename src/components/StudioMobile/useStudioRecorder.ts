@@ -221,59 +221,93 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       const pIn  = punchInRef.current;
       const pOut = punchOutRef.current;
 
-      // 1. Stems de référence
-      const startStem = (el: HTMLAudioElement, t: number, key: 'inst' | 'vocal', syncAt: number | null = null) => {
-        // pause/currentTime déjà fait avant l'appel pour minimiser le gap entre inst et vocal
-        el.play().catch(() => {
-          // Fallback AudioContext — nécessaire sur iOS pour FLAC/MP4 hors interaction directe
-          const ctx = (window as any).__warmContext as AudioContext | undefined;
-          if (!ctx) return;
-          const bufKey = key === 'inst' ? '__instDecodedBuf' : '__vocalDecodedBuf';
-          const preDecoded: AudioBuffer | null = (window as any)[bufKey] || null;
-          // startAt : même valeur pour inst et vocal = synchronisation parfaite
-          const startAt = syncAt ?? ctx.currentTime + 0.08;
-          const playBuf = (buf: AudioBuffer) => {
-            const bsrc = ctx.createBufferSource();
-            bsrc.buffer = buf;
-            if (key === 'inst') {
-              bsrc.connect(ctx.destination);
-              (window as any).__instCtxStartTime = startAt;
-              (window as any).__instCtxOffset    = t;
-              (window as any).__instCtxActive    = true;
-              (window as any).__instWallStart    = performance.now() - (t * 1000);
-              (window as any).__instBufSrc       = bsrc;
-              bsrc.onended = () => { (window as any).__instCtxActive = false; (window as any).__instBufSrc = null; (window as any).__instWallStart = null; };
-            } else {
-              const vGain = ctx.createGain();
-              vGain.gain.value = optsRef.current.vocalGuideVolRef?.current ?? 0.4;
-              bsrc.connect(vGain);
-              vGain.connect(ctx.destination);
-              (window as any).__vocalBufGain = vGain;
-              (window as any).__vocalBufSrc  = bsrc;
-              bsrc.onended = () => { (window as any).__vocalBufSrc = null; (window as any).__vocalBufGain = null; };
-            }
-            bsrc.start(startAt, t);  // même startAt pour inst et vocal
+      // 1. Stems de référence — synchronisation sample-accurate via AudioContext
+      // On force TOUJOURS le path AudioContext (pas <audio>.play) pour garantir l'alignement
+      // C'est le même mécanisme que le PREVIEW qui est parfaitement synchro
+      const startStemsSync = async () => {
+        const ctx = (window as any).__warmContext as AudioContext | undefined;
+        const t = pIn ?? 0;
+
+        // Stopper les sources AudioContext précédentes
+        try { (window as any).__instBufSrc?.stop(); }  catch {}
+        try { (window as any).__vocalBufSrc?.stop(); } catch {}
+        (window as any).__instBufSrc = null;
+        (window as any).__vocalBufSrc = null;
+
+        // Aussi couper les éléments <audio> (ils ne serviront pas pendant rec)
+        const instEl  = optsRef.current.instRef.current;
+        const vocalEl = optsRef.current.vocalGuideRef.current;
+        if (instEl)  { instEl.pause();  instEl.currentTime = t; }
+        if (vocalEl) { vocalEl.pause(); vocalEl.currentTime = t; }
+
+        if (!ctx) {
+          // Fallback ultime : <audio>.play() séquentiel (pas idéal mais fonctionnel)
+          if (instEl  && optsRef.current.instUrl)       { instEl.play().catch(()=>{}); }
+          if (vocalEl && optsRef.current.vocalGuideUrl) { vocalEl.play().catch(()=>{}); }
+          return;
+        }
+
+        // Charger les deux buffers (déjà décodés en mémoire si PREVIEW a été fait)
+        const instBufRaw:  AudioBuffer | null = (window as any).__instDecodedBuf  || null;
+        const vocalBufRaw: AudioBuffer | null = (window as any).__vocalDecodedBuf || null;
+
+        const fetchBuf = async (url: string): Promise<AudioBuffer | null> => {
+          try {
+            const r = await fetch(url);
+            const ab = await r.arrayBuffer();
+            return await ctx.decodeAudioData(ab);
+          } catch { return null; }
+        };
+
+        const [instBuf, vocalBuf] = await Promise.all([
+          instBufRaw  ? Promise.resolve(instBufRaw)
+            : (optsRef.current.instUrl       ? fetchBuf(optsRef.current.instUrl)       : Promise.resolve(null)),
+          vocalBufRaw ? Promise.resolve(vocalBufRaw)
+            : (optsRef.current.vocalGuideUrl ? fetchBuf(optsRef.current.vocalGuideUrl) : Promise.resolve(null)),
+        ]);
+
+        // Un seul startAt pour les deux — synchronisation sample-accurate garantie
+        const startAt = ctx.currentTime + 0.05;
+
+        if (instBuf) {
+          const bsrc = ctx.createBufferSource();
+          bsrc.buffer = instBuf;
+          bsrc.connect(ctx.destination);
+          (window as any).__instBufSrc    = bsrc;
+          (window as any).__instCtxActive = true;
+          (window as any).__instCtxOffset = t;
+          (window as any).__instWallStart = performance.now() - (t * 1000);
+          bsrc.onended = () => {
+            (window as any).__instCtxActive = false;
+            (window as any).__instBufSrc    = null;
+            (window as any).__instWallStart = null;
           };
-          if (preDecoded) {
-            playBuf(preDecoded);
-          } else if (el.src) {
-            fetch(el.src).then(r => r.arrayBuffer()).then(buf => ctx.decodeAudioData(buf)).then(playBuf).catch(() => {});
-          }
-        });
+          bsrc.start(startAt, t);
+        } else if (instEl && optsRef.current.instUrl) {
+          // Buffer non dispo → fallback <audio>
+          instEl.play().catch(() => {});
+        }
+
+        if (vocalBuf && optsRef.current.vocalGuideUrl) {
+          const vGain = ctx.createGain();
+          vGain.gain.value = optsRef.current.vocalGuideVolRef?.current ?? 0.4;
+          const vsrc = ctx.createBufferSource();
+          vsrc.buffer = vocalBuf;
+          vsrc.connect(vGain);
+          vGain.connect(ctx.destination);
+          (window as any).__vocalBufSrc  = vsrc;
+          (window as any).__vocalBufGain = vGain;
+          vsrc.onended = () => {
+            (window as any).__vocalBufSrc  = null;
+            (window as any).__vocalBufGain = null;
+          };
+          vsrc.start(startAt, t);  // ← même startAt que inst : synchro parfaite
+        } else if (vocalEl && optsRef.current.vocalGuideUrl) {
+          vocalEl.play().catch(() => {});
+        }
       };
-      // Synchronisation sample-accurate : démarrer inst et vocal au même instant
-      const ctx = (window as any).__warmContext as AudioContext | undefined;
-      const syncStartAt = ctx ? ctx.currentTime + 0.08 : null;
 
-      // Préparer les éléments <audio> avant de les jouer (minimize gap)
-      const instEl  = optsRef.current.instRef.current;
-      const vocalEl = optsRef.current.vocalGuideRef.current;
-      if (instEl && optsRef.current.instUrl)   { instEl.pause();  instEl.currentTime  = pIn ?? 0; }
-      if (vocalEl && optsRef.current.vocalGuideUrl) { vocalEl.pause(); vocalEl.currentTime = pIn ?? 0; }
-
-      // Déclencher les deux dans le même tick — si fallback AudioContext, syncStartAt garantit l'alignement
-      if (instEl && optsRef.current.instUrl)             startStem(instEl,  pIn ?? 0, 'inst',  syncStartAt);
-      if (vocalEl && optsRef.current.vocalGuideUrl)      startStem(vocalEl, pIn ?? 0, 'vocal', syncStartAt);
+      await startStemsSync();
 
       if (optsRef.current.backingTracks && optsRef.current.backingTracks.length > 0) {
         backingRefsRef.current.forEach(el => { el.pause(); el.src = ''; });
