@@ -222,24 +222,25 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       const pOut = punchOutRef.current;
 
       // 1. Stems de référence
-      const startStem = (el: HTMLAudioElement, t: number, key: 'inst' | 'vocal') => {
-        el.pause();
-        el.currentTime = t;
+      const startStem = (el: HTMLAudioElement, t: number, key: 'inst' | 'vocal', syncAt: number | null = null) => {
+        // pause/currentTime déjà fait avant l'appel pour minimiser le gap entre inst et vocal
         el.play().catch(() => {
           // Fallback AudioContext — nécessaire sur iOS pour FLAC/MP4 hors interaction directe
           const ctx = (window as any).__warmContext as AudioContext | undefined;
           if (!ctx) return;
           const bufKey = key === 'inst' ? '__instDecodedBuf' : '__vocalDecodedBuf';
           const preDecoded: AudioBuffer | null = (window as any)[bufKey] || null;
+          // startAt : même valeur pour inst et vocal = synchronisation parfaite
+          const startAt = syncAt ?? ctx.currentTime + 0.08;
           const playBuf = (buf: AudioBuffer) => {
             const bsrc = ctx.createBufferSource();
             bsrc.buffer = buf;
             if (key === 'inst') {
               bsrc.connect(ctx.destination);
-              (window as any).__instCtxStartTime = ctx.currentTime;
+              (window as any).__instCtxStartTime = startAt;
               (window as any).__instCtxOffset    = t;
               (window as any).__instCtxActive    = true;
-              (window as any).__instWallStart    = Date.now() - (t * 1000);
+              (window as any).__instWallStart    = performance.now() - (t * 1000);
               (window as any).__instBufSrc       = bsrc;
               bsrc.onended = () => { (window as any).__instCtxActive = false; (window as any).__instBufSrc = null; (window as any).__instWallStart = null; };
             } else {
@@ -251,7 +252,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
               (window as any).__vocalBufSrc  = bsrc;
               bsrc.onended = () => { (window as any).__vocalBufSrc = null; (window as any).__vocalBufGain = null; };
             }
-            bsrc.start(0, t);
+            bsrc.start(startAt, t);  // même startAt pour inst et vocal
           };
           if (preDecoded) {
             playBuf(preDecoded);
@@ -260,8 +261,19 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           }
         });
       };
-      if (optsRef.current.instRef.current && optsRef.current.instUrl)             startStem(optsRef.current.instRef.current, pIn ?? 0, 'inst');
-      if (optsRef.current.vocalGuideRef.current && optsRef.current.vocalGuideUrl) startStem(optsRef.current.vocalGuideRef.current, pIn ?? 0, 'vocal');
+      // Synchronisation sample-accurate : démarrer inst et vocal au même instant
+      const ctx = (window as any).__warmContext as AudioContext | undefined;
+      const syncStartAt = ctx ? ctx.currentTime + 0.08 : null;
+
+      // Préparer les éléments <audio> avant de les jouer (minimize gap)
+      const instEl  = optsRef.current.instRef.current;
+      const vocalEl = optsRef.current.vocalGuideRef.current;
+      if (instEl && optsRef.current.instUrl)   { instEl.pause();  instEl.currentTime  = pIn ?? 0; }
+      if (vocalEl && optsRef.current.vocalGuideUrl) { vocalEl.pause(); vocalEl.currentTime = pIn ?? 0; }
+
+      // Déclencher les deux dans le même tick — si fallback AudioContext, syncStartAt garantit l'alignement
+      if (instEl && optsRef.current.instUrl)             startStem(instEl,  pIn ?? 0, 'inst',  syncStartAt);
+      if (vocalEl && optsRef.current.vocalGuideUrl)      startStem(vocalEl, pIn ?? 0, 'vocal', syncStartAt);
 
       if (optsRef.current.backingTracks && optsRef.current.backingTracks.length > 0) {
         backingRefsRef.current.forEach(el => { el.pause(); el.src = ''; });
