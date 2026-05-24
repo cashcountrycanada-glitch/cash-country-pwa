@@ -177,6 +177,7 @@ export default function MixerScreen({
           setGenerateLabel(label);
           setGeneratePct(Math.round(pct));
         },
+        { realPartition: (selected as any).realPartition, key: (selected as any).key },
       );
 
       // Récupérer uniquement la couche demandée
@@ -216,6 +217,7 @@ export default function MixerScreen({
       const generated = await studioService.generateLayersFromVoice(
         mainVoice, project,
         (label, pct) => { setGenerateLabel(label); setGeneratePct(Math.round(pct)); },
+        { realPartition: (selected as any).realPartition, key: (selected as any).key },
       );
       if (generated.length > 0) {
         let up = { ...project };

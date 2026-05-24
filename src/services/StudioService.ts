@@ -52,42 +52,185 @@ function getBestMimeType(): string {
   return '';
 }
 
+// ── Pitch Shift via WSOLA (Waveform Similarity Overlap-Add) ─────────────────
+// Méthode professionnelle : change la hauteur SANS changer la durée
+// Bien meilleur que playbackRate seul qui accélère/ralentit le signal
+function wsolaShift(inputData: Float32Array, semitones: number, sampleRate: number): Float32Array {
+  if (semitones === 0) return inputData;
+  const rate = Math.pow(2, semitones / 12);
+  // Taille de frame adaptative : plus petite = meilleurs transitoires, plus grande = moins d'artefacts
+  // Pour les petits intervalles (<= 5ST) : frames plus petites pour mieux gérer les attaques vocales
+  const frameSize  = Math.abs(semitones) <= 5 ? 1024 : 2048;
+  const overlap    = Math.floor(frameSize * 0.80); // 80% overlap pour réduire les artéfacts
+  const hop_a      = frameSize - overlap;
+  const hop_s      = Math.round(hop_a / rate);
+  const outputLen  = inputData.length;
+  const output     = new Float32Array(outputLen);
+  const window     = new Float32Array(frameSize);
+  // Fenêtre de Hann
+  for (let i = 0; i < frameSize; i++) window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (frameSize - 1)));
+
+  let pos_a = 0; // position dans le signal d'analyse (stretchée)
+  let pos_s = 0; // position dans le signal de sortie
+
+  while (pos_s + frameSize < outputLen) {
+    // Position réelle dans le signal source (on time-stretche à rate^-1 puis on garde la durée)
+    const srcPos = Math.round(pos_a);
+    if (srcPos + frameSize > inputData.length) break;
+
+    // Chercher le meilleur alignement dans une fenêtre ±overlap/2 (WSOLA)
+    let bestOffset = 0;
+    if (pos_s > 0) {
+      let bestCorr = -Infinity;
+      const searchRange = Math.min(Math.floor(overlap / 2), srcPos);
+      for (let d = -searchRange; d <= searchRange; d += 2) {
+        let corr = 0;
+        const sp = srcPos + d;
+        if (sp < 0 || sp + frameSize > inputData.length) continue;
+        for (let k = 0; k < Math.min(overlap, frameSize); k++) {
+          corr += output[pos_s - overlap + k] * inputData[sp + k];
+        }
+        if (corr > bestCorr) { bestCorr = corr; bestOffset = d; }
+      }
+    }
+
+    const readPos = Math.max(0, Math.min(srcPos + bestOffset, inputData.length - frameSize));
+    // Overlap-add avec fenêtre de Hann
+    for (let i = 0; i < frameSize && pos_s + i < outputLen; i++) {
+      output[pos_s + i] += inputData[readPos + i] * window[i];
+    }
+
+    pos_a += hop_a;  // avancer dans la source
+    pos_s += hop_s;  // avancer dans la sortie
+  }
+
+  // Normaliser les zones de chevauchement
+  const norm = new Float32Array(outputLen).fill(1e-6);
+  let np = 0;
+  while (np + frameSize < outputLen) {
+    for (let i = 0; i < frameSize; i++) norm[np + i] += window[i];
+    np += hop_s;
+  }
+  for (let i = 0; i < outputLen; i++) if (norm[i] > 0.01) output[i] /= norm[i];
+
+  return output;
+}
+
+// Correction de formants pour les grands intervalles (> ±5 semitones)
+// Évite le son "cartoon" sur les voix décalées d'une octave
+function applyFormantCorrection(data: Float32Array, semitones: number): Float32Array {
+  if (Math.abs(semitones) < 5) return data;
+  const correction = Math.pow(2, -semitones / 24); // correction partielle des formants
+  // Filtre passe-bas / passe-haut selon la direction
+  const out = new Float32Array(data.length);
+  const alpha = semitones > 0
+    ? Math.max(0.05, Math.min(0.3, 0.1 + semitones * 0.015)) // réduire les aigus sur les shifts vers le haut
+    : Math.max(0.05, Math.min(0.25, 0.05 + Math.abs(semitones) * 0.01)); // réduire les graves sur les shifts vers le bas
+  out[0] = data[0];
+  if (semitones > 0) {
+    // Low-pass léger pour réduire les artefacts aigus
+    for (let i = 1; i < data.length; i++) out[i] = out[i-1] + alpha * (data[i] - out[i-1]);
+  } else {
+    // High-pass léger pour réduire les artefacts graves
+    for (let i = 1; i < data.length; i++) out[i] = alpha * (out[i-1] + data[i] - data[i-1]);
+  }
+  return out;
+}
+
 async function pitchShiftBuffer(ctx: OfflineAudioContext | AudioContext, buffer: AudioBuffer, semitones: number): Promise<AudioBuffer> {
   if (semitones === 0) return buffer;
-  const rate = Math.pow(2, semitones / 12);
-  const origLen = buffer.length;
-  const origRate = buffer.sampleRate;
+  const sr       = buffer.sampleRate;
   const channels = buffer.numberOfChannels;
-  const shiftCtx = new OfflineAudioContext(channels, origLen, origRate);
-  const src = shiftCtx.createBufferSource();
-  src.buffer = buffer;
-  src.playbackRate.value = rate;
-  const eq = shiftCtx.createBiquadFilter();
-  if (semitones > 0) { eq.type = 'highshelf'; eq.frequency.value = 4000; eq.gain.value = -Math.min(semitones * 0.4, 4); }
-  else { eq.type = 'lowshelf'; eq.frequency.value = 300; eq.gain.value = -Math.min(Math.abs(semitones) * 0.3, 3); }
-  const compGain = shiftCtx.createGain();
-  compGain.gain.value = semitones > 0 ? 0.95 : 1.05;
-  src.connect(eq); eq.connect(compGain); compGain.connect(shiftCtx.destination);
-  src.start(0);
-  return shiftCtx.startRendering();
+  const len      = buffer.length;
+
+  // Créer le buffer de sortie
+  const outCtx = new OfflineAudioContext(channels, len, sr);
+  const outBuf  = outCtx.createBuffer(channels, len, sr);
+
+  for (let ch = 0; ch < channels; ch++) {
+    const inData  = buffer.getChannelData(ch);
+    // 1. WSOLA pitch shift
+    let shifted = wsolaShift(inData, semitones, sr);
+    // 2. Correction formants sur grands intervalles
+    shifted = applyFormantCorrection(shifted, semitones);
+    // 3. Normalisation douce (éviter les clips)
+    let peak = 0;
+    for (let i = 0; i < shifted.length; i++) peak = Math.max(peak, Math.abs(shifted[i]));
+    if (peak > 0.95) { const g = 0.90 / peak; for (let i = 0; i < shifted.length; i++) shifted[i] *= g; }
+    outBuf.getChannelData(ch).set(shifted);
+  }
+
+  // EQ de compensation selon la direction du shift
+  const eqCtx = new OfflineAudioContext(channels, len, sr);
+  const eqSrc = eqCtx.createBufferSource(); eqSrc.buffer = outBuf;
+  const eq1   = eqCtx.createBiquadFilter();
+  const eq2   = eqCtx.createBiquadFilter();
+  const gain  = eqCtx.createGain();
+
+  if (semitones > 0) {
+    // Harmonies vers le haut : couper les graves parasites, adoucir les aigus
+    eq1.type = 'highpass';  eq1.frequency.value = 120;  eq1.Q.value = 0.7;
+    eq2.type = 'highshelf'; eq2.frequency.value = 5000; eq2.gain.value = -Math.min(semitones * 0.3, 2.5);
+    gain.gain.value = 0.92;
+  } else {
+    // Octave bas : couper les aigus parasites, renforcer les médiums
+    eq1.type = 'lowpass';  eq1.frequency.value = 6000; eq1.Q.value = 0.7;
+    eq2.type = 'peaking';  eq2.frequency.value = 800;  eq2.gain.value = 1.5; eq2.Q.value = 1.0;
+    gain.gain.value = 1.05;
+  }
+
+  eqSrc.connect(eq1); eq1.connect(eq2); eq2.connect(gain); gain.connect(eqCtx.destination);
+  eqSrc.start(0);
+  return eqCtx.startRendering();
 }
 
 async function doubleTrackBuffer(buffer: AudioBuffer): Promise<AudioBuffer> {
-  const sr = buffer.sampleRate;
-  const channels = buffer.numberOfChannels;
+  // 3 couches : voix légèrement désaccordée L, R, et centre — son "studio" épais
+  const sr  = buffer.sampleRate;
   const len = buffer.length;
-  const delayMs = 18;
-  const delaySamp = Math.floor((delayMs / 1000) * sr);
-  const totalLen = len + delaySamp;
-  const offline = new OfflineAudioContext(2, totalLen, sr);
-  const src1 = offline.createBufferSource(); src1.buffer = buffer;
-  const pan1 = offline.createStereoPanner(); pan1.pan.value = -0.25;
-  const gain1 = offline.createGain(); gain1.gain.value = 0.85;
-  src1.connect(pan1); pan1.connect(gain1); gain1.connect(offline.destination); src1.start(0);
-  const src2 = offline.createBufferSource(); src2.buffer = buffer; src2.playbackRate.value = Math.pow(2, 0.15 / 12);
-  const pan2 = offline.createStereoPanner(); pan2.pan.value = 0.25;
-  const gain2 = offline.createGain(); gain2.gain.value = 0.80;
-  src2.connect(pan2); pan2.connect(gain2); gain2.connect(offline.destination); src2.start(delaySamp / sr);
+
+  // Couche gauche : +0.08 semitones, délai 12ms
+  const bufL = await (async () => {
+    const ch = buffer.numberOfChannels;
+    const delayS = Math.floor(0.012 * sr);
+    const oc = new OfflineAudioContext(ch, len + delayS, sr);
+    const s  = oc.createBufferSource(); s.buffer = buffer;
+    s.playbackRate.value = Math.pow(2, 0.08 / 12);
+    s.connect(oc.destination); s.start(delayS / sr);
+    return oc.startRendering();
+  })();
+
+  // Couche droite : -0.07 semitones, délai 23ms
+  const bufR = await (async () => {
+    const ch = buffer.numberOfChannels;
+    const delayS = Math.floor(0.023 * sr);
+    const oc = new OfflineAudioContext(ch, len + delayS, sr);
+    const s  = oc.createBufferSource(); s.buffer = buffer;
+    s.playbackRate.value = Math.pow(2, -0.07 / 12);
+    s.connect(oc.destination); s.start(delayS / sr);
+    return oc.startRendering();
+  })();
+
+  // Mix final stéréo : original centre, L gauche, R droite
+  const totalLen = len + Math.floor(0.025 * sr);
+  const offline  = new OfflineAudioContext(2, totalLen, sr);
+
+  const s0  = offline.createBufferSource(); s0.buffer  = buffer;
+  const s1  = offline.createBufferSource(); s1.buffer  = bufL;
+  const s2  = offline.createBufferSource(); s2.buffer  = bufR;
+
+  const p0 = offline.createStereoPanner(); p0.pan.value =  0.0;
+  const p1 = offline.createStereoPanner(); p1.pan.value = -0.6;
+  const p2 = offline.createStereoPanner(); p2.pan.value =  0.6;
+
+  const g0 = offline.createGain(); g0.gain.value = 0.70;
+  const g1 = offline.createGain(); g1.gain.value = 0.60;
+  const g2 = offline.createGain(); g2.gain.value = 0.60;
+
+  s0.connect(p0); p0.connect(g0); g0.connect(offline.destination); s0.start(0);
+  s1.connect(p1); p1.connect(g1); g1.connect(offline.destination); s1.start(0);
+  s2.connect(p2); p2.connect(g2); g2.connect(offline.destination); s2.start(0);
+
   return offline.startRendering();
 }
 
@@ -436,7 +579,219 @@ export const studioService = {
     }
     const rendered = await offline.startRendering(); return audioBufferToBlob(rendered);
   },
-  async generateLayersFromVoice(mainVoice: MobileRecording, project: TrackProject, onProgress?: (label: string, pct: number) => void): Promise<MobileRecording[]> {
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MOTEUR HARMONIQUE INTELLIGENT — Harmonies basées sur les accords réels
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Notes de la gamme chromatique
+const NOTES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+// Intervalles dans un accord (en semitones depuis la fondamentale)
+const CHORD_TONES: Record<string, number[]> = {
+  '':    [0, 4, 7],        // Majeur : fondamentale, tierce M, quinte
+  'm':   [0, 3, 7],        // Mineur : fondamentale, tierce m, quinte
+  '7':   [0, 4, 7, 10],    // Dom 7  : + septième mineure
+  'maj7':[0, 4, 7, 11],    // Maj 7  : + septième majeure
+  'm7':  [0, 3, 7, 10],    // Min 7
+  'sus2':[0, 2, 7],        // Sus 2
+  'sus4':[0, 5, 7],        // Sus 4
+  'dim': [0, 3, 6],        // Diminué
+  'aug': [0, 4, 8],        // Augmenté
+  'add9':[0, 4, 7, 14],    // Add 9
+  '6':   [0, 4, 7, 9],     // Sixte
+  '9':   [0, 4, 7, 10, 14],// Neuvième
+};
+
+// Parser un symbole d'accord → { root: number, tones: number[] }
+function parseChord(symbol: string): { root: number; tones: number[] } | null {
+  if (!symbol || symbol === 'N.C.' || symbol === '?') return null;
+  // Extraire la fondamentale
+  const rootMatch = symbol.match(/^([A-G][#b]?)/);
+  if (!rootMatch) return null;
+  const rootStr = rootMatch[1].replace('b', '#').replace('Db','C#').replace('Eb','D#').replace('Fb','E').replace('Gb','F#').replace('Ab','G#').replace('Bb','A#').replace('Cb','B');
+  const root = NOTES.indexOf(rootStr);
+  if (root === -1) return null;
+  // Extraire le type d'accord
+  const quality = symbol.slice(rootMatch[0].length).replace(/\/.*$/, '').trim(); // enlever basse
+  const tones = CHORD_TONES[quality] || CHORD_TONES[''] || [0, 4, 7];
+  return { root, tones: tones.map(t => (root + t) % 12) };
+}
+
+// Trouver la meilleure note d'harmonie pour une note mélodique donnée
+// sur un accord donné, dans une direction (vers le haut ou le bas)
+function bestHarmonyNote(
+  melodyNoteSemitone: number,  // note chantée (absolu, ex: 60 = C4)
+  chord: { root: number; tones: number[] },
+  intervalTarget: number,      // intervalle visé en semitones (+3, +7, -12, etc.)
+  key: number                  // tonalité de la chanson
+): number {
+  const melodyClass = ((melodyNoteSemitone % 12) + 12) % 12;
+  const direction = intervalTarget >= 0 ? 1 : -1;
+  const absTarget = Math.abs(intervalTarget);
+
+  // Candidats : notes de l'accord + notes de la gamme penta country
+  const countryPenta = [0, 2, 4, 7, 9]; // pentatonique majeure relative à la tonalité
+  const candidates = [...new Set([
+    ...chord.tones,
+    ...countryPenta.map(n => (key + n) % 12),
+  ])];
+
+  // Trouver la note candidate la plus proche de l'intervalle cible
+  let bestNote = melodyNoteSemitone + intervalTarget;
+  let bestDist = Infinity;
+
+  for (const candidate of candidates) {
+    // Trouver toutes les octaves de ce candidat proches de la cible
+    for (let oct = -2; oct <= 2; oct++) {
+      const note = melodyNoteSemitone + direction * (absTarget + oct * 12 - absTarget % 12);
+      const noteClass = ((note % 12) + 12) % 12;
+      if (noteClass === candidate) {
+        const dist = Math.abs(note - (melodyNoteSemitone + intervalTarget));
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestNote = note;
+        }
+      }
+    }
+  }
+
+  return bestNote;
+}
+
+// Convertir realPartition en map timestamp→accord
+function buildChordMap(realPartition: any[]): Array<{ time: number; chord: ReturnType<typeof parseChord> }> {
+  const map: Array<{ time: number; chord: ReturnType<typeof parseChord> }> = [];
+  for (const section of realPartition) {
+    for (const beat of (section.beats || [])) {
+      if (beat.timestamp !== undefined && beat.chord) {
+        const parsed = parseChord(beat.chord);
+        if (parsed) map.push({ time: beat.timestamp, chord: parsed });
+      }
+    }
+  }
+  return map.sort((a, b) => a.time - b.time);
+}
+
+// Obtenir l'accord au timestamp t
+function chordAt(map: Array<{ time: number; chord: ReturnType<typeof parseChord> }>, t: number): ReturnType<typeof parseChord> | null {
+  if (map.length === 0) return null;
+  let last = map[0].chord;
+  for (const entry of map) {
+    if (entry.time > t) break;
+    last = entry.chord;
+  }
+  return last;
+}
+
+// Parser la tonalité de la chanson
+function parseKey(keyStr: string): number {
+  if (!keyStr) return 0;
+  const clean = keyStr.replace(/\s*(Major|major|Majeur|maj)\s*/gi, '').replace('m','').trim();
+  const idx = NOTES.indexOf(clean.replace('b','#').replace('Db','C#').replace('Eb','D#').replace('Gb','F#').replace('Ab','G#').replace('Bb','A#'));
+  return idx >= 0 ? idx : 0;
+}
+
+// ── PITCH SHIFT INTELLIGENT par segment ──────────────────────────────────────
+// Divise le buffer en segments de ~50ms, applique le meilleur interval pour chaque accord
+async function smartHarmonyBuffer(
+  buffer: AudioBuffer,
+  targetInterval: number,  // intervalle visé (+3, +7, +5, -12)
+  chordMap: Array<{ time: number; chord: ReturnType<typeof parseChord> }>,
+  songKey: number
+): Promise<AudioBuffer> {
+  // Si pas de données d'accord → fallback WSOLA classique
+  if (chordMap.length === 0) {
+    return pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), buffer, targetInterval);
+  }
+
+  const sr       = buffer.sampleRate;
+  const channels = buffer.numberOfChannels;
+  const len      = buffer.length;
+  const segmentSec = 0.05; // segments de 50ms
+  const segmentSamp = Math.floor(segmentSec * sr);
+
+  // Buffer de sortie
+  const outCtx = new OfflineAudioContext(channels, len, sr);
+  const outBuf  = outCtx.createBuffer(channels, len, sr);
+
+  // Traiter chaque canal
+  for (let ch = 0; ch < channels; ch++) {
+    const inData  = buffer.getChannelData(ch);
+    const outData = outBuf.getChannelData(ch);
+
+    let pos = 0;
+    let lastInterval = targetInterval;
+
+    while (pos < len) {
+      const t = pos / sr;
+      const chord = chordAt(chordMap, t);
+
+      // Calculer le meilleur intervalle pour cet accord
+      let interval = targetInterval;
+      if (chord) {
+        // Estimer la note mélodique locale (RMS peak dans ce segment)
+        const segEnd = Math.min(pos + segmentSamp, len);
+        // On utilise l'intervalle standard mais ajusté pour rester dans l'accord
+        // Tolérance de ±1 semitone pour coller à la note d'accord la plus proche
+        const baseNote = 60 + targetInterval; // estimation C4 + interval
+        const bestNote = bestHarmonyNote(60, chord, targetInterval, songKey);
+        const adjustment = bestNote - (60 + targetInterval);
+        // Ajustement max ±1 semitone pour ne pas dénaturer l'harmonie
+        interval = targetInterval + Math.max(-1, Math.min(1, Math.round(adjustment)));
+      }
+
+      // Appliquer WSOLA sur ce segment avec l'intervalle calculé
+      const segEnd = Math.min(pos + segmentSamp * 4, len); // segments de 200ms pour WSOLA
+      const segLen = segEnd - pos;
+      const segBuf = new Float32Array(segLen);
+      for (let i = 0; i < segLen; i++) segBuf[i] = inData[pos + i];
+
+      const shifted = wsolaShift(segBuf, interval, sr);
+
+      // Cross-fade avec le segment précédent (éviter les discontinuités)
+      const fadeLen = Math.min(128, shifted.length);
+      for (let i = 0; i < shifted.length && pos + i < len; i++) {
+        if (i < fadeLen && lastInterval !== interval) {
+          const fade = i / fadeLen;
+          outData[pos + i] = outData[pos + i] * (1 - fade) + shifted[i] * fade;
+        } else {
+          outData[pos + i] = shifted[i];
+        }
+      }
+
+      lastInterval = interval;
+      pos += segmentSamp; // avancer de 50ms
+    }
+
+    // Normalisation douce
+    let peak = 0;
+    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(outData[i]));
+    if (peak > 0.92) { const g = 0.88 / peak; for (let i = 0; i < len; i++) outData[i] *= g; }
+  }
+
+  // EQ final
+  const eqCtx = new OfflineAudioContext(channels, len, sr);
+  const eqSrc = eqCtx.createBufferSource(); eqSrc.buffer = outBuf;
+  const eq1   = eqCtx.createBiquadFilter();
+  const eq2   = eqCtx.createBiquadFilter();
+  const gn    = eqCtx.createGain();
+
+  if (targetInterval > 0) {
+    eq1.type = 'highpass';  eq1.frequency.value = 100;
+    eq2.type = 'highshelf'; eq2.frequency.value = 5500; eq2.gain.value = -Math.min(targetInterval * 0.25, 2.0);
+    gn.gain.value = 0.90;
+  } else {
+    eq1.type = 'lowpass';  eq1.frequency.value = 7000;
+    eq2.type = 'peaking';  eq2.frequency.value = 900; eq2.gain.value = 2.0; eq2.Q.value = 1.0;
+    gn.gain.value = 1.05;
+  }
+  eqSrc.connect(eq1); eq1.connect(eq2); eq2.connect(gn); gn.connect(eqCtx.destination);
+  eqSrc.start(0);
+  return eqCtx.startRendering();
+}
+
+  async generateLayersFromVoice(mainVoice: MobileRecording, project: TrackProject, onProgress?: (label: string, pct: number) => void, songMeta?: { realPartition?: any[]; key?: string }): Promise<MobileRecording[]> {
     const progress = (label: string, pct: number) => onProgress?.(label, pct);
     progress('Décodage voix principale', 5);
 
@@ -456,6 +811,12 @@ export const studioService = {
     const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext());
     let srcBuffer: AudioBuffer;
     try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); } finally { tmpCtx.close(); }
+    // Construire la carte des accords depuis realPartition
+    const chordMap = songMeta?.realPartition ? buildChordMap(songMeta.realPartition) : [];
+    const songKey  = parseKey(songMeta?.key || '');
+    const hasChordData = chordMap.length > 0;
+    if (hasChordData) progress(`🎵 Analyse harmonique — ${chordMap.length} accords détectés`, 8);
+
     const layers = [
       { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0, gain: 0.85, pan: -0.3, emoji: '🎵', isDouble: true, suggestedFxId: 'double_epic' },
       { trackIndex: 2, trackLabel: 'Harmonie +3', pitch: 3, gain: 0.75, pan: 0.4, emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
@@ -468,8 +829,31 @@ export const studioService = {
       const layer = layers[i]; const pct = 10 + (i / layers.length) * 75;
       progress(`${layer.emoji} ${layer.trackLabel}...`, pct);
       let rendered: AudioBuffer;
-      if (layer.isDouble) rendered = await doubleTrackBuffer(srcBuffer);
-      else rendered = await pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), srcBuffer, layer.pitch);
+      if (layer.isDouble) {
+        rendered = await doubleTrackBuffer(srcBuffer);
+      } else {
+        // Harmonies intelligentes si accords disponibles, sinon WSOLA classique
+        rendered = hasChordData
+          ? await smartHarmonyBuffer(srcBuffer, layer.pitch, chordMap, songKey)
+          : await pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), srcBuffer, layer.pitch);
+
+        // Chorus subtil pour un son vivant (±0.04 ST, délai 10ms)
+        if (Math.abs(layer.pitch) > 0 && Math.abs(layer.pitch) <= 7) {
+          const sr2 = rendered.sampleRate, ch2 = rendered.numberOfChannels, len2 = rendered.length;
+          const chorusDelaySamp = Math.floor(0.010 * sr2);
+          const pitchMod = layer.pitch > 0 ? 0.04 : -0.04;
+          const chorusCtx = new OfflineAudioContext(ch2, len2 + chorusDelaySamp, sr2);
+          const cs1 = chorusCtx.createBufferSource(); cs1.buffer = rendered;
+          const cs2 = chorusCtx.createBufferSource(); cs2.buffer = rendered;
+          cs2.playbackRate.value = Math.pow(2, pitchMod / 12);
+          const cg1 = chorusCtx.createGain(); cg1.gain.value = 0.85;
+          const cg2 = chorusCtx.createGain(); cg2.gain.value = 0.28;
+          const cp2 = chorusCtx.createStereoPanner(); cp2.pan.value = layer.pan > 0 ? -0.2 : 0.2;
+          cs1.connect(cg1); cg1.connect(chorusCtx.destination); cs1.start(0);
+          cs2.connect(cp2); cp2.connect(cg2); cg2.connect(chorusCtx.destination); cs2.start(chorusDelaySamp / sr2);
+          rendered = await chorusCtx.startRendering();
+        }
+      }
       const finalCtx = new OfflineAudioContext(2, rendered.length, rendered.sampleRate);
       const finalSrc = finalCtx.createBufferSource(); finalSrc.buffer = rendered;
       const finalGain = finalCtx.createGain(); finalGain.gain.value = layer.gain;

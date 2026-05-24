@@ -151,40 +151,147 @@ async function mixVocalWithInst(
   return offline.startRendering();
 }
 
-// Masterisation EQ + Compresseur + Limiteur
-async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBuffer> {
-  const offline = new OfflineAudioContext(2, buf.length, buf.sampleRate);
-  const src     = offline.createBufferSource();
-  src.buffer    = buf;
+// Tape saturation douce — signature chaleur analogique
+// Applique une distorsion asymétrique légère qui enrichit les harmoniques
+function applySaturation(data: Float32Array, drive: number = 0.3): Float32Array {
+  const out = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    const x = data[i] * (1 + drive);
+    // Waveshaping doux (tanh approximé) — asymétrique comme un vrai préamp à lampes
+    out[i] = x < 0
+      ? Math.tanh(x * 0.9)   // légèrement plus doux sur les négatifs
+      : Math.tanh(x * 1.0);
+  }
+  return out;
+}
 
-  // High-pass 35Hz — coupe les sub-bass inutiles qui gaspillent du headroom
-  const hpf  = offline.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 35; hpf.Q.value = 0.7;
+// Noise gate — coupe le bruit de fond entre les phrases vocales
+// Seuil en amplitude linéaire, release doux pour éviter les clics
+function applyNoiseGate(data: Float32Array, thresholdDb: number = -60, releaseMs: number = 50, sr: number = 44100): Float32Array {
+  const threshold = Math.pow(10, thresholdDb / 20);
+  const releaseSamp = Math.floor((releaseMs / 1000) * sr);
+  const out = new Float32Array(data.length);
+  let gateOpen = false;
+  let holdCount = 0;
+  for (let i = 0; i < data.length; i++) {
+    const amp = Math.abs(data[i]);
+    if (amp > threshold) { gateOpen = true; holdCount = releaseSamp; }
+    else if (holdCount > 0) { holdCount--; }
+    else { gateOpen = false; }
+    const gain = gateOpen ? 1.0 : Math.max(0, holdCount / releaseSamp);
+    out[i] = data[i] * gain;
+  }
+  return out;
+}
 
-  const low  = offline.createBiquadFilter(); low.type  = 'lowshelf';  low.frequency.value  = 250;  low.gain.value  = s.lowGain;
-  const mid  = offline.createBiquadFilter(); mid.type  = 'peaking';   mid.frequency.value  = 2500; mid.Q.value = 0.8; mid.gain.value = s.midGain;
-  const high = offline.createBiquadFilter(); high.type = 'highshelf'; high.frequency.value = 8000; high.gain.value = s.highGain;
-
-  // De-esser — compresseur sidechain simulé sur 6-8kHz (sibilance voix)
-  const deEss = offline.createBiquadFilter(); deEss.type = 'peaking'; deEss.frequency.value = 7000; deEss.Q.value = 2.5; deEss.gain.value = -2.5;
-
-  const comp    = offline.createDynamicsCompressor();
-  comp.threshold.value = s.threshold; comp.ratio.value = s.ratio;
-  comp.attack.value    = s.attack / 1000; comp.release.value = s.release / 1000; comp.knee.value = 6;
-
-  const limiter = offline.createDynamicsCompressor();
-  limiter.threshold.value = s.ceiling - 0.5; limiter.ratio.value = 20;
-  limiter.attack.value = 0.001; limiter.release.value = 0.1; limiter.knee.value = 0;
-
-  const lufs    = analyzeLoudness(buf);
-  const gainDb  = Math.min(s.targetLufs - lufs, 12);
-  const makeup  = offline.createGain();
-  makeup.gain.value = Math.pow(10, gainDb / 20);
-
-  src.connect(hpf); hpf.connect(low); low.connect(mid); mid.connect(high);
-  high.connect(deEss); deEss.connect(comp); comp.connect(limiter); limiter.connect(makeup);
-  makeup.connect(offline.destination);
-  src.start(0);
+// Stereo widening via mid/side (M/S) processing
+// Élargit l'image stéréo sans perturber la compatibilité mono
+async function stereoWiden(buf: AudioBuffer, widthGain: number = 1.3): Promise<AudioBuffer> {
+  if (buf.numberOfChannels < 2) return buf;
+  const len = buf.length;
+  const sr  = buf.sampleRate;
+  const offline = new OfflineAudioContext(2, len, sr);
+  const outBuf  = offline.createBuffer(2, len, sr);
+  const L = buf.getChannelData(0);
+  const R = buf.getChannelData(1);
+  const outL = outBuf.getChannelData(0);
+  const outR = outBuf.getChannelData(1);
+  for (let i = 0; i < len; i++) {
+    const mid  = (L[i] + R[i]) * 0.5;
+    const side = (L[i] - R[i]) * 0.5 * widthGain;
+    outL[i] = mid + side;
+    outR[i] = mid - side;
+  }
+  // Limiter léger post-widening pour éviter les clips
+  let peak = 0;
+  for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(outL[i]), Math.abs(outR[i]));
+  if (peak > 0.98) { const g = 0.95 / peak; for (let i = 0; i < len; i++) { outL[i] *= g; outR[i] *= g; } }
+  const src = offline.createBufferSource(); src.buffer = outBuf;
+  src.connect(offline.destination); src.start(0);
   return offline.startRendering();
+}
+
+// Masterisation professionnelle — 3 étapes séquentielles
+// Étape 1 : Noise gate + saturation douce + EQ correctif
+// Étape 2 : Compression + EQ musical
+// Étape 3 : Stereo widening + gain makeup + limiteur transparent
+async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBuffer> {
+
+  // ── ÉTAPE 1 : Traitement canal par canal (noise gate + saturation) ──────────
+  const sr  = buf.sampleRate;
+  const ch  = Math.min(2, buf.numberOfChannels);
+  const len = buf.length;
+  const step1Ctx = new OfflineAudioContext(ch, len, sr);
+  const step1Buf = step1Ctx.createBuffer(ch, len, sr);
+  for (let c = 0; c < ch; c++) {
+    let data = new Float32Array(buf.getChannelData(c));
+    // Noise gate : coupe le bruit sous -58dB
+    data = applyNoiseGate(data, -58, 80, sr);
+    // Saturation douce : drive très léger pour la chaleur analogique
+    const driveAmt = 0.12 + Math.abs(s.lowGain) * 0.01; // plus de drive si on booste les graves
+    data = applySaturation(data, driveAmt);
+    step1Buf.getChannelData(c).set(data);
+  }
+
+  // ── ÉTAPE 2 : EQ + Compression (dans un OfflineAudioContext) ────────────────
+  const offline1 = new OfflineAudioContext(2, len, sr);
+  const s1src    = offline1.createBufferSource(); s1src.buffer = step1Buf;
+
+  // High-pass 30Hz — sub-bass inutile
+  const hpf = offline1.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 30; hpf.Q.value = 0.6;
+
+  // EQ musical — 4 bandes comme un console analogique
+  const eq1 = offline1.createBiquadFilter(); eq1.type = 'lowshelf';  eq1.frequency.value = 200;  eq1.gain.value = s.lowGain;
+  const eq2 = offline1.createBiquadFilter(); eq2.type = 'peaking';   eq2.frequency.value = 1000; eq2.Q.value = 0.6; eq2.gain.value = s.midGain * 0.3; // médiums bas
+  const eq3 = offline1.createBiquadFilter(); eq3.type = 'peaking';   eq3.frequency.value = 3500; eq3.Q.value = 0.8; eq3.gain.value = s.midGain * 0.7; // présence voix
+  const eq4 = offline1.createBiquadFilter(); eq4.type = 'highshelf'; eq4.frequency.value = 9000; eq4.gain.value = s.highGain;
+
+  // De-esser dynamique simulé — double compresseur sur les sibilantes
+  const deEss  = offline1.createBiquadFilter(); deEss.type = 'peaking'; deEss.frequency.value = 7500; deEss.Q.value = 3.0; deEss.gain.value = -3.0;
+  const deEss2 = offline1.createBiquadFilter(); deEss2.type = 'peaking'; deEss2.frequency.value = 9500; deEss2.Q.value = 2.0; deEss2.gain.value = -1.5;
+
+  // Compression douce (étape 1 de 2) — ratio bas pour la colle
+  const comp1 = offline1.createDynamicsCompressor();
+  comp1.threshold.value = s.threshold + 6; // 6dB au-dessus du threshold final
+  comp1.ratio.value     = Math.min(s.ratio * 0.5, 3); // ratio très doux
+  comp1.attack.value    = s.attack / 1000 * 2; // attaque lente = garde les transitoires
+  comp1.release.value   = s.release / 1000; comp1.knee.value = 10;
+
+  // Compression principale (étape 2)
+  const comp2 = offline1.createDynamicsCompressor();
+  comp2.threshold.value = s.threshold; comp2.ratio.value = s.ratio;
+  comp2.attack.value    = s.attack / 1000; comp2.release.value = s.release / 1000; comp2.knee.value = 4;
+
+  s1src.connect(hpf); hpf.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4);
+  eq4.connect(deEss); deEss.connect(deEss2); deEss2.connect(comp1); comp1.connect(comp2);
+  comp2.connect(offline1.destination);
+  s1src.start(0);
+  const compressed = await offline1.startRendering();
+
+  // ── ÉTAPE 3 : Stereo widening + Gain makeup + Limiteur transparent ──────────
+  // Stereo widening léger — plus large sur les presets country et bright
+  const widenAmt = s.highGain > 1 ? 1.35 : 1.20;
+  const widened  = await stereoWiden(compressed, widenAmt);
+
+  const offline2 = new OfflineAudioContext(2, widened.length, widened.sampleRate);
+  const s2src    = offline2.createBufferSource(); s2src.buffer = widened;
+
+  // Gain makeup précis basé sur LUFS mesuré après compression
+  const compressedLufs = analyzeLoudness(compressed);
+  const gainDb  = Math.min(s.targetLufs - compressedLufs, 14);
+  const makeup  = offline2.createGain(); makeup.gain.value = Math.pow(10, gainDb / 20);
+
+  // Limiteur transparent — très faible knee, ratio 20:1
+  const limiter = offline2.createDynamicsCompressor();
+  limiter.threshold.value = s.ceiling - 0.3; limiter.ratio.value = 20;
+  limiter.attack.value = 0.0005; limiter.release.value = 0.08; limiter.knee.value = 0.5;
+
+  // High-pass final 20Hz — coupe tout résidu sub-sonique
+  const hpfFinal = offline2.createBiquadFilter(); hpfFinal.type = 'highpass'; hpfFinal.frequency.value = 20; hpfFinal.Q.value = 0.5;
+
+  s2src.connect(hpfFinal); hpfFinal.connect(makeup); makeup.connect(limiter); limiter.connect(offline2.destination);
+  s2src.start(0);
+  return offline2.startRendering();
 }
 
 // Convertir AudioBuffer → Blob mp4 (iOS natif) — 256 kbps pour la qualité
