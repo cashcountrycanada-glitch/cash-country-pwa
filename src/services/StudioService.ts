@@ -831,8 +831,8 @@ export const studioService = {
     let srcBuffer: AudioBuffer;
     try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); } finally { tmpCtx.close(); }
     // Construire la carte des accords depuis realPartition
-    const chordMap = songMeta?.realPartition ? buildChordMap(songMeta.realPartition, songKey) : [];
     const songKey  = parseKey(songMeta?.key || '');
+    const chordMap = songMeta?.realPartition ? buildChordMap(songMeta.realPartition, songKey) : [];
     const hasChordData = chordMap.length > 0;
     if (hasChordData) progress(`🎵 Analyse harmonique — ${chordMap.length} accords détectés`, 8);
 

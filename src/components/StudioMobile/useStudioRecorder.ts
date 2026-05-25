@@ -272,18 +272,23 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         if (instBuf) {
           const bsrc = ctx.createBufferSource();
           bsrc.buffer = instBuf;
-          bsrc.connect(ctx.destination);
+          // iOS réduit le volume AudioContext ~50% quand le micro est actif (Voice Processing)
+          // On compense avec un gain de 2.0 pour matcher le volume du bouton ÉCOUTER
+          const instGain = ctx.createGain();
+          instGain.gain.value = 2.0;
+          bsrc.connect(instGain);
+          instGain.connect(ctx.destination);
           (window as any).__instBufSrc    = bsrc;
+          (window as any).__instGainNode  = instGain;
           (window as any).__instCtxActive = true;
           (window as any).__instCtxOffset = t;
           (window as any).__instCtxStartTime = startAt;
-          // __instWallStart calculé pour que "performance.now() - __instWallStart" = t au moment startAt
-          // startAt est dans le futur de (startAt - ctx.currentTime) secondes
           const msUntilStart = (startAt - ctx.currentTime) * 1000;
           (window as any).__instWallStart = performance.now() + msUntilStart - (t * 1000);
           bsrc.onended = () => {
             (window as any).__instCtxActive = false;
             (window as any).__instBufSrc    = null;
+            (window as any).__instGainNode  = null;
             (window as any).__instWallStart = null;
           };
           bsrc.start(startAt, t);
