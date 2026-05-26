@@ -81,8 +81,12 @@ export default function MixerScreen({
 
   const tracks    = project?.tracks || [];
   // mainVoice = la voix principale non-muted (priorité : non-muted, sinon première)
-  const slotVoices = tracks.filter(t => t.trackIndex === 0 && !(t as any).isGenerated && t.dataUrl);
-  const mainVoice  = slotVoices.find(t => !t.muted) ?? slotVoices[0];
+  // On inclut aussi les tracks sans dataUrl encore chargé (rechargé depuis IndexedDB au besoin)
+  const slotVoices = tracks.filter(t => t.trackIndex === 0 && !(t as any).isGenerated);
+  const mainVoice  = slotVoices.find(t => !t.muted && t.dataUrl)   // non-muté avec data
+    ?? slotVoices.find(t => t.dataUrl)                               // premier avec data
+    ?? slotVoices.find(t => !t.muted)                                // non-muté sans data encore
+    ?? slotVoices[0];                                                 // premier quoi qu'il arrive
   const totalDuration = mainVoice?.duration || Math.max(...tracks.map(t => t.duration), 0);
 
   // Charger la waveform du mix dès qu'il est prêt

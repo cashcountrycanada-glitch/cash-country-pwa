@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.78';
+const BUILD_VERSION = 'v7.6.79';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -373,7 +373,30 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     const proj = studioService.getOrCreateProject(selected.id, selected.title);
     if (selected.key && !(proj as any).suggestedKey) (proj as any).suggestedKey = selected.key;
     setProject(proj);
-    setMixDone(false);
+    setMixDone(!!proj.mixedDataUrl);
+
+    // Recharger les dataUrl depuis IndexedDB pour tous les tracks sans dataUrl
+    if (proj.tracks.length > 0) {
+      const db = studioOfflineDB;
+      Promise.all(
+        proj.tracks.map(async (track) => {
+          if (track.dataUrl) return track; // déjà en mémoire
+          try {
+            const blob = await db.getAudio(`rec_${track.id}`);
+            if (blob && blob.size > 0) {
+              const dataUrl = await studioService.blobToDataUrl(blob);
+              return { ...track, dataUrl };
+            }
+          } catch {}
+          return track;
+        })
+      ).then(tracksWithData => {
+        const hasAnyData = tracksWithData.some(t => t.dataUrl);
+        if (hasAnyData) {
+          setProject(prev => prev ? { ...prev, tracks: tracksWithData } : prev);
+        }
+      }).catch(() => {});
+    }
   }, [selected?.id]);
 
   // Calculer les prises existantes par slot pour la chanson sélectionnée
