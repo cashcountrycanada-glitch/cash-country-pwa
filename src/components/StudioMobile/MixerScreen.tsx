@@ -933,7 +933,6 @@ export default function MixerScreen({
 
       <audio ref={playRef} playsInline className="hidden"/>
     </div>
-    <>
     {/* ── Modal récupération ── */}
     {showRecovery && (
       <div className="fixed inset-0 z-50 flex items-end justify-center" style={{background:'rgba(0,0,0,0.85)'}}>
