@@ -519,7 +519,9 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           pitchShift: optsRef.current.currentPreset.pitch, gain: optsRef.current.currentPreset.gain,
           pan: optsRef.current.currentPreset.pan, projectId: project.id,
         };
-        studioService.saveRecordingLocally(rec);
+        // Sauvegarder dans IndexedDB AVANT de continuer — critique pour la persistance
+        await studioService.saveRecordingLocallyAsync(rec);
+        optsRef.current.onLog?.(`💾 Audio sauvegardé dans IndexedDB (${(dataUrl.length/1024).toFixed(0)} KB)`);
         const updatedProject = studioService.addTrackToProject(project.id, rec);
         optsRef.current.onLog?.(`✅ Prise sauvegardée | trackIndex=${optsRef.current.currentPreset.index}`);
         onSaved(rec, updatedProject);

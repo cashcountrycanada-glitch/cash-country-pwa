@@ -16,6 +16,7 @@ import {
   Send, Pause, Play, Sparkles, Music2, RefreshCw, BarChart2, Download, Shield,
 } from 'lucide-react';
 import { MobileRecording, TrackProject, Take, studioService } from '../../services/StudioService';
+import { studioOfflineDB } from '../../services/StudioOfflineDB';
 import { Song } from '../../types';
 import { TRACK_PRESETS, formatTime, SectionMarker, SectionLabel, SECTION_LABELS, SECTION_COLORS } from './studio.types';
 import TrackCard from './TrackCard';
@@ -67,6 +68,10 @@ export default function MixerScreen({
 }: Props) {
   const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
   const [backupDone, setBackupDone]           = useState(false);
+  const [autoBackupDone, setAutoBackupDone]   = useState(false);
+  const [showRecovery, setShowRecovery]       = useState(false);
+  const [recoveryItems, setRecoveryItems]     = useState<{key: string; label: string; size: number; date: string}[]>([]);
+  const [recovering, setRecovering]           = useState<string | null>(null);
   const [exportingVoice, setExportingVoice]   = useState(false);
   const [layerSlots, setLayerSlots]           = useState<Set<string>>(new Set());
   const [generateLabel, setGenerateLabel]     = useState('');
@@ -109,6 +114,83 @@ export default function MixerScreen({
   const handleGoComp = () => {
     const takes: Take[] = tracks.map(t => ({ id: t.id, recording: t, regions: t.regions || [] }));
     onGoComp(takes);
+  };
+
+  // Backup automatique silencieux dans IndexedDB — clé séparée backup_voice_xxx
+  const autoBackupToIndexedDB = async (voice: MobileRecording) => {
+    if (!voice) return;
+    try {
+      // Récupérer le blob source (dataUrl ou IndexedDB)
+      let blob: Blob | null = null;
+      if (voice.dataUrl && voice.dataUrl.length > 1000) {
+        blob = studioService.dataUrlToBlob(voice.dataUrl);
+      }
+      if (!blob || blob.size < 1000) {
+        blob = await studioOfflineDB.getAudio(`rec_${voice.id}`);
+      }
+      if (!blob || blob.size < 1000) return;
+      // Sauvegarder sous une clé backup_ séparée
+      const backupKey = `backup_voice_${voice.id}`;
+      await studioOfflineDB.saveAudio(backupKey, blob, {
+        type: 'voice_backup',
+        songId: voice.songId,
+        songTitle: voice.songTitle,
+        originalId: voice.id,
+        backedUpAt: Date.now(),
+      });
+      setAutoBackupDone(true);
+      console.log(`[Backup] ✅ Voix sauvegardée automatiquement: ${backupKey} (${(blob.size/1024).toFixed(0)} KB)`);
+    } catch (e) {
+      console.warn('[Backup] Erreur backup automatique:', e);
+    }
+  };
+
+  // Charger tous les backups disponibles dans IndexedDB
+  const loadRecoveryItems = async () => {
+    try {
+      const keys = await studioOfflineDB.listAllAudioKeys();
+      const backupKeys = keys.filter(k => k.startsWith('backup_voice_') || k.startsWith('rec_'));
+      const items = await Promise.all(backupKeys.map(async key => {
+        try {
+          const blob = await studioOfflineDB.getAudio(key);
+          const isBackup = key.startsWith('backup_voice_');
+          const id = key.replace('backup_voice_', '').replace('rec_', '');
+          // Trouver les métadonnées dans le projet
+          const allProjects = studioService.getProjects();
+          const track = allProjects.flatMap(p => p.tracks).find(t => t.id === id);
+          const label = track
+            ? `${isBackup ? '🛡 Backup' : '🎙 Prise'} — ${track.songTitle} (${new Date(track.recordedAt).toLocaleDateString('fr-CA')} ${new Date(track.recordedAt).toLocaleTimeString('fr-CA', {hour:'2-digit',minute:'2-digit'})})`
+            : `${isBackup ? '🛡 Backup' : '🎙 Prise'} — ${id.slice(-8)}`;
+          return { key, label, size: blob?.size || 0, date: track ? new Date(track.recordedAt).toISOString() : '' };
+        } catch { return null; }
+      }));
+      setRecoveryItems(items.filter(Boolean).filter(i => i!.size > 1000).sort((a,b) => b!.date.localeCompare(a!.date)) as any);
+    } catch (e) { console.warn('Recovery load error:', e); }
+  };
+
+  // Restaurer un backup comme nouvelle voix principale
+  const restoreFromBackup = async (key: string) => {
+    setRecovering(key);
+    try {
+      const blob = await studioOfflineDB.getAudio(key);
+      if (!blob || blob.size < 1000) { alert('Backup vide ou corrompu.'); return; }
+      const dataUrl = await studioService.blobToDataUrl(blob);
+      const id = `REC-RESTORED-${Date.now()}`;
+      const rec: MobileRecording = {
+        id, songId: selected.id, songTitle: selected.title,
+        artist: (selected as any).artist || '',
+        duration: 0, recordedAt: Date.now(), dataUrl,
+        transferred: false,
+        fileName: `RESTORED_${selected.title.replace(/\s+/g,'_')}_${Date.now()}.mp4`,
+        trackIndex: 0, trackLabel: 'Voix principale (restaurée)',
+        takeSlot: 'A', projectId: project.id,
+      };
+      await studioService.saveRecordingLocallyAsync(rec);
+      onProjectUpdate(studioService.addTrackToProject(project.id, rec) || project);
+      setShowRecovery(false);
+      alert('✅ Voix restaurée dans le slot A !');
+    } catch (e: any) { alert('Erreur restauration : ' + e.message); }
+    finally { setRecovering(null); }
   };
 
   // Backup de la voix principale — export fichier audio directement
@@ -166,6 +248,8 @@ export default function MixerScreen({
   // Générer une harmonie individuelle
   const generateOne = async (harmonyDef: typeof HARMONY_DEFS[0]) => {
     if (!mainVoice || generatingIndex !== null) return;
+    // Backup automatique silencieux avant génération
+    autoBackupToIndexedDB(mainVoice);
     setGeneratingIndex(harmonyDef.trackIndex);
     setGeneratePct(0);
     setGenerateLabel(`${harmonyDef.emoji} ${harmonyDef.label}...`);
@@ -215,6 +299,8 @@ export default function MixerScreen({
   // Générer toutes les harmonies
   const generateAll = async () => {
     if (!mainVoice || generatingIndex !== null) return;
+    // Backup automatique silencieux avant génération
+    if (mainVoice) autoBackupToIndexedDB(mainVoice);
     setGeneratingIndex(-1); // -1 = toutes
     setGeneratePct(0);
     try {
@@ -684,6 +770,13 @@ export default function MixerScreen({
                 </div>
               )}
 
+              {/* Bouton récupération d'urgence */}
+              <button
+                onClick={() => { setShowRecovery(true); loadRecoveryItems(); }}
+                className="w-full py-2 rounded-xl font-black text-[9px] uppercase tracking-widest text-zinc-600 border border-zinc-900 active:scale-95 transition-all flex items-center justify-center gap-1.5 mb-1">
+                🔍 Récupérer une voix perdue
+              </button>
+
               {/* Bouton backup + export voix principale */}
               {mainVoice && (
                 <div className="flex gap-2 mb-2">
@@ -692,7 +785,10 @@ export default function MixerScreen({
                     className={`flex-1 py-2 rounded-xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-1.5 active:scale-95 transition-all ${
                       backupDone ? 'bg-green-800 text-green-300' : 'bg-zinc-800 text-zinc-400'
                     }`}>
-                    {backupDone ? <><CheckCircle2 size={12}/> Sauvegardé</> : <><Shield size={12}/> Backup voix</>}
+                    {backupDone
+                      ? <><CheckCircle2 size={12}/> Sauvegardé</>
+                      : <><Shield size={12}/> Backup voix{autoBackupDone && <span className="ml-1 text-[8px] text-emerald-500">● auto</span>}</>
+                    }
                   </button>
                   <button
                     onClick={exportMainVoice}
@@ -836,5 +932,33 @@ export default function MixerScreen({
 
       <audio ref={playRef} playsInline className="hidden"/>
     </div>
+    {/* ── Modal récupération ── */}
+    {showRecovery && (
+      <div className="fixed inset-0 z-50 flex items-end justify-center" style={{background:'rgba(0,0,0,0.85)'}}>
+        <div className="w-full max-w-lg bg-zinc-950 border border-zinc-800 rounded-t-2xl p-5 max-h-[80vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <p className="font-black text-[13px] uppercase tracking-widest text-white">🔍 Récupérer une voix</p>
+            <button onClick={() => setShowRecovery(false)} className="text-zinc-600 text-[20px] leading-none active:scale-90">✕</button>
+          </div>
+          {recoveryItems.length === 0 ? (
+            <p className="text-zinc-600 text-[12px] text-center py-8">Aucun backup trouvé dans le stockage local.</p>
+          ) : (
+            <div className="space-y-2">
+              {recoveryItems.map(item => (
+                <button key={item.key}
+                  onClick={() => restoreFromBackup(item.key)}
+                  disabled={!!recovering}
+                  className="w-full text-left p-3 bg-zinc-900 border border-zinc-800 rounded-xl active:scale-98 transition-all disabled:opacity-50">
+                  <p className="text-[12px] font-bold text-white">{item.label}</p>
+                  <p className="text-[10px] text-zinc-600 mt-0.5">{(item.size / 1024).toFixed(0)} KB — {item.key}</p>
+                  {recovering === item.key && <p className="text-[10px] text-emerald-400 mt-1 animate-pulse">⏳ Restauration en cours...</p>}
+                </button>
+              ))}
+            </div>
+          )}
+          <p className="text-[9px] text-zinc-700 uppercase font-black mt-4">La voix sera restaurée dans le slot A de cette chanson</p>
+        </div>
+      </div>
+    )}
   );
 }

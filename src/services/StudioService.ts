@@ -815,16 +815,35 @@ export const studioService = {
     progress('Décodage voix principale', 5);
 
     // Récupérer le blob : priorité dataUrl en mémoire, sinon IndexedDB
+    // On essaie toujours IndexedDB si dataUrl manquant ou trop petit
     let srcBlob: Blob | null = null;
-    if (mainVoice.dataUrl) {
+    const db = getOfflineDB();
+    if (mainVoice.dataUrl && mainVoice.dataUrl.length > 1000) {
       srcBlob = this.dataUrlToBlob(mainVoice.dataUrl);
-    } else {
+    }
+    if (!srcBlob || srcBlob.size < 1000) {
       try {
-        const db = getOfflineDB();
-        srcBlob = await db.getAudio(`rec_${mainVoice.id}`);
+        progress('Chargement audio depuis le stockage local...', 3);
+        const dbBlob = await db.getAudio(`rec_${mainVoice.id}`);
+        if (dbBlob && dbBlob.size > 1000) srcBlob = dbBlob;
+      } catch (e) {
+        console.warn('[generateLayers] IndexedDB error:', e);
+      }
+    }
+    // Dernier recours : tenter la clé backup
+    if (!srcBlob || srcBlob.size < 1000) {
+      try {
+        progress('Tentative restauration depuis backup...', 4);
+        const backupBlob = await db.getAudio(`backup_voice_${mainVoice.id}`);
+        if (backupBlob && backupBlob.size > 1000) {
+          srcBlob = backupBlob;
+          console.warn('[generateLayers] ⚠️ Restauration depuis backup automatique');
+        }
       } catch {}
     }
-    if (!srcBlob || srcBlob.size === 0) throw new Error('Voix principale sans données audio (ni dataUrl ni IndexedDB)');
+    if (!srcBlob || srcBlob.size < 1000) {
+      throw new Error(`Fichier audio introuvable (id: ${mainVoice.id}). Veuillez ré-enregistrer la voix principale.`);
+    }
 
     const srcAb = await srcBlob.arrayBuffer();
     const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext());
