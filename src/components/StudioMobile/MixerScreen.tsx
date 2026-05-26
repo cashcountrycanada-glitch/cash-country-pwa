@@ -342,6 +342,7 @@ export default function MixerScreen({
   const hasAnyHarmony = HARMONY_DEFS.some(h => tracks.some(t => t.trackIndex === h.trackIndex));
 
   return (
+    <>
     <div className="min-h-screen bg-[#020202] text-white flex flex-col">
 
       {/* ── Header ── */}
@@ -932,6 +933,7 @@ export default function MixerScreen({
 
       <audio ref={playRef} playsInline className="hidden"/>
     </div>
+    <>
     {/* ── Modal récupération ── */}
     {showRecovery && (
       <div className="fixed inset-0 z-50 flex items-end justify-center" style={{background:'rgba(0,0,0,0.85)'}}>
@@ -960,5 +962,6 @@ export default function MixerScreen({
         </div>
       </div>
     )}
+    </>
   );
 }
