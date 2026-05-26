@@ -490,7 +490,8 @@ export const studioService = {
   async saveRecordingLocallyAsync(rec: MobileRecording): Promise<void> {
     const db = getOfflineDB();
     // Demander le stockage persistant si pas encore fait
-    StudioOfflineDatabase.requestPersistence().catch(() => {});
+    // requestPersistence appelé via l'instance (méthode statique non exportée)
+    studioOfflineDB.init().catch(() => {});
     if (rec.dataUrl) { const blob = this.dataUrlToBlob(rec.dataUrl); await db.saveAudio(`rec_${rec.id}`, blob, { songId: rec.songId, songTitle: rec.songTitle, type: 'recording' }); }
     const meta = { ...rec, dataUrl: undefined, blob: undefined };
     const existing = await db.getState<any[]>('recordings', []);

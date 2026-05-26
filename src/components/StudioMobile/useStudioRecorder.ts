@@ -20,6 +20,7 @@
  */
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { studioService, ReverbType, MobileRecording, TrackProject } from '../../services/StudioService';
+import { studioOfflineDB } from '../../services/StudioOfflineDB';
 import { Song } from '../../types';
 import { TrackPreset } from './studio.types';
 
@@ -521,7 +522,27 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         };
         // Sauvegarder dans IndexedDB AVANT de continuer — critique pour la persistance
         await studioService.saveRecordingLocallyAsync(rec);
-        optsRef.current.onLog?.(`💾 Audio sauvegardé dans IndexedDB (${(dataUrl.length/1024).toFixed(0)} KB)`);
+
+        // VÉRIFICATION : relire depuis IndexedDB pour confirmer que l'écriture a réussi
+        const db = studioOfflineDB;
+        let verified = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const ok = await db.hasAudio(`rec_${rec.id}`);
+          if (ok) { verified = true; break; }
+          // Pause courte puis retry
+          await new Promise(r => setTimeout(r, 300));
+          optsRef.current.onLog?.(`⏳ Vérification écriture IndexedDB (tentative ${attempt + 2}/3)...`);
+          if (attempt < 2) await studioService.saveRecordingLocallyAsync(rec); // retry save
+        }
+
+        if (!verified) {
+          // Dernière chance — garder dataUrl en mémoire dans le projet
+          optsRef.current.onLog?.('⚠️ IndexedDB non confirmé — dataUrl conservé en mémoire');
+          // On continue quand même avec le dataUrl en mémoire
+        } else {
+          optsRef.current.onLog?.(`💾 Audio vérifié dans IndexedDB (${(dataUrl.length/1024).toFixed(0)} KB)`);
+        }
+
         const updatedProject = studioService.addTrackToProject(project.id, rec);
         optsRef.current.onLog?.(`✅ Prise sauvegardée | trackIndex=${optsRef.current.currentPreset.index}`);
         onSaved(rec, updatedProject);
