@@ -488,14 +488,52 @@ async function smartHarmonyBuffer(
 
 export const studioService = {
   async saveRecordingLocallyAsync(rec: MobileRecording): Promise<void> {
-    const db = getOfflineDB();
-    // Demander le stockage persistant si pas encore fait
-    // requestPersistence appelé via l'instance (méthode statique non exportée)
-    studioOfflineDB.init().catch(() => {});
-    if (rec.dataUrl) { const blob = this.dataUrlToBlob(rec.dataUrl); await db.saveAudio(`rec_${rec.id}`, blob, { songId: rec.songId, songTitle: rec.songTitle, type: 'recording' }); }
-    const meta = { ...rec, dataUrl: undefined, blob: undefined };
-    const existing = await db.getState<any[]>('recordings', []);
-    await db.setState('recordings', [...existing.filter((r: any) => r.id !== rec.id), meta]);
+    if (!rec.dataUrl || rec.dataUrl.length < 100) return;
+    const blob = this.dataUrlToBlob(rec.dataUrl);
+    const MAX_ATTEMPTS = 5;
+    let lastError: any = null;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        // Réinitialiser la connexion IndexedDB si elle a été coupée par iOS
+        const db = getOfflineDB();
+        await db.init();
+
+        // Sauvegarder le blob audio
+        await db.saveAudio(`rec_${rec.id}`, blob, {
+          songId: rec.songId,
+          songTitle: rec.songTitle,
+          type: 'recording',
+          savedAt: Date.now(),
+        });
+
+        // Sauvegarder aussi les métadonnées
+        const meta = { ...rec, dataUrl: undefined, blob: undefined };
+        const existing = await db.getState<any[]>('recordings', []);
+        await db.setState('recordings', [...existing.filter((r: any) => r.id !== rec.id), meta]);
+
+        console.log(`[Save] ✅ Prise sauvegardée (tentative ${attempt}) — ${(blob.size/1024).toFixed(0)} KB`);
+        return; // Succès — sortir
+
+      } catch (e: any) {
+        lastError = e;
+        console.warn(`[Save] ⚠️ Tentative ${attempt}/${MAX_ATTEMPTS} échouée:`, e?.message);
+
+        if (attempt < MAX_ATTEMPTS) {
+          // Attendre de plus en plus longtemps entre les tentatives
+          const delay = attempt * 500; // 500ms, 1000ms, 1500ms, 2000ms
+          await new Promise(r => setTimeout(r, delay));
+
+          // Forcer re-init de la connexion IndexedDB
+          try { await studioOfflineDB.init(); } catch {}
+        }
+      }
+    }
+
+    // Toutes les tentatives ont échoué — logger mais NE PAS planter
+    // Le dataUrl reste en mémoire dans rec.dataUrl — pas perdu
+    console.error('[Save] ❌ Échec après', MAX_ATTEMPTS, 'tentatives:', lastError?.message);
+    throw lastError; // Remonter pour que l'appelant sache
   },
   saveRecordingLocally(rec: MobileRecording): void {
     this.saveRecordingLocallyAsync(rec).catch((e: any) => {

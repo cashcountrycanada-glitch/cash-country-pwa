@@ -520,32 +520,54 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           pitchShift: optsRef.current.currentPreset.pitch, gain: optsRef.current.currentPreset.gain,
           pan: optsRef.current.currentPreset.pan, projectId: project.id,
         };
-        // Sauvegarder dans IndexedDB AVANT de continuer — critique pour la persistance
-        await studioService.saveRecordingLocallyAsync(rec);
-
-        // VÉRIFICATION : relire depuis IndexedDB pour confirmer que l'écriture a réussi
-        const db = studioOfflineDB;
-        let verified = false;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const ok = await db.hasAudio(`rec_${rec.id}`);
-          if (ok) { verified = true; break; }
-          // Pause courte puis retry
-          await new Promise(r => setTimeout(r, 300));
-          optsRef.current.onLog?.(`⏳ Vérification écriture IndexedDB (tentative ${attempt + 2}/3)...`);
-          if (attempt < 2) await studioService.saveRecordingLocallyAsync(rec); // retry save
-        }
-
-        if (!verified) {
-          // Dernière chance — garder dataUrl en mémoire dans le projet
-          optsRef.current.onLog?.('⚠️ IndexedDB non confirmé — dataUrl conservé en mémoire');
-          // On continue quand même avec le dataUrl en mémoire
-        } else {
-          optsRef.current.onLog?.(`💾 Audio vérifié dans IndexedDB (${(dataUrl.length/1024).toFixed(0)} KB)`);
-        }
-
+        // 1. Ajouter immédiatement au projet (dataUrl en mémoire) — prise disponible instantanément
         const updatedProject = studioService.addTrackToProject(project.id, rec);
-        optsRef.current.onLog?.(`✅ Prise sauvegardée | trackIndex=${optsRef.current.currentPreset.index}`);
-        onSaved(rec, updatedProject);
+        optsRef.current.onLog?.(`✅ Prise en mémoire (${(dataUrl.length/1024).toFixed(0)} KB) | slot=${optsRef.current.takeSlot ?? 'A'}`);
+        onSaved(rec, updatedProject); // UI mise à jour tout de suite
+
+        // 2. Persister dans IndexedDB en arrière-plan avec retry robuste
+        optsRef.current.onLog?.('💾 Sauvegarde IndexedDB...');
+        studioService.saveRecordingLocallyAsync(rec).then(() => {
+          optsRef.current.onLog?.('💾 ✅ Audio persisté dans IndexedDB');
+          // 3. Vérification lecture après écriture
+          return studioOfflineDB.hasAudio(`rec_${rec.id}`);
+        }).then(ok => {
+          if (ok) {
+            optsRef.current.onLog?.('💾 ✅ Vérification OK — prise sécurisée');
+          } else {
+            optsRef.current.onLog?.('⚠️ Vérification IndexedDB échouée — prise en mémoire seulement');
+          }
+        }).catch(e => {
+          optsRef.current.onLog?.(`⚠️ IndexedDB indisponible (${e?.message?.slice(0,40)})`);
+
+          // Filet ultime : sauvegarder un fragment du dataUrl dans localStorage
+          // localStorage est limité (5MB) mais suffisant pour garder une référence
+          try {
+            const emergencyKey = `emergency_rec_${rec.id}`;
+            // Stocker juste les métadonnées + un flag pour indiquer que l'audio est en mémoire
+            localStorage.setItem(emergencyKey, JSON.stringify({
+              id: rec.id, songId: rec.songId, songTitle: rec.songTitle,
+              duration: rec.duration, recordedAt: rec.recordedAt,
+              takeSlot: rec.takeSlot, projectId: rec.projectId,
+              dataUrlSize: rec.dataUrl?.length || 0,
+              savedAt: Date.now(), emergency: true,
+            }));
+            optsRef.current.onLog?.('🚨 Métadonnées d'urgence sauvegardées (localStorage)');
+          } catch {}
+
+          // Retry automatique à 3s, 8s et 20s
+          [3000, 8000, 20000].forEach((delay, i) => {
+            setTimeout(() => {
+              studioService.saveRecordingLocallyAsync(rec).then(() => {
+                optsRef.current.onLog?.(`💾 ✅ Retry #${i+1} IndexedDB réussi`);
+                // Nettoyer la clé d'urgence
+                try { localStorage.removeItem(`emergency_rec_${rec.id}`); } catch {}
+              }).catch(() => {
+                if (i === 2) optsRef.current.onLog?.('❌ IndexedDB toujours indisponible — utilise Récupérer voix perdue');
+              });
+            }, delay);
+          });
+        });
       } catch(e: any) {
         optsRef.current.onLog?.(`❌ Erreur sauvegarde: ${e.message}`);
       } finally { setIsSaving(false); }

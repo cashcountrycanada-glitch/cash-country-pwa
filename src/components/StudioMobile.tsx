@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.88';
+const BUILD_VERSION = 'v7.6.91';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -375,23 +375,35 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     setProject(proj);
     setMixDone(!!proj.mixedDataUrl);
 
-    // Recharger les dataUrl depuis IndexedDB pour tous les tracks sans dataUrl
+    // Recharger les dataUrl depuis IndexedDB pour tous les tracks
     if (proj.tracks.length > 0) {
-      const db = studioOfflineDB;
       Promise.all(
         proj.tracks.map(async (track) => {
-          if (track.dataUrl) return track; // déjà en mémoire
+          // Essayer d'abord dataUrl en mémoire
+          if (track.dataUrl && track.dataUrl.length > 1000) return track;
+          // Sinon charger depuis IndexedDB (clé principale)
           try {
-            const blob = await db.getAudio(`rec_${track.id}`);
-            if (blob && blob.size > 0) {
+            const blob = await studioOfflineDB.getAudio(`rec_${track.id}`);
+            if (blob && blob.size > 1000) {
               const dataUrl = await studioService.blobToDataUrl(blob);
+              addLog(`💾 Slot ${track.takeSlot || track.trackIndex} rechargé depuis IndexedDB (${(blob.size/1024).toFixed(0)} KB)`);
               return { ...track, dataUrl };
             }
           } catch {}
+          // Dernier recours : clé backup
+          try {
+            const backup = await studioOfflineDB.getAudio(`backup_voice_${track.id}`);
+            if (backup && backup.size > 1000) {
+              const dataUrl = await studioService.blobToDataUrl(backup);
+              addLog(`🛡 Slot ${track.takeSlot || track.trackIndex} restauré depuis BACKUP`);
+              return { ...track, dataUrl };
+            }
+          } catch {}
+          addLog(`⚠️ Slot ${track.takeSlot || track.trackIndex} — audio introuvable (id: ${track.id.slice(-6)})`);
           return track;
         })
       ).then(tracksWithData => {
-        const hasAnyData = tracksWithData.some(t => t.dataUrl);
+        const hasAnyData = tracksWithData.some((t: any) => t.dataUrl);
         if (hasAnyData) {
           setProject(prev => prev ? { ...prev, tracks: tracksWithData } : prev);
         }
