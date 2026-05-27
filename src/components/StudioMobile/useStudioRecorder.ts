@@ -552,7 +552,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
               dataUrlSize: rec.dataUrl?.length || 0,
               savedAt: Date.now(), emergency: true,
             }));
-            optsRef.current.onLog?.('🚨 Métadonnées d'urgence sauvegardées (localStorage)');
+            optsRef.current.onLog?.('🚨 Métadonnées d urgence sauvegardées (localStorage)');
           } catch {}
 
           // Retry automatique à 3s, 8s et 20s
