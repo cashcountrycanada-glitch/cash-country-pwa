@@ -450,31 +450,51 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     const handleSave = async (workletBlob?: Blob) => {
       setIsRecording(false); setIsSaving(true);
       try {
-        // Attendre que IndexedDB soit réellement disponible (pas juste un délai fixe)
-        // iOS peut prendre 2-15 secondes après fermeture du micro selon le device et l'interface
-        optsRef.current.onLog?.('⏳ Libération session audio iOS...');
-        let dbReady = false;
-        // Vérifier toutes les 500ms pendant 60s max — iOS peut être très lent avec V8 USB
-        for (let attempt = 0; attempt < 120; attempt++) {
-          await new Promise(r => setTimeout(r, 500));
-          try {
-            await studioOfflineDB.init();
-            await studioOfflineDB.setState('_ping', Date.now());
-            dbReady = true;
-            const secs = ((attempt + 1) * 0.5).toFixed(1);
-            optsRef.current.onLog?.(`🔓 IndexedDB disponible après ${secs}s`);
-            break;
-          } catch {
-            // Log toutes les 5 secondes pour ne pas spammer
-            if (attempt % 10 === 9) {
-              optsRef.current.onLog?.(`⏳ Attente IndexedDB... ${((attempt + 1) * 0.5).toFixed(0)}s`);
-            }
+        // iOS coupe IndexedDB DÉFINITIVEMENT pendant AVAudioSession PlayAndRecord
+        // Solution : ne pas attendre — sauvegarder en arrière-plan quand iOS le permet
+        optsRef.current.onLog?.('💾 Prise en mémoire — sauvegarde différée...');
+
+        // Enregistrer la prise dans une file d'attente persistante (window.__pendingSaves)
+        // Cette file est traitée dès que le contexte audio est libéré
+        const pending = (window as any).__pendingSaves || [];
+        pending.push({ rec, timestamp: Date.now() });
+        (window as any).__pendingSaves = pending;
+
+        // Fonction de sauvegarde différée
+        const savePending = async () => {
+          const queue: any[] = (window as any).__pendingSaves || [];
+          if (queue.length === 0) return;
+          const saved: any[] = [];
+          for (const item of queue) {
+            try {
+              await studioOfflineDB.init();
+              await studioService.saveRecordingLocallyAsync(item.rec);
+              const ok = await studioOfflineDB.hasAudio(`rec_${item.rec.id}`);
+              if (ok) {
+                saved.push(item);
+                optsRef.current.onLog?.(`💾 ✅ Prise sauvegardée dans IndexedDB (${new Date(item.timestamp).toLocaleTimeString('fr-CA')})`);
+              }
+            } catch {}
           }
-        }
-        if (!dbReady) {
-          optsRef.current.onLog?.('⚠️ IndexedDB non disponible après 60s — retries automatiques actifs');
-          // La prise est en mémoire — les retries (3s, 8s, 20s) vont continuer à essayer
-        }
+          // Retirer les prises sauvegardées de la file
+          (window as any).__pendingSaves = queue.filter((q: any) => !saved.includes(q));
+        };
+
+        // Tenter immédiatement (parfois ça marche)
+        savePending().catch(() => {});
+
+        // Puis re-tenter quand l'app revient au premier plan (visibilitychange)
+        const onVisible = () => {
+          if (document.visibilityState === 'visible') {
+            savePending().catch(() => {});
+          }
+        };
+        document.addEventListener('visibilitychange', onVisible, { once: false });
+
+        // Et aussi après 5s, 15s, 30s, 60s — sans bloquer
+        [5000, 15000, 30000, 60000].forEach(delay => {
+          setTimeout(() => savePending().catch(() => {}), delay);
+        });
         // ── Construire le blob audio ──────────────────────────────────────
         let blob: Blob;
         if (workletBlob && workletBlob.size > 0) {

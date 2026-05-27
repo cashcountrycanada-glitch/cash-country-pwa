@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.96';
+const BUILD_VERSION = 'v7.6.97';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -368,6 +368,28 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     studioService.getLocalRecordingsAsync().then(setRecordings).catch(() => setRecordings(studioService.getLocalRecordings()));
   }, []);
   
+  // Vider la file de sauvegardes différées quand l'écran change
+  useEffect(() => {
+    const queue: any[] = (window as any).__pendingSaves || [];
+    if (queue.length > 0) {
+      addLog(`💾 ${queue.length} prise(s) en attente — tentative sauvegarde...`);
+      const trySave = async () => {
+        const saved: any[] = [];
+        for (const item of queue) {
+          try {
+            await studioOfflineDB.init();
+            await studioService.saveRecordingLocallyAsync(item.rec);
+            const ok = await studioOfflineDB.hasAudio(`rec_${item.rec.id}`);
+            if (ok) { saved.push(item); addLog(`💾 ✅ Prise différée sauvegardée`); }
+          } catch {}
+        }
+        (window as any).__pendingSaves = queue.filter((q: any) => !saved.includes(q));
+        if ((window as any).__pendingSaves.length === 0) addLog('💾 ✅ Toutes les prises sécurisées');
+      };
+      trySave().catch(() => {});
+    }
+  }, [screen]);
+
   useEffect(() => {
     if (!selected) return;
     const proj = studioService.getOrCreateProject(selected.id, selected.title);
