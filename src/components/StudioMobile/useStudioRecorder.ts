@@ -452,49 +452,6 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       try {
         // iOS coupe IndexedDB DÉFINITIVEMENT pendant AVAudioSession PlayAndRecord
         // Solution : ne pas attendre — sauvegarder en arrière-plan quand iOS le permet
-        optsRef.current.onLog?.('💾 Prise en mémoire — sauvegarde différée...');
-
-        // Enregistrer la prise dans une file d'attente persistante (window.__pendingSaves)
-        // Cette file est traitée dès que le contexte audio est libéré
-        const pending = (window as any).__pendingSaves || [];
-        pending.push({ rec, timestamp: Date.now() });
-        (window as any).__pendingSaves = pending;
-
-        // Fonction de sauvegarde différée
-        const savePending = async () => {
-          const queue: any[] = (window as any).__pendingSaves || [];
-          if (queue.length === 0) return;
-          const saved: any[] = [];
-          for (const item of queue) {
-            try {
-              await studioOfflineDB.init();
-              await studioService.saveRecordingLocallyAsync(item.rec);
-              const ok = await studioOfflineDB.hasAudio(`rec_${item.rec.id}`);
-              if (ok) {
-                saved.push(item);
-                optsRef.current.onLog?.(`💾 ✅ Prise sauvegardée dans IndexedDB (${new Date(item.timestamp).toLocaleTimeString('fr-CA')})`);
-              }
-            } catch {}
-          }
-          // Retirer les prises sauvegardées de la file
-          (window as any).__pendingSaves = queue.filter((q: any) => !saved.includes(q));
-        };
-
-        // Tenter immédiatement (parfois ça marche)
-        savePending().catch(() => {});
-
-        // Puis re-tenter quand l'app revient au premier plan (visibilitychange)
-        const onVisible = () => {
-          if (document.visibilityState === 'visible') {
-            savePending().catch(() => {});
-          }
-        };
-        document.addEventListener('visibilitychange', onVisible, { once: false });
-
-        // Et aussi après 5s, 15s, 30s, 60s — sans bloquer
-        [5000, 15000, 30000, 60000].forEach(delay => {
-          setTimeout(() => savePending().catch(() => {}), delay);
-        });
         // ── Construire le blob audio ──────────────────────────────────────
         let blob: Blob;
         if (workletBlob && workletBlob.size > 0) {
@@ -570,49 +527,62 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         optsRef.current.onLog?.(`✅ Prise en mémoire (${(dataUrl.length/1024).toFixed(0)} KB) | slot=${optsRef.current.takeSlot ?? 'A'}`);
         onSaved(rec, updatedProject); // UI mise à jour tout de suite
 
-        // 2. Persister dans IndexedDB en arrière-plan avec retry robuste
-        optsRef.current.onLog?.('💾 Sauvegarde IndexedDB...');
-        studioService.saveRecordingLocallyAsync(rec).then(() => {
-          optsRef.current.onLog?.('💾 ✅ Audio persisté dans IndexedDB');
-          // 3. Vérification lecture après écriture
-          return studioOfflineDB.hasAudio(`rec_${rec.id}`);
-        }).then(ok => {
-          if (ok) {
-            optsRef.current.onLog?.('💾 ✅ Vérification OK — prise sécurisée');
-          } else {
-            optsRef.current.onLog?.('⚠️ Vérification IndexedDB échouée — prise en mémoire seulement');
+        // 2. Ajouter à la file de sauvegarde différée (iOS bloque IndexedDB pendant audio)
+        const pending = (window as any).__pendingSaves as any[] || [];
+        pending.push({ rec, timestamp: Date.now() });
+        (window as any).__pendingSaves = pending;
+        optsRef.current.onLog?.('💾 Sauvegarde différée — en attente libération iOS...');
+
+        // Fonction globale de traitement de la file
+        const processPendingQueue = async () => {
+          const queue = (window as any).__pendingSaves as any[] || [];
+          if (!queue.length) return;
+          const saved: any[] = [];
+          for (const item of queue) {
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                await studioOfflineDB.init();
+                await studioService.saveRecordingLocallyAsync(item.rec);
+                const ok = await studioOfflineDB.hasAudio(`rec_${item.rec.id}`);
+                if (ok) {
+                  saved.push(item);
+                  optsRef.current.onLog?.('💾 ✅ Prise sécurisée dans IndexedDB');
+                  try { localStorage.removeItem(`emergency_${item.rec.id}`); } catch {}
+                  break;
+                }
+              } catch {
+                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+              }
+            }
           }
-        }).catch(e => {
-          optsRef.current.onLog?.(`⚠️ IndexedDB indisponible (${e?.message?.slice(0,40)})`);
+          (window as any).__pendingSaves = queue.filter((q: any) => !saved.includes(q));
+          if ((window as any).__pendingSaves.length > 0) {
+            optsRef.current.onLog?.(`⚠️ ${(window as any).__pendingSaves.length} prise(s) encore en attente`);
+          }
+        };
 
-          // Filet ultime : sauvegarder un fragment du dataUrl dans localStorage
-          // localStorage est limité (5MB) mais suffisant pour garder une référence
-          try {
-            const emergencyKey = `emergency_rec_${rec.id}`;
-            // Stocker juste les métadonnées + un flag pour indiquer que l'audio est en mémoire
-            localStorage.setItem(emergencyKey, JSON.stringify({
-              id: rec.id, songId: rec.songId, songTitle: rec.songTitle,
-              duration: rec.duration, recordedAt: rec.recordedAt,
-              takeSlot: rec.takeSlot, projectId: rec.projectId,
-              dataUrlSize: rec.dataUrl?.length || 0,
-              savedAt: Date.now(), emergency: true,
-            }));
-            optsRef.current.onLog?.("🚨 Métadonnées urgence sauvegardées (localStorage)");
-          } catch {}
+        // Sauvegarder métadonnées d'urgence dans localStorage (survit aux crashes)
+        try {
+          localStorage.setItem(`emergency_${rec.id}`, JSON.stringify({
+            id: rec.id, songId: rec.songId, songTitle: rec.songTitle,
+            duration: rec.duration, recordedAt: rec.recordedAt,
+            takeSlot: rec.takeSlot, projectId: rec.projectId,
+          }));
+        } catch {}
 
-          // Retry automatique à 3s, 8s et 20s
-          [3000, 8000, 20000].forEach((delay, i) => {
-            setTimeout(() => {
-              studioService.saveRecordingLocallyAsync(rec).then(() => {
-                optsRef.current.onLog?.(`💾 ✅ Retry #${i+1} IndexedDB réussi`);
-                // Nettoyer la clé d'urgence
-                try { localStorage.removeItem(`emergency_rec_${rec.id}`); } catch {}
-              }).catch(() => {
-                if (i === 2) optsRef.current.onLog?.('❌ IndexedDB toujours indisponible — utilise Récupérer voix perdue');
-              });
-            }, delay);
-          });
+        // Tenter immédiatement (au cas où iOS libère vite)
+        processPendingQueue().catch(() => {});
+
+        // Puis retenter à intervalles croissants sans bloquer l'UI
+        [3000, 8000, 15000, 30000, 60000].forEach(delay => {
+          setTimeout(() => processPendingQueue().catch(() => {}), delay);
         });
+
+        // Et à chaque fois que l'app revient au premier plan
+        const onVisible = () => {
+          if (document.visibilityState === 'visible') processPendingQueue().catch(() => {});
+        };
+        document.addEventListener('visibilitychange', onVisible);
       } catch(e: any) {
         optsRef.current.onLog?.(`❌ Erreur sauvegarde: ${e.message}`);
       } finally { setIsSaving(false); }
