@@ -450,14 +450,31 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     const handleSave = async (workletBlob?: Blob) => {
       setIsRecording(false); setIsSaving(true);
       try {
-        // Attendre que iOS libère AVAudioSession et reconnecte IndexedDB
-        // iOS coupe IndexedDB pendant PlayAndRecord (micro USB/V8 = session plus longue)
+        // Attendre que IndexedDB soit réellement disponible (pas juste un délai fixe)
+        // iOS peut prendre 2-15 secondes après fermeture du micro selon le device et l'interface
         optsRef.current.onLog?.('⏳ Libération session audio iOS...');
-        await new Promise(r => setTimeout(r, 2500));
-        optsRef.current.onLog?.('🔓 Session libérée — connexion IndexedDB...');
-        // Forcer re-init IndexedDB maintenant que le micro est fermé
-        try { await studioOfflineDB.init(); } catch {}
-        optsRef.current.onLog?.('💾 IndexedDB prêt');
+        let dbReady = false;
+        // Vérifier toutes les 500ms pendant 60s max — iOS peut être très lent avec V8 USB
+        for (let attempt = 0; attempt < 120; attempt++) {
+          await new Promise(r => setTimeout(r, 500));
+          try {
+            await studioOfflineDB.init();
+            await studioOfflineDB.setState('_ping', Date.now());
+            dbReady = true;
+            const secs = ((attempt + 1) * 0.5).toFixed(1);
+            optsRef.current.onLog?.(`🔓 IndexedDB disponible après ${secs}s`);
+            break;
+          } catch {
+            // Log toutes les 5 secondes pour ne pas spammer
+            if (attempt % 10 === 9) {
+              optsRef.current.onLog?.(`⏳ Attente IndexedDB... ${((attempt + 1) * 0.5).toFixed(0)}s`);
+            }
+          }
+        }
+        if (!dbReady) {
+          optsRef.current.onLog?.('⚠️ IndexedDB non disponible après 60s — retries automatiques actifs');
+          // La prise est en mémoire — les retries (3s, 8s, 20s) vont continuer à essayer
+        }
         // ── Construire le blob audio ──────────────────────────────────────
         let blob: Blob;
         if (workletBlob && workletBlob.size > 0) {
