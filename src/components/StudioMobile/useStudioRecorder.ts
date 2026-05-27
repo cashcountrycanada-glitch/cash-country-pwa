@@ -450,6 +450,14 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     const handleSave = async (workletBlob?: Blob) => {
       setIsRecording(false); setIsSaving(true);
       try {
+        // Attendre que iOS libère AVAudioSession et reconnecte IndexedDB
+        // iOS coupe IndexedDB pendant PlayAndRecord (micro USB/V8 = session plus longue)
+        optsRef.current.onLog?.('⏳ Libération session audio iOS...');
+        await new Promise(r => setTimeout(r, 2500));
+        optsRef.current.onLog?.('🔓 Session libérée — connexion IndexedDB...');
+        // Forcer re-init IndexedDB maintenant que le micro est fermé
+        try { await studioOfflineDB.init(); } catch {}
+        optsRef.current.onLog?.('💾 IndexedDB prêt');
         // ── Construire le blob audio ──────────────────────────────────────
         let blob: Blob;
         if (workletBlob && workletBlob.size > 0) {
