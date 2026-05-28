@@ -123,8 +123,11 @@ async function opfsAvailable(): Promise<boolean> {
     if (!navigator.storage || !navigator.storage.getDirectory) return false;
     const worker = getOPFSWorker();
     if (!worker) return false;
-    // Test rapide : lister les fichiers
-    await opfsCall('list', {});
+    // Test avec timeout court (2s) — si le Worker est bloqué par Safari CSP, on passe vite en fallback
+    await Promise.race([
+      opfsCall('list', {}),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('OPFS timeout')), 2000)),
+    ]);
     return true;
   } catch { return false; }
 }
@@ -176,17 +179,22 @@ class StudioOfflineDatabase {
     return next;
   }
 
-  // Vérifie OPFS une seule fois et met en cache le résultat
+  // Vérifie OPFS une seule fois et met en cache le résultat (promesse partagée)
+  private _opfsCheckPromise: Promise<boolean> | null = null;
   async checkOPFS(): Promise<boolean> {
-    if (this._opfsAvailable === null) {
-      this._opfsAvailable = await opfsAvailable();
-      if (this._opfsAvailable) {
-        console.log('[DB] ✅ OPFS disponible — stockage audio primaire');
-      } else {
-        console.warn('[DB] ⚠️ OPFS indisponible — fallback IndexedDB');
-      }
+    if (this._opfsAvailable !== null) return this._opfsAvailable;
+    if (!this._opfsCheckPromise) {
+      this._opfsCheckPromise = opfsAvailable().then(ok => {
+        this._opfsAvailable = ok;
+        if (ok) console.log('[DB] ✅ OPFS disponible — stockage audio primaire');
+        else    console.warn('[DB] ⚠️ OPFS indisponible — fallback IndexedDB uniquement');
+        return ok;
+      }).catch(() => {
+        this._opfsAvailable = false;
+        return false;
+      });
     }
-    return this._opfsAvailable;
+    return this._opfsCheckPromise;
   }
 
   static async requestPersistence(): Promise<void> {
