@@ -134,7 +134,10 @@ async function opfsAvailable(): Promise<boolean> {
 
 async function opfsWrite(filename: string, blob: Blob): Promise<void> {
   const ab = await blob.arrayBuffer();
-  await opfsCall('write', { filename, mimeType: blob.type }, [ab]);
+  // IMPORTANT : inclure 'buffer' dans params ET dans transfer.
+  // Le Transferable dans postMessage(msg, [ab]) ne place PAS ab dans e.data.buffer
+  // si la clé 'buffer' est absente de msg — le Worker lit e.data.buffer = undefined.
+  await opfsCall('write', { filename, mimeType: blob.type, buffer: ab }, [ab]);
 }
 
 async function opfsRead(filename: string): Promise<Blob | null> {
