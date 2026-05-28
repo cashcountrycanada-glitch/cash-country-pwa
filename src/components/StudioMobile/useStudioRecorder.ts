@@ -544,15 +544,22 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
               type: 'recording',
               savedAt: Date.now(),
             });
-            // Sauvegarder les métadonnées (sans le blob) dans l'état IDB
+            const metaEntry = { ...saveRec, dataUrl: undefined };
+            // 1. Métadonnées dans IDB (tentative — peut échouer pendant AVAudioSession)
             try {
               const metas = await studioOfflineDB.getState<any[]>('recordings', []);
-              const metaEntry = { ...saveRec, dataUrl: undefined };
               await studioOfflineDB.setState('recordings', [...metas.filter((r: any) => r.id !== saveRec.id), metaEntry]);
-              try { localStorage.removeItem(`emergency_${saveRec.id}`); } catch {}
-            } catch (idbMetaErr) {
+            } catch {
               optsRef.current.onLog?.('💾 Audio OK — métadonnées IDB échouées (non bloquant)');
             }
+            // 2. Métadonnées dans localStorage — garantie absolue, survit aux crashes iOS
+            //    Pas affecté par AVAudioSession. C'est le fallback final de getLocalRecordingsAsync.
+            try {
+              const lsRecs: any[] = JSON.parse(localStorage.getItem('cash_studio_recordings') || '[]');
+              const updated = [...lsRecs.filter((r: any) => r.id !== saveRec.id), metaEntry];
+              localStorage.setItem('cash_studio_recordings', JSON.stringify(updated));
+              try { localStorage.removeItem(`emergency_${saveRec.id}`); } catch {}
+            } catch {}
             const backend = await studioOfflineDB.checkOPFS() ? 'OPFS' : 'IDB';
             optsRef.current.onLog?.(`💾 ✅ Prise sécurisée ${backend} → rec_${saveRec.id} (${(saveBlob.size/1024).toFixed(0)} Ko)`);
             return true;
@@ -601,10 +608,15 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
                   songId: itemRec.songId, songTitle: itemRec.songTitle,
                   type: 'recording', savedAt: Date.now(),
                 });
+                const metaEntry = { ...itemRec, dataUrl: undefined };
                 try {
                   const metas = await studioOfflineDB.getState<any[]>('recordings', []);
-                  const metaEntry = { ...itemRec, dataUrl: undefined };
                   await studioOfflineDB.setState('recordings', [...metas.filter((r: any) => r.id !== itemRec.id), metaEntry]);
+                } catch {}
+                // localStorage — garantie absolue
+                try {
+                  const lsRecs: any[] = JSON.parse(localStorage.getItem('cash_studio_recordings') || '[]');
+                  localStorage.setItem('cash_studio_recordings', JSON.stringify([...lsRecs.filter((r: any) => r.id !== itemRec.id), metaEntry]));
                   try { localStorage.removeItem(`emergency_${itemRec.id}`); } catch {}
                 } catch {}
                 const backend = await studioOfflineDB.checkOPFS() ? 'OPFS' : 'IDB';

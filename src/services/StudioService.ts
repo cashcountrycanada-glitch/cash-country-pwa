@@ -512,6 +512,14 @@ export const studioService = {
         const existing = await db.getState<any[]>('recordings', []);
         await db.setState('recordings', [...existing.filter((r: any) => r.id !== rec.id), meta]);
 
+        // AUSSI dans localStorage — garantie absolue qui survit aux crashes iOS
+        // (localStorage n'est pas affecté par AVAudioSession ni par l'éviction IDB)
+        try {
+          const lsRecs: any[] = JSON.parse(localStorage.getItem('cash_studio_recordings') || '[]');
+          const updated = [...lsRecs.filter((r: any) => r.id !== rec.id), meta];
+          localStorage.setItem('cash_studio_recordings', JSON.stringify(updated));
+        } catch {}
+
         console.log(`[Save] ✅ Prise sauvegardée (tentative ${attempt}) — ${(blob.size/1024).toFixed(0)} KB`);
         return; // Succès — sortir
 
@@ -548,11 +556,23 @@ export const studioService = {
     try {
       const db = getOfflineDB();
       const metas = await db.getState<any[]>('recordings', []);
-      return Promise.all(metas.map(async (meta: any) => {
+      // Si IDB a des métadonnées, les enrichir avec les blobs audio
+      if (metas && metas.length > 0) {
+        return Promise.all(metas.map(async (meta: any) => {
+          try { const blob = await db.getAudio(`rec_${meta.id}`); if (blob) return { ...meta, dataUrl: await studioService.blobToDataUrl(blob) }; } catch {}
+          return meta;
+        }));
+      }
+      // Fallback : localStorage (métadonnées) + OPFS (blobs) — survit aux crashes iOS
+      const lsMetas = this.getLocalRecordings();
+      return Promise.all(lsMetas.map(async (meta: any) => {
         try { const blob = await db.getAudio(`rec_${meta.id}`); if (blob) return { ...meta, dataUrl: await studioService.blobToDataUrl(blob) }; } catch {}
         return meta;
       }));
-    } catch { return this.getLocalRecordings(); }
+    } catch {
+      // Fallback pur localStorage sans blob (dégradé mais visible)
+      return this.getLocalRecordings();
+    }
   },
   getLocalRecordings(): MobileRecording[] { try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; } },
   async deleteLocalRecordingAsync(id: string): Promise<void> {
