@@ -25,56 +25,138 @@ function isIOS(): boolean {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
-// ── OPFS Helper ────────────────────────────────────────────────────────────────
+// ── OPFS via Web Worker (Safari iOS) ──────────────────────────────────────────
+// Safari iOS ne supporte PAS createWritable() sur le thread principal.
+// La seule API OPFS d'écriture supportée par Safari est createSyncAccessHandle(),
+// mais uniquement dans un Web Worker dédié.
+// Solution : Worker inline créé via Blob URL — aucun fichier externe requis.
+
+const OPFS_WORKER_SRC = `
+self.onmessage = async (e) => {
+  const { id, op, filename, buffer, mimeType } = e.data;
+  try {
+    const root = await navigator.storage.getDirectory();
+    if (op === 'write') {
+      const fh = await root.getFileHandle(filename, { create: true });
+      const acc = await fh.createSyncAccessHandle();
+      const buf = buffer instanceof ArrayBuffer ? buffer : await new Response(buffer).arrayBuffer();
+      acc.truncate(0);
+      acc.write(new Uint8Array(buf), { at: 0 });
+      acc.flush();
+      acc.close();
+      self.postMessage({ id, ok: true });
+    } else if (op === 'read') {
+      const fh = await root.getFileHandle(filename);
+      const file = await fh.getFile();
+      const ab = await file.arrayBuffer();
+      self.postMessage({ id, ok: true, buffer: ab, mimeType: file.type || mimeType || 'audio/mp4', size: ab.byteLength }, [ab]);
+    } else if (op === 'delete') {
+      try { await root.removeEntry(filename); } catch {}
+      self.postMessage({ id, ok: true });
+    } else if (op === 'exists') {
+      let exists = false;
+      try { await root.getFileHandle(filename); exists = true; } catch {}
+      self.postMessage({ id, ok: true, exists });
+    } else if (op === 'list') {
+      const names = [];
+      for await (const [name] of root.entries()) names.push(name);
+      self.postMessage({ id, ok: true, names });
+    }
+  } catch (err) {
+    self.postMessage({ id, ok: false, error: err && err.message ? err.message : String(err) });
+  }
+};
+`;
+
+let _opfsWorker: Worker | null = null;
+let _opfsWorkerReady = false;
+let _opfsMsgId = 0;
+const _opfsPending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
+
+function getOPFSWorker(): Worker | null {
+  if (_opfsWorker) return _opfsWorker;
+  try {
+    const blob = new Blob([OPFS_WORKER_SRC], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    _opfsWorker = new Worker(url);
+    _opfsWorker.onmessage = (e) => {
+      const { id, ok, error, ...rest } = e.data;
+      const p = _opfsPending.get(id);
+      if (!p) return;
+      _opfsPending.delete(id);
+      if (ok) p.resolve(rest);
+      else p.reject(new Error(error || 'OPFS worker error'));
+    };
+    _opfsWorker.onerror = (e) => {
+      console.error('[OPFS Worker] Erreur:', e.message);
+      _opfsWorker = null; // Reset pour recréer au prochain appel
+    };
+    _opfsWorkerReady = true;
+    return _opfsWorker;
+  } catch (e) {
+    console.warn('[OPFS Worker] Impossible de créer le worker:', e);
+    return null;
+  }
+}
+
+function opfsCall(op: string, params: Record<string, any>, transfer?: Transferable[]): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const worker = getOPFSWorker();
+    if (!worker) { reject(new Error('OPFS worker indisponible')); return; }
+    const id = ++_opfsMsgId;
+    _opfsPending.set(id, { resolve, reject });
+    const msg = { id, op, ...params };
+    if (transfer && transfer.length > 0) worker.postMessage(msg, transfer);
+    else worker.postMessage(msg);
+    // Timeout 15s pour éviter un hang silencieux
+    setTimeout(() => {
+      if (_opfsPending.has(id)) {
+        _opfsPending.delete(id);
+        reject(new Error(`OPFS ${op} timeout (${params.filename})`));
+      }
+    }, 15000);
+  });
+}
 
 async function opfsAvailable(): Promise<boolean> {
   try {
     if (!navigator.storage || !navigator.storage.getDirectory) return false;
-    await navigator.storage.getDirectory();
+    const worker = getOPFSWorker();
+    if (!worker) return false;
+    // Test rapide : lister les fichiers
+    await opfsCall('list', {});
     return true;
   } catch { return false; }
 }
 
 async function opfsWrite(filename: string, blob: Blob): Promise<void> {
-  const root = await navigator.storage.getDirectory();
-  const fh = await root.getFileHandle(filename, { create: true });
-  const writable = await (fh as any).createWritable();
-  await writable.write(blob);
-  await writable.close();
+  const ab = await blob.arrayBuffer();
+  await opfsCall('write', { filename, mimeType: blob.type }, [ab]);
 }
 
 async function opfsRead(filename: string): Promise<Blob | null> {
   try {
-    const root = await navigator.storage.getDirectory();
-    const fh = await root.getFileHandle(filename);
-    const file = await fh.getFile();
-    return file;
+    const result = await opfsCall('read', { filename });
+    if (!result.buffer || result.buffer.byteLength === 0) return null;
+    return new Blob([result.buffer], { type: result.mimeType || 'audio/mp4' });
   } catch { return null; }
 }
 
 async function opfsDelete(filename: string): Promise<void> {
-  try {
-    const root = await navigator.storage.getDirectory();
-    await root.removeEntry(filename);
-  } catch {}
+  try { await opfsCall('delete', { filename }); } catch {}
 }
 
 async function opfsExists(filename: string): Promise<boolean> {
   try {
-    const root = await navigator.storage.getDirectory();
-    await root.getFileHandle(filename);
-    return true;
+    const result = await opfsCall('exists', { filename });
+    return result.exists === true;
   } catch { return false; }
 }
 
 async function opfsListFiles(): Promise<string[]> {
   try {
-    const root = await navigator.storage.getDirectory();
-    const names: string[] = [];
-    for await (const [name] of (root as any).entries()) {
-      names.push(name);
-    }
-    return names;
+    const result = await opfsCall('list', {});
+    return result.names || [];
   } catch { return []; }
 }
 
