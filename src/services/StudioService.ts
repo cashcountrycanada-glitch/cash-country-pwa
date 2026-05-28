@@ -487,53 +487,124 @@ async function smartHarmonyBuffer(
 
 
 export const studioService = {
+  // Sauvegarder via Cache API (indépendant d'IndexedDB, non affecté par iOS audio session)
+  async saveRecordingToCache(rec: MobileRecording): Promise<boolean> {
+    if (!rec.dataUrl || rec.dataUrl.length < 100) return false;
+    try {
+      const blob = this.dataUrlToBlob(rec.dataUrl);
+      const cache = await caches.open('cash-country-recordings-v1');
+      const url = `/recordings/${rec.id}.audio`;
+      const response = new Response(blob, {
+        headers: {
+          'Content-Type': blob.type || 'audio/mp4',
+          'X-Recording-Id': rec.id,
+          'X-Song-Id': rec.songId,
+          'X-Song-Title': rec.songTitle,
+          'X-Take-Slot': rec.takeSlot || 'A',
+          'X-Recorded-At': String(rec.recordedAt),
+          'X-Duration': String(rec.duration),
+        }
+      });
+      await cache.put(url, response);
+      console.log(`[CacheAPI] ✅ Prise sauvegardée: ${url} (${(blob.size/1024).toFixed(0)} KB)`);
+      return true;
+    } catch (e: any) {
+      console.warn('[CacheAPI] ❌ Échec:', e?.message);
+      return false;
+    }
+  },
+
+  async getRecordingFromCache(recId: string): Promise<Blob | null> {
+    try {
+      const cache = await caches.open('cash-country-recordings-v1');
+      const response = await cache.match(`/recordings/${recId}.audio`);
+      if (response) return response.blob();
+      return null;
+    } catch { return null; }
+  },
+
+  async listRecordingsInCache(): Promise<Array<{id:string; songTitle:string; takeSlot:string; recordedAt:number; duration:number}>> {
+    try {
+      const cache = await caches.open('cash-country-recordings-v1');
+      const keys  = await cache.keys();
+      const items = [];
+      for (const req of keys) {
+        const res = await cache.match(req);
+        if (res) items.push({
+          id:         res.headers.get('X-Recording-Id') || '',
+          songTitle:  res.headers.get('X-Song-Title')   || '',
+          takeSlot:   res.headers.get('X-Take-Slot')    || 'A',
+          recordedAt: Number(res.headers.get('X-Recorded-At')) || 0,
+          duration:   Number(res.headers.get('X-Duration'))    || 0,
+        });
+      }
+      return items;
+    } catch { return []; }
+  },
+
+  // Upload enregistrement vers GitHub Releases via Railway
+  async uploadRecordingToGitHub(rec: MobileRecording): Promise<string | null> {
+    if (!rec.dataUrl || rec.dataUrl.length < 100) return null;
+    try {
+      const blob = this.dataUrlToBlob(rec.dataUrl);
+      const serverUrl = (window as any).__SERVER_URL ||
+        (window.location.hostname === 'localhost' ? 'http://localhost:3000' : window.location.origin);
+
+      const res = await fetch(`${serverUrl}/api/recordings/upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': blob.type || 'audio/mp4',
+          'X-Recording-Id': rec.id,
+          'X-Song-Title': rec.songTitle || 'unknown',
+          'X-Take-Slot': rec.takeSlot || 'A',
+          'X-Duration': String(rec.duration || 0),
+          'X-Recorded-At': String(rec.recordedAt || Date.now()),
+        },
+        body: blob,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.warn('[GitHub Upload] ❌', err.error || res.status);
+        return null;
+      }
+
+      const data = await res.json();
+      console.log('[GitHub Upload] ✅', data.url);
+      return data.url || null;
+    } catch (e: any) {
+      console.warn('[GitHub Upload] ❌', e.message);
+      return null;
+    }
+  },
+
   async saveRecordingLocallyAsync(rec: MobileRecording): Promise<void> {
     if (!rec.dataUrl || rec.dataUrl.length < 100) return;
     const blob = this.dataUrlToBlob(rec.dataUrl);
-    const MAX_ATTEMPTS = 5;
-    let lastError: any = null;
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      try {
-        // Réinitialiser la connexion IndexedDB si elle a été coupée par iOS
-        const db = getOfflineDB();
-        await db.init();
-
-        // Sauvegarder le blob audio
-        await db.saveAudio(`rec_${rec.id}`, blob, {
-          songId: rec.songId,
-          songTitle: rec.songTitle,
-          type: 'recording',
-          savedAt: Date.now(),
-        });
-
-        // Sauvegarder aussi les métadonnées
-        const meta = { ...rec, dataUrl: undefined, blob: undefined };
-        const existing = await db.getState<any[]>('recordings', []);
-        await db.setState('recordings', [...existing.filter((r: any) => r.id !== rec.id), meta]);
-
-        console.log(`[Save] ✅ Prise sauvegardée (tentative ${attempt}) — ${(blob.size/1024).toFixed(0)} KB`);
-        return; // Succès — sortir
-
-      } catch (e: any) {
-        lastError = e;
-        console.warn(`[Save] ⚠️ Tentative ${attempt}/${MAX_ATTEMPTS} échouée:`, e?.message);
-
-        if (attempt < MAX_ATTEMPTS) {
-          // Attendre de plus en plus longtemps entre les tentatives
-          const delay = attempt * 500; // 500ms, 1000ms, 1500ms, 2000ms
-          await new Promise(r => setTimeout(r, delay));
-
-          // Forcer re-init de la connexion IndexedDB
-          try { await studioOfflineDB.init(); } catch {}
-        }
-      }
+    // STRATÉGIE DOUBLE : Cache API (prioritaire) + IndexedDB (si disponible)
+    // Cache API n'est pas affecté par iOS AVAudioSession
+    const cacheOk = await this.saveRecordingToCache(rec);
+    if (cacheOk) {
+      console.log('[Save] ✅ Cache API OK');
     }
 
-    // Toutes les tentatives ont échoué — logger mais NE PAS planter
-    // Le dataUrl reste en mémoire dans rec.dataUrl — pas perdu
-    console.error('[Save] ❌ Échec après', MAX_ATTEMPTS, 'tentatives:', lastError?.message);
-    throw lastError; // Remonter pour que l'appelant sache
+    // Essayer IndexedDB aussi (peut échouer sur iOS pendant/après audio)
+    try {
+      const db = getOfflineDB();
+      await db.init();
+      await db.saveAudio(`rec_${rec.id}`, blob, {
+        songId: rec.songId, songTitle: rec.songTitle,
+        type: 'recording', savedAt: Date.now(),
+      });
+      const meta = { ...rec, dataUrl: undefined, blob: undefined };
+      const existing = await db.getState<any[]>('recordings', []);
+      await db.setState('recordings', [...existing.filter((r: any) => r.id !== rec.id), meta]);
+      console.log('[Save] ✅ IndexedDB OK');
+    } catch (e: any) {
+      console.warn('[Save] ⚠️ IndexedDB indisponible:', e?.message, '— Cache API utilisé');
+      if (!cacheOk) throw e; // Les deux ont échoué
+    }
   },
   saveRecordingLocally(rec: MobileRecording): void {
     this.saveRecordingLocallyAsync(rec).catch((e: any) => {
@@ -853,33 +924,52 @@ export const studioService = {
     const progress = (label: string, pct: number) => onProgress?.(label, pct);
     progress('Décodage voix principale', 5);
 
-    // Récupérer le blob : priorité dataUrl en mémoire, sinon IndexedDB
-    // On essaie toujours IndexedDB si dataUrl manquant ou trop petit
+    // Récupérer le blob — 4 sources par ordre de priorité
     let srcBlob: Blob | null = null;
     const db = getOfflineDB();
+
+    // Source 1 : dataUrl en mémoire (le plus fiable)
     if (mainVoice.dataUrl && mainVoice.dataUrl.length > 1000) {
       srcBlob = this.dataUrlToBlob(mainVoice.dataUrl);
+      console.log('[generateLayers] Source: dataUrl mémoire');
     }
+
+    // Source 2 : Cache API (non affecté par iOS audio session)
     if (!srcBlob || srcBlob.size < 1000) {
       try {
-        progress('Chargement audio depuis le stockage local...', 3);
-        const dbBlob = await db.getAudio(`rec_${mainVoice.id}`);
-        if (dbBlob && dbBlob.size > 1000) srcBlob = dbBlob;
-      } catch (e) {
-        console.warn('[generateLayers] IndexedDB error:', e);
-      }
+        progress('Chargement depuis Cache API...', 3);
+        const cacheBlob = await this.getRecordingFromCache(mainVoice.id);
+        if (cacheBlob && cacheBlob.size > 1000) {
+          srcBlob = cacheBlob;
+          console.log('[generateLayers] Source: Cache API');
+        }
+      } catch {}
     }
-    // Dernier recours : tenter la clé backup
+
+    // Source 3 : IndexedDB
+    if (!srcBlob || srcBlob.size < 1000) {
+      try {
+        progress('Chargement depuis IndexedDB...', 3);
+        const dbBlob = await db.getAudio(`rec_${mainVoice.id}`);
+        if (dbBlob && dbBlob.size > 1000) {
+          srcBlob = dbBlob;
+          console.log('[generateLayers] Source: IndexedDB');
+        }
+      } catch {}
+    }
+
+    // Source 4 : Backup IndexedDB
     if (!srcBlob || srcBlob.size < 1000) {
       try {
         progress('Tentative restauration depuis backup...', 4);
         const backupBlob = await db.getAudio(`backup_voice_${mainVoice.id}`);
         if (backupBlob && backupBlob.size > 1000) {
           srcBlob = backupBlob;
-          console.warn('[generateLayers] ⚠️ Restauration depuis backup automatique');
+          console.warn('[generateLayers] ⚠️ Restauration depuis backup');
         }
       } catch {}
     }
+
     if (!srcBlob || srcBlob.size < 1000) {
       throw new Error(`Fichier audio introuvable (id: ${mainVoice.id}). Veuillez ré-enregistrer la voix principale.`);
     }

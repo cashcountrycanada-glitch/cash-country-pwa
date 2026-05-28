@@ -539,20 +539,40 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           if (!queue.length) return;
           const saved: any[] = [];
           for (const item of queue) {
-            for (let attempt = 0; attempt < 3; attempt++) {
+            let ok = false;
+
+            // Priorité 1 : Upload GitHub (cloud — définitif)
+            try {
+              const githubUrl = await studioService.uploadRecordingToGitHub(item.rec);
+              if (githubUrl) {
+                saved.push(item);
+                optsRef.current.onLog?.(`☁️ ✅ Prise uploadée sur GitHub`);
+                try { localStorage.removeItem(`emergency_${item.rec.id}`); } catch {}
+                ok = true;
+              }
+            } catch {}
+
+            // Priorité 2 : Cache API (local — toujours tenter)
+            try {
+              const cacheOk = await studioService.saveRecordingToCache(item.rec);
+              if (cacheOk) {
+                optsRef.current.onLog?.('💾 ✅ Prise sécurisée dans Cache API');
+                if (!ok) { saved.push(item); ok = true; }
+              }
+            } catch {}
+
+            // Priorité 3 : IndexedDB (si disponible)
+            if (!ok) {
               try {
                 await studioOfflineDB.init();
                 await studioService.saveRecordingLocallyAsync(item.rec);
-                const ok = await studioOfflineDB.hasAudio(`rec_${item.rec.id}`);
-                if (ok) {
+                const dbOk = await studioOfflineDB.hasAudio(`rec_${item.rec.id}`);
+                if (dbOk) {
                   saved.push(item);
                   optsRef.current.onLog?.('💾 ✅ Prise sécurisée dans IndexedDB');
                   try { localStorage.removeItem(`emergency_${item.rec.id}`); } catch {}
-                  break;
                 }
-              } catch {
-                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-              }
+              } catch {}
             }
           }
           (window as any).__pendingSaves = queue.filter((q: any) => !saved.includes(q));

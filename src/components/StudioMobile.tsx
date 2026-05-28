@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.98';
+const BUILD_VERSION = 'v7.6.100';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -404,6 +404,16 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
           // Essayer d'abord dataUrl en mémoire
           if (track.dataUrl && track.dataUrl.length > 1000) return track;
           // Sinon charger depuis IndexedDB (clé principale)
+          // Source 1 : Cache API (prioritaire — non affecté par iOS audio)
+          try {
+            const cacheBlob = await studioService.getRecordingFromCache(track.id);
+            if (cacheBlob && cacheBlob.size > 1000) {
+              const dataUrl = await studioService.blobToDataUrl(cacheBlob);
+              addLog(`💾 Slot ${track.takeSlot || track.trackIndex} rechargé depuis Cache API (${(cacheBlob.size/1024).toFixed(0)} KB)`);
+              return { ...track, dataUrl };
+            }
+          } catch {}
+          // Source 2 : IndexedDB
           try {
             const blob = await studioOfflineDB.getAudio(`rec_${track.id}`);
             if (blob && blob.size > 1000) {
@@ -412,7 +422,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
               return { ...track, dataUrl };
             }
           } catch {}
-          // Dernier recours : clé backup
+          // Source 3 : Backup IndexedDB
           try {
             const backup = await studioOfflineDB.getAudio(`backup_voice_${track.id}`);
             if (backup && backup.size > 1000) {
