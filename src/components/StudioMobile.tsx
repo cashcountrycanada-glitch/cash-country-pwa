@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.103';
+const BUILD_VERSION = 'v7.6.106';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -365,7 +365,15 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   }, []);
 
   useEffect(() => {
-    studioService.getLocalRecordingsAsync().then(setRecordings).catch(() => setRecordings(studioService.getLocalRecordings()));
+    // Récupérer les prises OPFS orphelines (fichier OPFS présent mais métadonnées IDB perdues)
+    // Cela arrive si l'app a crashé ou iOS a vidé IDB pendant AVAudioSession
+    studioOfflineDB.recoverOrphanOPFSRecordings().then(recovered => {
+      if (recovered.length > 0) {
+        addLog(`🔄 ${recovered.length} prise(s) OPFS récupérée(s) après redémarrage`);
+      }
+    }).catch(() => {}).finally(() => {
+      studioService.getLocalRecordingsAsync().then(setRecordings).catch(() => setRecordings(studioService.getLocalRecordings()));
+    });
   }, []);
   
   // Vider la file de sauvegardes différées quand l'écran change

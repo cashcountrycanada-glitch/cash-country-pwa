@@ -527,36 +527,37 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         optsRef.current.onLog?.(`✅ Prise en mémoire (${(dataUrl.length/1024).toFixed(0)} KB) | slot=${optsRef.current.takeSlot ?? 'A'}`);
         onSaved(rec, updatedProject); // UI mise à jour tout de suite
 
-        // 2. Sauvegarde OPFS-first : écrire le blob directement via OPFS sans passer par IndexedDB
-        //    OPFS n'est pas affecté par le bug AVAudioSession / IndexedDB sur iOS 17+
+        // 2. Sauvegarde via studioOfflineDB.saveAudio() — route vers OPFS Worker (createSyncAccessHandle)
+        //    IMPORTANT : NE PAS utiliser createWritable() directement ici.
+        //    Safari iOS ne supporte PAS FileSystemFileHandle.createWritable() sur le main thread.
+        //    Seul le Worker OPFS (createSyncAccessHandle) fonctionne sur iOS.
+        //    studioOfflineDB.saveAudio() route automatiquement vers ce Worker.
         const saveBlob = finalBlob; // capturer pour la closure async
         const saveRec  = rec;
 
         const saveViaOPFS = async (): Promise<boolean> => {
           try {
-            if (!navigator.storage || !navigator.storage.getDirectory) return false;
-            const root = await navigator.storage.getDirectory();
-            const opfsExt = saveBlob.type.includes('mp4') ? 'mp4' : saveBlob.type.includes('wav') ? 'wav' : 'webm';
-            const opfsFilename = `rec_${saveRec.id}.${opfsExt}`;
-            const fh = await root.getFileHandle(opfsFilename, { create: true });
-            const writable = await (fh as any).createWritable();
-            await writable.write(saveBlob);
-            await writable.close();
-            optsRef.current.onLog?.(`💾 ✅ Prise sécurisée OPFS → ${opfsFilename} (${(saveBlob.size/1024).toFixed(0)} Ko)`);
-            // Enregistrer aussi les métadonnées légères dans IndexedDB (sans ArrayBuffer)
-            // Si IDB échoue ici, ce n'est pas grave — le fichier OPFS est déjà sauvegardé
+            await studioOfflineDB.init();
+            await studioOfflineDB.saveAudio(`rec_${saveRec.id}`, saveBlob, {
+              songId: saveRec.songId,
+              songTitle: saveRec.songTitle,
+              type: 'recording',
+              savedAt: Date.now(),
+            });
+            // Sauvegarder les métadonnées (sans le blob) dans l'état IDB
             try {
-              await studioOfflineDB.init();
               const metas = await studioOfflineDB.getState<any[]>('recordings', []);
               const metaEntry = { ...saveRec, dataUrl: undefined };
               await studioOfflineDB.setState('recordings', [...metas.filter((r: any) => r.id !== saveRec.id), metaEntry]);
               try { localStorage.removeItem(`emergency_${saveRec.id}`); } catch {}
             } catch (idbMetaErr) {
-              optsRef.current.onLog?.('💾 OPFS OK — métadonnées IDB échouées (non bloquant)');
+              optsRef.current.onLog?.('💾 Audio OK — métadonnées IDB échouées (non bloquant)');
             }
+            const backend = await studioOfflineDB.checkOPFS() ? 'OPFS' : 'IDB';
+            optsRef.current.onLog?.(`💾 ✅ Prise sécurisée ${backend} → rec_${saveRec.id} (${(saveBlob.size/1024).toFixed(0)} Ko)`);
             return true;
           } catch (opfsErr: any) {
-            optsRef.current.onLog?.(`⚠️ OPFS échoué: ${opfsErr?.message} — fallback IDB`);
+            optsRef.current.onLog?.(`⚠️ saveAudio échoué: ${opfsErr?.message} — fallback IDB`);
             return false;
           }
         };
@@ -584,17 +585,54 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         optsRef.current.onLog?.('💾 Sauvegarde différée — OPFS prioritaire...');
 
         // Fonction globale de traitement de la file
+        // IMPORTANT : chaque item utilise ses propres rec/blob (pas la closure externe)
         const processPendingQueue = async () => {
           const queue = (window as any).__pendingSaves as any[] || [];
           if (!queue.length) return;
           const saved: any[] = [];
           for (const item of queue) {
-            // Tenter OPFS d'abord (stable sur iOS même pendant AVAudioSession)
-            const opfsOk = await saveViaOPFS().catch(() => false);
+            const itemRec  = item.rec  as typeof saveRec;
+            const itemBlob = item.blob as typeof saveBlob;
+
+            const saveItemViaOPFS = async (): Promise<boolean> => {
+              try {
+                await studioOfflineDB.init();
+                await studioOfflineDB.saveAudio(`rec_${itemRec.id}`, itemBlob, {
+                  songId: itemRec.songId, songTitle: itemRec.songTitle,
+                  type: 'recording', savedAt: Date.now(),
+                });
+                try {
+                  const metas = await studioOfflineDB.getState<any[]>('recordings', []);
+                  const metaEntry = { ...itemRec, dataUrl: undefined };
+                  await studioOfflineDB.setState('recordings', [...metas.filter((r: any) => r.id !== itemRec.id), metaEntry]);
+                  try { localStorage.removeItem(`emergency_${itemRec.id}`); } catch {}
+                } catch {}
+                const backend = await studioOfflineDB.checkOPFS() ? 'OPFS' : 'IDB';
+                optsRef.current.onLog?.(`💾 ✅ Prise différée sauvegardée ${backend} → ${itemRec.id}`);
+                return true;
+              } catch { return false; }
+            };
+
+            const saveItemViaIDB = async (): Promise<boolean> => {
+              try {
+                await studioOfflineDB.init();
+                await studioService.saveRecordingLocallyAsync(itemRec);
+                const ok = await studioOfflineDB.hasAudio(`rec_${itemRec.id}`);
+                if (ok) {
+                  optsRef.current.onLog?.('💾 ✅ Prise différée sauvegardée IDB');
+                  try { localStorage.removeItem(`emergency_${itemRec.id}`); } catch {}
+                  return true;
+                }
+                return false;
+              } catch { return false; }
+            };
+
+            // Tenter OPFS d'abord (Worker createSyncAccessHandle — stable sur iOS)
+            const opfsOk = await saveItemViaOPFS().catch(() => false);
             if (opfsOk) { saved.push(item); continue; }
             // Fallback IDB avec 3 tentatives
             for (let attempt = 0; attempt < 3; attempt++) {
-              const idbOk = await saveViaIDB().catch(() => false);
+              const idbOk = await saveItemViaIDB().catch(() => false);
               if (idbOk) { saved.push(item); break; }
               await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
             }
