@@ -48,6 +48,7 @@ interface Props {
   onGoComp:        (takes: Take[]) => void;
   onProjectUpdate: (project: TrackProject) => void;
   instBlob:        Blob | null;
+  takeSlot:        'A' | 'B' | 'C';
 }
 
 // Définition des harmonies avec info musicale
@@ -64,7 +65,7 @@ export default function MixerScreen({
   uploading, uploadDone, playRef,
   onBack, onGoSongs, onAddTrack, onPlay, onMute, onSolo, onVolume, onPan,
   onDelete, onMix, onPlayMix, onMasterize, onUploadMix, onGoComp,
-  onProjectUpdate, instBlob,
+  onProjectUpdate, instBlob, takeSlot,
 }: Props) {
   const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
   const [backupDone, setBackupDone]           = useState(false);
@@ -85,13 +86,14 @@ export default function MixerScreen({
   );
 
   const tracks    = project?.tracks || [];
-  // mainVoice = la voix principale non-muted (priorité : non-muted, sinon première)
-  // On inclut aussi les tracks sans dataUrl encore chargé (rechargé depuis IndexedDB au besoin)
+  // mainVoice = la voix du slot actif en priorité, sinon premier non-muté
   const slotVoices = tracks.filter(t => t.trackIndex === 0 && !(t as any).isGenerated);
-  const mainVoice  = slotVoices.find(t => !t.muted && t.dataUrl)   // non-muté avec data
-    ?? slotVoices.find(t => t.dataUrl)                               // premier avec data
-    ?? slotVoices.find(t => !t.muted)                                // non-muté sans data encore
-    ?? slotVoices[0];                                                 // premier quoi qu'il arrive
+  const mainVoice  = slotVoices.find(t => t.takeSlot === takeSlot && t.dataUrl)  // slot actif avec data ← PRIORITÉ
+    ?? slotVoices.find(t => t.takeSlot === takeSlot)                               // slot actif sans data encore
+    ?? slotVoices.find(t => !t.muted && t.dataUrl)                                 // non-muté avec data
+    ?? slotVoices.find(t => t.dataUrl)                                             // premier avec data
+    ?? slotVoices.find(t => !t.muted)                                              // non-muté sans data
+    ?? slotVoices[0];                                                               // premier quoi qu'il arrive
   const totalDuration = mainVoice?.duration || Math.max(...tracks.map(t => t.duration), 0);
 
   // Charger la waveform du mix dès qu'il est prêt
