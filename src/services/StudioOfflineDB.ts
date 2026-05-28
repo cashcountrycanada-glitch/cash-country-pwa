@@ -1,12 +1,15 @@
 /**
- * StudioOfflineDB.ts — Stockage persistant Studio Mobile iPhone v2
+ * StudioOfflineDB.ts — Stockage persistant Studio Mobile iPhone v3
  *
- * CORRECTIFS v2 :
- * - getAudio() : type par défaut 'audio/mp4' au lieu de 'audio/webm' (iOS)
- * - deleteAllForSong() : nettoyer tous les audios d'une chanson
- * - getStorageEstimate() : quota IndexedDB iOS (~50MB par origine)
- * - init() robuste avec retry si la DB est bloquée (Safari iOS tue parfois la connexion)
- * - tx() protégée : relance getDB() si this.db est null (après kill Safari)
+ * CORRECTIFS v3 :
+ * - OPFS (Origin Private File System) comme stockage PRIMAIRE pour les blobs audio
+ *   → Stable sur iOS 17+, pas affecté par le bug IndexedDB AVAudioSession
+ *   → Quota basé sur le disque total (38+ Go sur iPhone)
+ *   → Écriture directe fichier .mp4/.wav sans passer par IDB transactions
+ * - IndexedDB conservé pour les MÉTADONNÉES légères uniquement (pas de ArrayBuffer)
+ * - Fallback automatique vers IndexedDB si OPFS indisponible
+ * - Récupération au démarrage des prises OPFS non encore indexées
+ * - init() robuste avec retry si la DB est bloquée
  */
 
 const DB_NAME    = 'CashCountryStudio';
@@ -22,17 +25,86 @@ function isIOS(): boolean {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
+// ── OPFS Helper ────────────────────────────────────────────────────────────────
+
+async function opfsAvailable(): Promise<boolean> {
+  try {
+    if (!navigator.storage || !navigator.storage.getDirectory) return false;
+    await navigator.storage.getDirectory();
+    return true;
+  } catch { return false; }
+}
+
+async function opfsWrite(filename: string, blob: Blob): Promise<void> {
+  const root = await navigator.storage.getDirectory();
+  const fh = await root.getFileHandle(filename, { create: true });
+  const writable = await (fh as any).createWritable();
+  await writable.write(blob);
+  await writable.close();
+}
+
+async function opfsRead(filename: string): Promise<Blob | null> {
+  try {
+    const root = await navigator.storage.getDirectory();
+    const fh = await root.getFileHandle(filename);
+    const file = await fh.getFile();
+    return file;
+  } catch { return null; }
+}
+
+async function opfsDelete(filename: string): Promise<void> {
+  try {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry(filename);
+  } catch {}
+}
+
+async function opfsExists(filename: string): Promise<boolean> {
+  try {
+    const root = await navigator.storage.getDirectory();
+    await root.getFileHandle(filename);
+    return true;
+  } catch { return false; }
+}
+
+async function opfsListFiles(): Promise<string[]> {
+  try {
+    const root = await navigator.storage.getDirectory();
+    const names: string[] = [];
+    for await (const [name] of (root as any).entries()) {
+      names.push(name);
+    }
+    return names;
+  } catch { return []; }
+}
+
+// ── Classe principale ──────────────────────────────────────────────────────────
+
 class StudioOfflineDatabase {
   private db: IDBDatabase | null = null;
   private initPromise: Promise<void> | null = null;
+  private _opfsAvailable: boolean | null = null;
+
   // Queue d'écriture séquentielle — évite les transactions readwrite simultanées sur iOS
   private writeQueue: Promise<any> = Promise.resolve();
 
   private enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.writeQueue.then(() => fn()).catch(e => { throw e; });
-    // La queue continue même si une opération échoue
     this.writeQueue = next.catch(() => {});
     return next;
+  }
+
+  // Vérifie OPFS une seule fois et met en cache le résultat
+  async checkOPFS(): Promise<boolean> {
+    if (this._opfsAvailable === null) {
+      this._opfsAvailable = await opfsAvailable();
+      if (this._opfsAvailable) {
+        console.log('[DB] ✅ OPFS disponible — stockage audio primaire');
+      } else {
+        console.warn('[DB] ⚠️ OPFS indisponible — fallback IndexedDB');
+      }
+    }
+    return this._opfsAvailable;
   }
 
   static async requestPersistence(): Promise<void> {
@@ -60,7 +132,6 @@ class StudioOfflineDatabase {
         }
         if (!db.objectStoreNames.contains(STORE_AUDIO)) {
           const audioStore = db.createObjectStore(STORE_AUDIO, { keyPath: 'key' });
-          // Index par songId pour faciliter la suppression par chanson
           audioStore.createIndex('songId', 'songId', { unique: false });
         }
         if (!db.objectStoreNames.contains(STORE_STATE)) {
@@ -70,7 +141,6 @@ class StudioOfflineDatabase {
 
       req.onsuccess = () => {
         this.db = req.result;
-        // Gérer la déconnexion de la DB (iOS peut tuer la connexion)
         this.db.onclose = () => { this.db = null; this.initPromise = null; };
         this.db.onerror = (e) => console.warn('[StudioDB] Erreur DB:', e);
         resolve();
@@ -82,7 +152,6 @@ class StudioOfflineDatabase {
       };
 
       req.onblocked = () => {
-        // Une autre connexion bloque l'upgrade — fermer les anciennes
         console.warn('[StudioDB] DB bloquée — attente...');
       };
     });
@@ -101,97 +170,79 @@ class StudioOfflineDatabase {
     return db.transaction([store], mode).objectStore(store);
   }
 
-  // getAudio avec retry complet de la transaction (iOS peut tuer la connexion mid-op)
-  async getAudio(key: string): Promise<Blob | null> {
-    const attempt = async (): Promise<Blob | null> => {
-      const store = await this.tx(STORE_AUDIO);
-      const rec   = await this.idbOp(store.get(key));
-      if (!rec) return null;
-      if (!rec.buffer || rec.buffer.byteLength === 0) {
-        console.error(`[DB] ❌ getAudio(${key}) buffer vide — entrée corrompue`);
-        return null;
-      }
-      // Retourner le type ORIGINAL stocké — fixBlobType dans useStudioAudio décide
-      const storedType = rec.type || 'audio/flac';
-      return new Blob([rec.buffer], { type: storedType });
-    };
+  // ── Audio — OPFS en primaire, IndexedDB en fallback ────────────────────────
 
-    try {
-      return await attempt();
-    } catch (e) {
-      // Retry après reset de la connexion DB
-      console.warn(`[DB] getAudio(${key}) échoué, retry...`, e);
-      this.db = null;
-      this.initPromise = null;
-      await new Promise(r => setTimeout(r, 200));
-      try {
-        return await attempt();
-      } catch (e2) {
-        console.error(`[DB] getAudio(${key}) échec définitif:`, e2);
-        return null;
-      }
-    }
-  }
-
-  private idbOp<T>(req: IDBRequest<T>): Promise<T> {
-    return new Promise((res, rej) => {
-      req.onsuccess = () => res(req.result);
-      req.onerror   = () => rej(req.error);
-    });
-  }
-
-  // ── Chansons ──────────────────────────────────────────────────────────────
-
-  async saveSongs(songs: any[]): Promise<void> {
-    // Éviter d'écraser si le même nombre de chansons est déjà en DB
-    // (évite 7-8 clear()+put() simultanés quand on cache plusieurs chansons)
-    try {
-      const existing = await this.idbOp((await this.tx(STORE_SONGS)).count());
-      if (existing === songs.length) return; // déjà à jour
-    } catch {}
-    const store = await this.tx(STORE_SONGS, 'readwrite');
-    await this.idbOp(store.clear());
-    // Écrire en séquence (pas en parallèle) pour éviter les conflits iOS
-    for (const s of songs) {
-      await this.idbOp(store.put(s));
-    }
-  }
-
-  async getAllSongs(): Promise<any[]> {
-    const store = await this.tx(STORE_SONGS);
-    return this.idbOp(store.getAll());
-  }
-
-  // ── Audio ─────────────────────────────────────────────────────────────────
-
+  /**
+   * saveAudio : tente OPFS d'abord, puis IndexedDB en fallback.
+   * Pour les prises (key commence par "rec_"), OPFS est fortement préféré.
+   */
   async saveAudio(key: string, blob: Blob, meta: object = {}): Promise<void> {
     return this.enqueueWrite(() => this._saveAudioImpl(key, blob, meta));
   }
 
   private async _saveAudioImpl(key: string, blob: Blob, meta: object = {}): Promise<void> {
-    // Vérifier l'espace disponible AVANT d'écrire pour un feedback immédiat
+    const useOPFS = await this.checkOPFS();
+
+    if (useOPFS) {
+      try {
+        // Nom de fichier OPFS : "rec_REC-1234567890.mp4"
+        const ext = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('wav') ? 'wav' : 'webm';
+        const filename = `${key}.${ext}`;
+        await opfsWrite(filename, blob);
+        // Stocker les métadonnées légères dans IndexedDB (sans le buffer)
+        try {
+          await this.init();
+          const store = await this.tx(STORE_AUDIO, 'readwrite');
+          await this.idbOp(store.put({
+            key,
+            opfsFilename: filename,
+            size: blob.size,
+            type: blob.type || (isIOS() ? 'audio/mp4' : 'audio/webm'),
+            savedAt: Date.now(),
+            storageBackend: 'opfs',
+            ...meta,
+          }));
+        } catch (idbErr) {
+          // Métadonnées IDB échouées — pas grave, OPFS file est là
+          console.warn('[DB] saveAudio: métadonnées IDB échouées (OPFS OK):', idbErr);
+          // Sauvegarder les métadonnées en localStorage comme backup
+          try {
+            const lsMeta = JSON.parse(localStorage.getItem('__opfs_index') || '{}');
+            lsMeta[key] = { opfsFilename: filename, size: blob.size, type: blob.type, savedAt: Date.now(), ...meta };
+            localStorage.setItem('__opfs_index', JSON.stringify(lsMeta));
+          } catch {}
+        }
+        console.log(`[DB] ✅ OPFS saveAudio(${key}) → ${filename} (${(blob.size/1024).toFixed(0)} Ko)`);
+        return;
+      } catch (opfsErr) {
+        console.warn('[DB] OPFS write échoué, fallback IDB:', opfsErr);
+      }
+    }
+
+    // Fallback IndexedDB (comportement original)
+    await this._saveAudioIDB(key, blob, meta);
+  }
+
+  private async _saveAudioIDB(key: string, blob: Blob, meta: object = {}): Promise<void> {
+    // Vérifier l'espace disponible AVANT d'écrire
     try {
       const est = await this.getStorageEstimate();
       const needed = blob.size;
       const available = est.quota - est.used;
       if (available < needed + 2 * 1024 * 1024) {
-        // Moins de 2 Mo de marge → erreur claire avec détails
-        const usedMB  = (est.used  / (1024 * 1024)).toFixed(1);
-        const quotaMB = (est.quota / (1024 * 1024)).toFixed(1);
-        const needMB  = (needed    / (1024 * 1024)).toFixed(1);
-        // Tenter de libérer de l'espace en supprimant les anciens enregistrements
         try { await this.freeSpaceForSize(needed); } catch {}
-        // Revérifier après nettoyage
         const est2 = await this.getStorageEstimate();
         if (est2.quota - est2.used < needed + 2 * 1024 * 1024) {
+          const usedMB  = (est.used  / (1024 * 1024)).toFixed(1);
+          const quotaMB = (est.quota / (1024 * 1024)).toFixed(1);
+          const needMB  = (needed    / (1024 * 1024)).toFixed(1);
           throw new DOMException(
-          `QUOTA_FULL: utilisé ${usedMB} Mo / ${quotaMB} Mo, besoin ${needMB} Mo — supprimez des chansons en cache`,
-          'QuotaExceededError'
-        );
-        } // end if est2
+            `QUOTA_FULL: utilisé ${usedMB} Mo / ${quotaMB} Mo, besoin ${needMB} Mo`,
+            'QuotaExceededError'
+          );
+        }
       }
     } catch (e: any) {
-      // Re-lancer uniquement les erreurs de quota, pas les erreurs storage.estimate()
       if (e.name === 'QuotaExceededError') throw e;
     }
 
@@ -205,16 +256,14 @@ class StudioOfflineDatabase {
         size:    blob.size,
         type:    blob.type || (isIOS() ? 'audio/mp4' : 'audio/webm'),
         savedAt: Date.now(),
+        storageBackend: 'indexeddb',
         ...meta,
       }));
     } catch (e: any) {
-      // IDBTransaction peut aussi lever QuotaExceededError directement
       if (e.name === 'QuotaExceededError' || (e.message && e.message.includes('quota'))) {
         const est = await this.getStorageEstimate().catch(() => ({ used: 0, quota: 50 * 1024 * 1024, pct: 0 }));
-        const usedMB  = (est.used  / (1024 * 1024)).toFixed(1);
-        const quotaMB = (est.quota / (1024 * 1024)).toFixed(1);
         throw new DOMException(
-          `QUOTA_FULL: IndexedDB plein (${usedMB} Mo / ${quotaMB} Mo) — supprimez des chansons en cache pour libérer de l'espace`,
+          `QUOTA_FULL: IndexedDB plein (${(est.used/1024/1024).toFixed(1)} Mo / ${(est.quota/1024/1024).toFixed(1)} Mo)`,
           'QuotaExceededError'
         );
       }
@@ -222,50 +271,265 @@ class StudioOfflineDatabase {
     }
   }
 
-  async hasAudio(key: string): Promise<boolean> {
-    const store = await this.tx(STORE_AUDIO);
-    const rec   = await this.idbOp(store.get(key));
-    // Vérifier que le buffer existe ET n'est pas vide (iOS peut garder la clé mais purger le contenu)
-    return !!rec && !!rec.buffer && rec.buffer.byteLength > 1000;
+  /**
+   * getAudio : cherche d'abord dans OPFS, puis IndexedDB.
+   */
+  async getAudio(key: string): Promise<Blob | null> {
+    const useOPFS = await this.checkOPFS();
+
+    if (useOPFS) {
+      // Chercher dans l'index IDB d'abord pour avoir le nom exact du fichier
+      try {
+        const store = await this.tx(STORE_AUDIO);
+        const rec = await this.idbOp(store.get(key));
+        if (rec?.opfsFilename) {
+          const blob = await opfsRead(rec.opfsFilename);
+          if (blob && blob.size > 0) {
+            // Re-typer le blob avec le bon type MIME
+            const mimeType = rec.type || (isIOS() ? 'audio/mp4' : 'audio/webm');
+            return new Blob([await blob.arrayBuffer()], { type: mimeType });
+          }
+        }
+      } catch {}
+
+      // Fallback : chercher dans l'index localStorage
+      try {
+        const lsMeta = JSON.parse(localStorage.getItem('__opfs_index') || '{}');
+        if (lsMeta[key]?.opfsFilename) {
+          const blob = await opfsRead(lsMeta[key].opfsFilename);
+          if (blob && blob.size > 0) {
+            return new Blob([await blob.arrayBuffer()], { type: lsMeta[key].type || 'audio/mp4' });
+          }
+        }
+      } catch {}
+
+      // Fallback : chercher le fichier OPFS par nom deviné
+      for (const ext of ['mp4', 'wav', 'webm']) {
+        const blob = await opfsRead(`${key}.${ext}`);
+        if (blob && blob.size > 0) {
+          return new Blob([await blob.arrayBuffer()], { type: `audio/${ext}` });
+        }
+      }
+    }
+
+    // Fallback IndexedDB (comportement original)
+    return this._getAudioIDB(key);
   }
 
+  private async _getAudioIDB(key: string): Promise<Blob | null> {
+    const attempt = async (): Promise<Blob | null> => {
+      const store = await this.tx(STORE_AUDIO);
+      const rec   = await this.idbOp(store.get(key));
+      if (!rec) return null;
+      if (!rec.buffer || rec.buffer.byteLength === 0) {
+        console.error(`[DB] ❌ getAudio IDB(${key}) buffer vide`);
+        return null;
+      }
+      const storedType = rec.type || 'audio/mp4';
+      return new Blob([rec.buffer], { type: storedType });
+    };
 
+    try {
+      return await attempt();
+    } catch (e) {
+      console.warn(`[DB] getAudio IDB(${key}) échoué, retry...`, e);
+      this.db = null;
+      this.initPromise = null;
+      await new Promise(r => setTimeout(r, 200));
+      try {
+        return await attempt();
+      } catch (e2) {
+        console.error(`[DB] getAudio IDB(${key}) échec définitif:`, e2);
+        return null;
+      }
+    }
+  }
 
-  async listAllAudioKeys(): Promise<string[]> {
-    // UNE seule transaction getAll() — lit clés ET vérifie buffer en une passe
-    // Ne pas faire de boucle de transactions séparées → crash iOS
-    const store = await this.tx(STORE_AUDIO);
-    const all = await this.idbOp(store.getAll()) as Array<{key?: string; buffer?: ArrayBuffer; type?: string}>;
-    const keys = await this.idbOp((await this.tx(STORE_AUDIO)).getAllKeys()) as string[];
-    return keys.map((k, i) => {
-      const buf = all[i]?.buffer;
-      const ok = buf && buf.byteLength > 1000;
-      return ok ? k : `${k} ⚠️VIDE`;
+  async hasAudio(key: string): Promise<boolean> {
+    const useOPFS = await this.checkOPFS();
+
+    if (useOPFS) {
+      // Vérifier via index IDB
+      try {
+        const store = await this.tx(STORE_AUDIO);
+        const rec = await this.idbOp(store.get(key));
+        if (rec?.opfsFilename) {
+          return await opfsExists(rec.opfsFilename);
+        }
+      } catch {}
+      // Vérifier directement dans OPFS
+      for (const ext of ['mp4', 'wav', 'webm']) {
+        if (await opfsExists(`${key}.${ext}`)) return true;
+      }
+    }
+
+    // Fallback IDB
+    try {
+      const store = await this.tx(STORE_AUDIO);
+      const rec   = await this.idbOp(store.get(key));
+      return !!rec && !!rec.buffer && rec.buffer.byteLength > 1000;
+    } catch { return false; }
+  }
+
+  async deleteAudio(key: string): Promise<void> {
+    const useOPFS = await this.checkOPFS();
+
+    if (useOPFS) {
+      // Supprimer le fichier OPFS
+      try {
+        const store = await this.tx(STORE_AUDIO);
+        const rec = await this.idbOp(store.get(key));
+        if (rec?.opfsFilename) await opfsDelete(rec.opfsFilename);
+      } catch {}
+      for (const ext of ['mp4', 'wav', 'webm']) {
+        await opfsDelete(`${key}.${ext}`);
+      }
+      // Nettoyer l'index localStorage
+      try {
+        const lsMeta = JSON.parse(localStorage.getItem('__opfs_index') || '{}');
+        delete lsMeta[key];
+        localStorage.setItem('__opfs_index', JSON.stringify(lsMeta));
+      } catch {}
+    }
+
+    // Supprimer aussi l'entrée IDB (métadonnées)
+    try {
+      const store = await this.tx(STORE_AUDIO, 'readwrite');
+      await this.idbOp(store.delete(key));
+    } catch {}
+  }
+
+  /**
+   * Récupération des prises OPFS orphelines au démarrage de l'app.
+   * Si des fichiers "rec_*.mp4/wav" existent dans OPFS mais ne sont pas
+   * dans IndexedDB (crash pendant la sauvegarde des métadonnées), on les retrouve.
+   */
+  async recoverOrphanOPFSRecordings(): Promise<string[]> {
+    const useOPFS = await this.checkOPFS();
+    if (!useOPFS) return [];
+
+    try {
+      const allFiles = await opfsListFiles();
+      const recFiles = allFiles.filter(f => f.startsWith('rec_') && /\.(mp4|wav|webm)$/.test(f));
+      if (recFiles.length === 0) return [];
+
+      const recovered: string[] = [];
+      for (const filename of recFiles) {
+        // Clé IDB = filename sans l'extension
+        const key = filename.replace(/\.(mp4|wav|webm)$/, '');
+        try {
+          const store = await this.tx(STORE_AUDIO);
+          const existing = await this.idbOp(store.get(key));
+          if (!existing) {
+            // Fichier OPFS sans entrée IDB — recréer les métadonnées
+            const blob = await opfsRead(filename);
+            if (blob && blob.size > 1000) {
+              const ext = filename.split('.').pop() || 'mp4';
+              const mimeType = `audio/${ext === 'wav' ? 'wav' : 'mp4'}`;
+              try {
+                const wStore = await this.tx(STORE_AUDIO, 'readwrite');
+                await this.idbOp(wStore.put({
+                  key,
+                  opfsFilename: filename,
+                  size: blob.size,
+                  type: mimeType,
+                  savedAt: Date.now(),
+                  storageBackend: 'opfs',
+                  recovered: true,
+                }));
+              } catch {}
+              recovered.push(key);
+              console.log(`[DB] 🔄 Récupéré OPFS orphelin: ${filename} (${(blob.size/1024).toFixed(0)} Ko)`);
+            }
+          }
+        } catch {}
+      }
+      return recovered;
+    } catch (e) {
+      console.warn('[DB] recoverOrphanOPFSRecordings erreur:', e);
+      return [];
+    }
+  }
+
+  private idbOp<T>(req: IDBRequest<T>): Promise<T> {
+    return new Promise((res, rej) => {
+      req.onsuccess = () => res(req.result);
+      req.onerror   = () => rej(req.error);
     });
   }
 
-  // Vérification RÉELLE du cache — vérifie que les blobs audio existent vraiment
-  // (pas juste le flag cachedSongIds qui peut être désynchronisé si iOS vide le cache)
+  // ── Chansons ──────────────────────────────────────────────────────────────
+
+  async saveSongs(songs: any[]): Promise<void> {
+    try {
+      const existing = await this.idbOp((await this.tx(STORE_SONGS)).count());
+      if (existing === songs.length) return;
+    } catch {}
+    const store = await this.tx(STORE_SONGS, 'readwrite');
+    await this.idbOp(store.clear());
+    for (const s of songs) {
+      await this.idbOp(store.put(s));
+    }
+  }
+
+  async getAllSongs(): Promise<any[]> {
+    const store = await this.tx(STORE_SONGS);
+    return this.idbOp(store.getAll());
+  }
+
+  async listAllAudioKeys(): Promise<string[]> {
+    const useOPFS = await this.checkOPFS();
+    const keys: string[] = [];
+
+    if (useOPFS) {
+      const files = await opfsListFiles();
+      for (const f of files) {
+        if (f.startsWith('rec_') || f.startsWith('inst_') || f.startsWith('vocal_')) {
+          const key = f.replace(/\.(mp4|wav|webm)$/, '');
+          const blob = await opfsRead(f);
+          keys.push(blob && blob.size > 1000 ? key : `${key} ⚠️VIDE`);
+        }
+      }
+    }
+
+    // Ajouter les clés IDB non déjà trouvées
+    try {
+      const store = await this.tx(STORE_AUDIO);
+      const idbKeys = await this.idbOp(store.getAllKeys()) as string[];
+      for (const k of idbKeys) {
+        if (!keys.some(existing => existing === k || existing.startsWith(k))) {
+          keys.push(k);
+        }
+      }
+    } catch {}
+
+    return keys;
+  }
+
   async verifySongCache(songId: string): Promise<{ inst: boolean; vocal: boolean; both: boolean }> {
     const [inst, vocal] = await Promise.all([
       this.hasAudio(`inst_${songId}`),
       this.hasAudio(`vocal_${songId}`),
     ]);
-    // Marquer uncached seulement si vraiment rien — pas si partiel (upload manuel d'un seul stem)
     if (!inst && !vocal) {
       await this.markSongUncached(songId);
     }
     return { inst, vocal, both: inst && vocal };
   }
 
-  async deleteAudio(key: string): Promise<void> {
-    const store = await this.tx(STORE_AUDIO, 'readwrite');
-    await this.idbOp(store.delete(key));
-  }
-
-  // Supprimer tous les fichiers audio d'une chanson (nettoyage espace)
   async deleteAllForSong(songId: string): Promise<void> {
-    // Une seule transaction pour lire + supprimer (évite conflit iOS)
+    const useOPFS = await this.checkOPFS();
+
+    if (useOPFS) {
+      const files = await opfsListFiles();
+      for (const f of files) {
+        if (f.includes(`_${songId}`) || f === `inst_${songId}.mp4` || f === `vocal_${songId}.mp4`) {
+          await opfsDelete(f);
+        }
+      }
+    }
+
+    // IDB
     await this.init(); const db = this.db!;
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([STORE_AUDIO], 'readwrite');
@@ -332,14 +596,21 @@ class StudioOfflineDatabase {
   // ── Taille et quota ───────────────────────────────────────────────────────
 
   async getTotalSize(): Promise<number> {
+    const useOPFS = await this.checkOPFS();
+    if (useOPFS) {
+      // Avec OPFS, navigator.storage.estimate() donne la vraie utilisation
+      if (navigator.storage && navigator.storage.estimate) {
+        try {
+          const est = await navigator.storage.estimate();
+          return est.usage || 0;
+        } catch {}
+      }
+    }
     const store = await this.tx(STORE_AUDIO);
     const all   = await this.idbOp(store.getAll());
     return all.reduce((sum: number, r: any) => sum + (r.size || 0), 0);
   }
 
-  // Estimation du quota disponible (navigator.storage API)
-  // iOS Safari : ~50MB par origine, peut varier
-  // Libérer de l'espace en supprimant les enregistrements les plus anciens
   async freeSpaceForSize(needed: number): Promise<void> {
     await this.init(); const db = this.db!;
     return new Promise((resolve, reject) => {
@@ -347,7 +618,6 @@ class StudioOfflineDatabase {
       const store = tx.objectStore('audio');
       const req = store.getAll();
       req.onsuccess = () => {
-        // Trier par date (les enregistrements d'abord, les plus anciens en premier)
         const items = req.result as any[];
         const recs = items.filter(i => i.key?.startsWith('rec_'))
           .sort((a, b) => (a.meta?.createdAt || 0) - (b.meta?.createdAt || 0));
@@ -369,30 +639,35 @@ class StudioOfflineDatabase {
   }
 
   async getStorageEstimate(): Promise<{ used: number; quota: number; pct: number }> {
-    const used = await this.getTotalSize();
     if ('storage' in navigator && 'estimate' in navigator.storage) {
       try {
         const est = await navigator.storage.estimate();
-        // iOS 17+ retourne le vrai quota appareil (souvent 500Mo–2Go)
-        // On prend le quota réel de navigator.storage si > 200 Mo, sinon fallback 500 Mo
+        const used  = est.usage  || 0;
         const rawQuota = est.quota || 0;
+        // iOS 17+ retourne le vrai quota appareil (souvent 500Mo–2Go)
         const quota = rawQuota > 200 * 1024 * 1024 ? rawQuota : 500 * 1024 * 1024;
         return { used, quota, pct: Math.round((used / quota) * 100) };
       } catch {}
     }
-    // Fallback : quota iOS conservateur 500 Mo
+    const used = await this.getTotalSize();
     const quota = 500 * 1024 * 1024;
     return { used, quota, pct: Math.round((used / quota) * 100) };
   }
 
-  // Vider tout le cache audio (garde les métadonnées)
   async clearAllAudio(): Promise<void> {
+    const useOPFS = await this.checkOPFS();
+    if (useOPFS) {
+      const files = await opfsListFiles();
+      for (const f of files) {
+        if (/\.(mp4|wav|webm)$/.test(f)) await opfsDelete(f);
+      }
+    }
     const store = await this.tx(STORE_AUDIO, 'readwrite');
     await this.idbOp(store.clear());
     await this.setState('cachedSongIds', []);
+    try { localStorage.removeItem('__opfs_index'); } catch {}
   }
 
-  // Garder seulement les N prises les plus récentes par chanson, supprimer le reste
   async clearOldRecordings(keepPerSong: number = 3): Promise<number> {
     await this.init(); const db = this.db!;
     return new Promise((resolve) => {
@@ -402,22 +677,23 @@ class StudioOfflineDatabase {
       req.onsuccess = () => {
         const items = req.result as any[];
         const recs = items.filter(i => i.key?.startsWith('rec_'));
-        // Grouper par songId
         const bySong: Record<string, any[]> = {};
         for (const r of recs) {
-          const songId = r.meta?.songId || 'unknown';
+          const songId = r.meta?.songId || r.songId || 'unknown';
           if (!bySong[songId]) bySong[songId] = [];
           bySong[songId].push(r);
         }
-        // Garder les N plus récentes, supprimer le reste
         const toDelete: string[] = [];
         for (const songId in bySong) {
-          const sorted = bySong[songId].sort((a, b) => (b.meta?.createdAt || 0) - (a.meta?.createdAt || 0));
+          const sorted = bySong[songId].sort((a, b) => (b.meta?.createdAt || b.savedAt || 0) - (a.meta?.createdAt || a.savedAt || 0));
           for (let i = keepPerSong; i < sorted.length; i++) toDelete.push(sorted[i].key);
         }
         let done = 0;
         if (toDelete.length === 0) { resolve(0); return; }
         for (const key of toDelete) {
+          // Supprimer aussi le fichier OPFS associé
+          opfsDelete(`${key}.mp4`).catch(() => {});
+          opfsDelete(`${key}.wav`).catch(() => {});
           const del = store.delete(key);
           del.onsuccess = () => { if (++done === toDelete.length) resolve(toDelete.length); };
           del.onerror  = () => { if (++done === toDelete.length) resolve(toDelete.length); };

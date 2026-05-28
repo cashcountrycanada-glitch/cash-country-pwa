@@ -527,11 +527,61 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
         optsRef.current.onLog?.(`✅ Prise en mémoire (${(dataUrl.length/1024).toFixed(0)} KB) | slot=${optsRef.current.takeSlot ?? 'A'}`);
         onSaved(rec, updatedProject); // UI mise à jour tout de suite
 
-        // 2. Ajouter à la file de sauvegarde différée (iOS bloque IndexedDB pendant audio)
+        // 2. Sauvegarde OPFS-first : écrire le blob directement via OPFS sans passer par IndexedDB
+        //    OPFS n'est pas affecté par le bug AVAudioSession / IndexedDB sur iOS 17+
+        const saveBlob = finalBlob; // capturer pour la closure async
+        const saveRec  = rec;
+
+        const saveViaOPFS = async (): Promise<boolean> => {
+          try {
+            if (!navigator.storage || !navigator.storage.getDirectory) return false;
+            const root = await navigator.storage.getDirectory();
+            const opfsExt = saveBlob.type.includes('mp4') ? 'mp4' : saveBlob.type.includes('wav') ? 'wav' : 'webm';
+            const opfsFilename = `rec_${saveRec.id}.${opfsExt}`;
+            const fh = await root.getFileHandle(opfsFilename, { create: true });
+            const writable = await (fh as any).createWritable();
+            await writable.write(saveBlob);
+            await writable.close();
+            optsRef.current.onLog?.(`💾 ✅ Prise sécurisée OPFS → ${opfsFilename} (${(saveBlob.size/1024).toFixed(0)} Ko)`);
+            // Enregistrer aussi les métadonnées légères dans IndexedDB (sans ArrayBuffer)
+            // Si IDB échoue ici, ce n'est pas grave — le fichier OPFS est déjà sauvegardé
+            try {
+              await studioOfflineDB.init();
+              const metas = await studioOfflineDB.getState<any[]>('recordings', []);
+              const metaEntry = { ...saveRec, dataUrl: undefined };
+              await studioOfflineDB.setState('recordings', [...metas.filter((r: any) => r.id !== saveRec.id), metaEntry]);
+              try { localStorage.removeItem(`emergency_${saveRec.id}`); } catch {}
+            } catch (idbMetaErr) {
+              optsRef.current.onLog?.('💾 OPFS OK — métadonnées IDB échouées (non bloquant)');
+            }
+            return true;
+          } catch (opfsErr: any) {
+            optsRef.current.onLog?.(`⚠️ OPFS échoué: ${opfsErr?.message} — fallback IDB`);
+            return false;
+          }
+        };
+
+        const saveViaIDB = async (): Promise<boolean> => {
+          try {
+            await studioOfflineDB.init();
+            await studioService.saveRecordingLocallyAsync(saveRec);
+            const ok = await studioOfflineDB.hasAudio(`rec_${saveRec.id}`);
+            if (ok) {
+              optsRef.current.onLog?.('💾 ✅ Prise sécurisée IndexedDB');
+              try { localStorage.removeItem(`emergency_${saveRec.id}`); } catch {}
+              return true;
+            }
+            return false;
+          } catch {
+            return false;
+          }
+        };
+
+        // Ajouter à la file de sauvegarde différée (tentatives OPFS + IDB)
         const pending = (window as any).__pendingSaves as any[] || [];
-        pending.push({ rec, timestamp: Date.now() });
+        pending.push({ rec: saveRec, blob: saveBlob, timestamp: Date.now() });
         (window as any).__pendingSaves = pending;
-        optsRef.current.onLog?.('💾 Sauvegarde différée — en attente libération iOS...');
+        optsRef.current.onLog?.('💾 Sauvegarde différée — OPFS prioritaire...');
 
         // Fonction globale de traitement de la file
         const processPendingQueue = async () => {
@@ -539,40 +589,14 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           if (!queue.length) return;
           const saved: any[] = [];
           for (const item of queue) {
-            let ok = false;
-
-            // Priorité 1 : Upload GitHub (cloud — définitif)
-            try {
-              const githubUrl = await studioService.uploadRecordingToGitHub(item.rec);
-              if (githubUrl) {
-                saved.push(item);
-                optsRef.current.onLog?.(`☁️ ✅ Prise uploadée sur GitHub`);
-                try { localStorage.removeItem(`emergency_${item.rec.id}`); } catch {}
-                ok = true;
-              }
-            } catch {}
-
-            // Priorité 2 : Cache API (local — toujours tenter)
-            try {
-              const cacheOk = await studioService.saveRecordingToCache(item.rec);
-              if (cacheOk) {
-                optsRef.current.onLog?.('💾 ✅ Prise sécurisée dans Cache API');
-                if (!ok) { saved.push(item); ok = true; }
-              }
-            } catch {}
-
-            // Priorité 3 : IndexedDB (si disponible)
-            if (!ok) {
-              try {
-                await studioOfflineDB.init();
-                await studioService.saveRecordingLocallyAsync(item.rec);
-                const dbOk = await studioOfflineDB.hasAudio(`rec_${item.rec.id}`);
-                if (dbOk) {
-                  saved.push(item);
-                  optsRef.current.onLog?.('💾 ✅ Prise sécurisée dans IndexedDB');
-                  try { localStorage.removeItem(`emergency_${item.rec.id}`); } catch {}
-                }
-              } catch {}
+            // Tenter OPFS d'abord (stable sur iOS même pendant AVAudioSession)
+            const opfsOk = await saveViaOPFS().catch(() => false);
+            if (opfsOk) { saved.push(item); continue; }
+            // Fallback IDB avec 3 tentatives
+            for (let attempt = 0; attempt < 3; attempt++) {
+              const idbOk = await saveViaIDB().catch(() => false);
+              if (idbOk) { saved.push(item); break; }
+              await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
             }
           }
           (window as any).__pendingSaves = queue.filter((q: any) => !saved.includes(q));
@@ -590,11 +614,11 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           }));
         } catch {}
 
-        // Tenter immédiatement (au cas où iOS libère vite)
+        // Tenter immédiatement
         processPendingQueue().catch(() => {});
 
         // Puis retenter à intervalles croissants sans bloquer l'UI
-        [3000, 8000, 15000, 30000, 60000].forEach(delay => {
+        [2000, 5000, 12000, 25000, 60000].forEach(delay => {
           setTimeout(() => processPendingQueue().catch(() => {}), delay);
         });
 
