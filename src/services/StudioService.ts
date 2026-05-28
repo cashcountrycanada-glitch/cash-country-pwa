@@ -555,22 +555,28 @@ export const studioService = {
   async getLocalRecordingsAsync(): Promise<MobileRecording[]> {
     try {
       const db = getOfflineDB();
-      const metas = await db.getState<any[]>('recordings', []);
-      // Si IDB a des métadonnées, les enrichir avec les blobs audio
-      if (metas && metas.length > 0) {
-        return Promise.all(metas.map(async (meta: any) => {
-          try { const blob = await db.getAudio(`rec_${meta.id}`); if (blob) return { ...meta, dataUrl: await studioService.blobToDataUrl(blob) }; } catch {}
-          return meta;
-        }));
+      // Charger depuis IDB ET localStorage, puis fusionner (localStorage prioritaire pour les nouvelles prises)
+      const [idbMetas, lsMetas] = await Promise.all([
+        db.getState<any[]>('recordings', []).catch(() => [] as any[]),
+        Promise.resolve(this.getLocalRecordings()),
+      ]);
+      // Fusionner : commencer par IDB, ajouter les prises localStorage absentes de IDB
+      const merged = [...idbMetas];
+      for (const lsRec of lsMetas) {
+        if (!merged.find((r: any) => r.id === lsRec.id)) {
+          merged.push(lsRec);
+        }
       }
-      // Fallback : localStorage (métadonnées) + OPFS (blobs) — survit aux crashes iOS
-      const lsMetas = this.getLocalRecordings();
-      return Promise.all(lsMetas.map(async (meta: any) => {
-        try { const blob = await db.getAudio(`rec_${meta.id}`); if (blob) return { ...meta, dataUrl: await studioService.blobToDataUrl(blob) }; } catch {}
+      if (merged.length === 0) return [];
+      // Enrichir chaque prise avec le blob audio depuis OPFS/IDB
+      return Promise.all(merged.map(async (meta: any) => {
+        try {
+          const blob = await db.getAudio(`rec_${meta.id}`);
+          if (blob) return { ...meta, dataUrl: await studioService.blobToDataUrl(blob) };
+        } catch {}
         return meta;
       }));
     } catch {
-      // Fallback pur localStorage sans blob (dégradé mais visible)
       return this.getLocalRecordings();
     }
   },
