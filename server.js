@@ -6,11 +6,17 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
 
-// CORS pour accès depuis l'iPhone
+// CORS + CSP pour accès depuis l'iPhone
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  // CSP : autoriser les Web Workers blob: pour OPFS sur Safari iOS PWA
+  // Sans ce header, Safari bloque createSyncAccessHandle() via Worker inline
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self' https: blob: data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; worker-src 'self' blob:; connect-src 'self' https: wss:; media-src 'self' blob: data: https:; img-src 'self' blob: data: https:; style-src 'self' 'unsafe-inline';"
+  );
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
