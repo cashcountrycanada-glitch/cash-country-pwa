@@ -19,7 +19,7 @@
  * ╚══════════════════════════════════════════════════════════════════╝
  */
 
-const CACHE = 'studio-v211';
+const CACHE = 'studio-v212';
 
 const CRITICAL = [
   '/index-pwa.html',

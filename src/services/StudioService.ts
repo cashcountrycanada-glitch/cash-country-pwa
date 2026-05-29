@@ -540,6 +540,35 @@ async function smartHarmonyBuffer(
   return safeStartRendering(eqCtx);
 }
 
+// Encodage WAV instantané depuis AudioBuffer — zéro MediaRecorder, zéro attente temps réel
+// Format : PCM 16-bit little-endian stéréo interleaved
+function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
+  const numCh   = Math.min(buffer.numberOfChannels, 2);
+  const sr      = buffer.sampleRate;
+  const numSamp = buffer.length;
+  const bytesPerSamp = 2;
+  const dataLen = numSamp * numCh * bytesPerSamp;
+  const wavBuf  = new ArrayBuffer(44 + dataLen);
+  const view    = new DataView(wavBuf);
+  const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+  writeStr(0, 'RIFF'); view.setUint32(4, 36 + dataLen, true);
+  writeStr(8, 'WAVE'); writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, numCh, true);
+  view.setUint32(24, sr, true); view.setUint32(28, sr * numCh * bytesPerSamp, true);
+  view.setUint16(32, numCh * bytesPerSamp, true); view.setUint16(34, 16, true);
+  writeStr(36, 'data'); view.setUint32(40, dataLen, true);
+  const chL = buffer.getChannelData(0);
+  const chR = numCh > 1 ? buffer.getChannelData(1) : chL;
+  let off = 44;
+  for (let i = 0; i < numSamp; i++) {
+    const sL = Math.max(-1, Math.min(1, chL[i]));
+    const sR = Math.max(-1, Math.min(1, chR[i]));
+    view.setInt16(off, sL < 0 ? sL * 0x8000 : sL * 0x7FFF, true); off += 2;
+    view.setInt16(off, sR < 0 ? sR * 0x8000 : sR * 0x7FFF, true); off += 2;
+  }
+  return new Blob([wavBuf], { type: 'audio/wav' });
+}
+
 
 export const studioService = {
   async saveRecordingLocallyAsync(rec: MobileRecording): Promise<void> {
@@ -930,7 +959,7 @@ export const studioService = {
     const rendered = await safeStartRendering(offline); return audioBufferToBlob(rendered);
   },
 
-  async generateLayersFromVoice(mainVoice: MobileRecording, project: TrackProject, onProgress?: (label: string, pct: number) => void, songMeta?: { realPartition?: any[]; key?: string }): Promise<MobileRecording[]> {
+  async generateLayersFromVoice
     const progress = (label: string, pct: number) => onProgress?.(label, pct);
     progress('Décodage voix principale', 5);
 
@@ -1039,20 +1068,9 @@ export const studioService = {
       const finalPan = finalCtx.createStereoPanner(); finalPan.pan.value = layer.isDouble ? 0 : layer.pan;
       finalSrc.connect(finalGain); finalGain.connect(finalPan); finalPan.connect(finalCtx.destination); finalSrc.start(0);
       const finalRendered = await safeStartRendering(finalCtx);
-      progress(`${layer.emoji} ${layer.trackLabel} — finalCtx OK, encodage WAV...`, pct + 4);
-      const blob = await (async (buffer: AudioBuffer): Promise<Blob> => {
-        const ctx2 = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const dest2 = ctx2.createMediaStreamDestination(); const src2 = ctx2.createBufferSource(); src2.buffer = buffer; src2.connect(dest2);
-        const recOpts: MediaRecorderOptions = {}; if (mimeType) recOpts.mimeType = mimeType;
-        const recorder2 = new MediaRecorder(dest2.stream, recOpts); const chunks2: Blob[] = [];
-        recorder2.ondataavailable = e => { if (e.data.size > 0) chunks2.push(e.data); };
-        return new Promise(resolve => {
-          recorder2.onstop = () => { ctx2.close(); resolve(new Blob(chunks2, { type: chunks2[0]?.type || 'audio/mp4' })); };
-          recorder2.start(); src2.start();
-          progress(`${layer.emoji} ${layer.trackLabel} — MediaRecorder en cours (${buffer.duration.toFixed(0)}s réel)...`, pct + 4);
-          setTimeout(() => { recorder2.stop(); try { src2.stop(); } catch {} }, (buffer.duration + 0.3) * 1000);
-        });
-      })(finalRendered);
+      progress(`${layer.emoji} ${layer.trackLabel} — finalCtx OK, encodage WAV instantané...`, pct + 4);
+      // Encodage WAV direct depuis Float32Array — instantané, pas de MediaRecorder temps réel
+      const blob = audioBufferToWavBlob(finalRendered);
       progress(`${layer.emoji} ${layer.trackLabel} — blob OK (${(blob.size/1024).toFixed(0)} Ko), dataUrl...`, pct + 5);
       const dataUrl = await this.blobToDataUrl(blob);
       const safeTitle = (mainVoice.songTitle || 'song').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
