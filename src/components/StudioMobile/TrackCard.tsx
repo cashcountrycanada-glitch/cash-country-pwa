@@ -63,11 +63,18 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
     if (!track.dataUrl) return;
     setApplyingFx(true); setApplyPct(0); setApplyDone(false);
     try {
+      // Toujours appliquer depuis l'original — évite le double-application
+      const sourceDataUrl = (track as any).originalDataUrl || track.dataUrl;
       const newDataUrl = await studioService.applyFxToTrack(
-        track.dataUrl, fx,
+        sourceDataUrl, fx,
         (pct) => setApplyPct(pct),
       );
-      const updated = { ...track, dataUrl: newDataUrl, fxPresetId: fx.id } as any;
+      const updated = {
+        ...track,
+        dataUrl: newDataUrl,
+        originalDataUrl: sourceDataUrl, // conserver l'original pour les prochaines applications
+        fxPresetId: fx.id,
+      } as any;
       studioService.saveRecordingLocally(updated);
       onTrackUpdate?.(updated);
       setApplyDone(true);

@@ -318,19 +318,43 @@ export default function MixerScreen({
     if (mainVoice) autoBackupToIndexedDB(mainVoice);
     setGeneratingIndex(-1); // -1 = toutes
     setGeneratePct(0);
+
+    // Référence mutable au projet courant pour les mises à jour progressives
+    let currentProject = { ...project };
+
     try {
       const generated = await studioService.generateLayersFromVoice(
         mainVoice, project,
-        (label, pct) => { setGenerateLabel(label); setGeneratePct(Math.round(pct)); },
+        (label, pct) => {
+          setGenerateLabel(label);
+          setGeneratePct(Math.round(pct));
+
+          // Détecter quand une harmonie est sauvegardée et mettre à jour l'UI immédiatement
+          // Le label "✅ X sauvegardée" signale qu'une nouvelle piste est disponible
+          if (label.startsWith('✅') && label.includes('sauvegardée')) {
+            // Recharger le projet depuis studioService pour récupérer la piste ajoutée
+            const fresh = studioService.getProjects().find(p => p.id === project.id);
+            if (fresh) {
+              currentProject = {
+                ...fresh,
+                tracks: fresh.tracks.map(t =>
+                  t.id === mainVoice.id ? { ...t, dataUrl: mainVoice.dataUrl } : t
+                ),
+              };
+              onProjectUpdate(currentProject);
+            }
+          }
+        },
         { realPartition: (selected as any).realPartition, key: (selected as any).key },
       );
+
+      // Mise à jour finale avec toutes les harmonies
       if (generated.length > 0) {
-        let up = { ...project };
+        let up = { ...currentProject };
         for (const rec of generated) {
           const u = studioService.addTrackToProject(project.id, rec);
           if (u) up = u;
         }
-        // Réinjecter la voix principale avec son dataUrl (addTrackToProject stocke sans dataUrl en localStorage)
         up = {
           ...up,
           tracks: up.tracks.map(t =>
@@ -862,12 +886,17 @@ export default function MixerScreen({
                 🎤 Pistes enregistrées
               </p>
             )}
-            {tracks.filter(t => !(t as any).isGenerated).map(track => (
-              <TrackCard key={track.trackIndex} track={track} playingId={playingId}
-                allTracks={tracks}
-                onPlay={onPlay} onMute={onMute} onSolo={onSolo} onVolume={onVolume} onPan={onPan} onDelete={onDelete}
-                onTrackUpdate={handleTrackUpdate}/>
-            ))}
+            {tracks.filter(t => !(t as any).isGenerated).map(track => {
+              // Le slot actif = voix principale, les autres = prises alternatives
+              const isActiveSlot = track.takeSlot === takeSlot || (track.trackIndex === 0 && track.takeSlot === undefined);
+              const displayTrack = isActiveSlot ? track : { ...track, trackLabel: `Prise ${track.takeSlot || 'alt'} — ${track.songTitle || ''}` };
+              return (
+                <TrackCard key={track.id} track={displayTrack} playingId={playingId}
+                  allTracks={tracks}
+                  onPlay={onPlay} onMute={onMute} onSolo={onSolo} onVolume={onVolume} onPan={onPan} onDelete={onDelete}
+                  onTrackUpdate={handleTrackUpdate}/>
+              );
+            })}
 
             {tracks.filter(t => (t as any).isGenerated).length > 0 && (
               <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest px-1 pt-2">

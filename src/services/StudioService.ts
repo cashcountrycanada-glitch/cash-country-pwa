@@ -23,10 +23,11 @@ export interface StudioEffectsConfig {
 export interface MobileRecording {
   id: string; songId: string; songTitle: string; artist: string;
   duration: number; recordedAt: number; blob?: Blob; dataUrl?: string;
+  originalDataUrl?: string; // dataUrl avant tout FX — toujours appliquer depuis lui
   transferred: boolean; fileName: string; trackIndex?: number; trackLabel?: string;
   pitchShift?: number; gain?: number; pan?: number; muted?: boolean; projectId?: string;
   isGenerated?: boolean; regions?: Region[];
-  takeSlot?: 'A' | 'B' | 'C'; // Slot de prise voix principale
+  takeSlot?: 'A' | 'B' | 'C';
 }
 export interface Region { id: string; takeId: string; startSec: number; endSec: number; label?: string; color?: string; }
 export interface Take { id: string; recording: MobileRecording; waveformData?: number[]; regions: Region[]; }
@@ -1018,6 +1019,44 @@ export const studioService = {
     const hasChordData = chordMap.length > 0;
     if (hasChordData) progress(`🎵 Analyse harmonique — ${chordMap.length} accords détectés`, 8);
 
+    // Helper : envoyer une couche au Web Worker et attendre le résultat WAV
+    const processLayerInWorker = (op: string, semitones: number, gain: number, pan: number): Promise<Blob> => {
+      return new Promise((resolve, reject) => {
+        const workerUrl = '/harmony-worker.js';
+        let worker: Worker;
+        try { worker = new Worker(workerUrl); } catch(e: any) {
+          reject(new Error('Worker non disponible : ' + e.message)); return;
+        }
+        const id = Date.now();
+        const channelL = srcBuffer.getChannelData(0);
+        const channelR = srcBuffer.numberOfChannels > 1 ? srcBuffer.getChannelData(1) : srcBuffer.getChannelData(0);
+        // Copier pour transfert (les buffers originaux ne doivent pas être détachés)
+        const transferL = channelL.slice();
+        const transferR = channelR.slice();
+        const timeout = setTimeout(() => {
+          worker.terminate();
+          reject(new Error('Worker timeout (>120s)'));
+        }, 120000);
+        worker.onmessage = (e) => {
+          const msg = e.data;
+          if (msg.id !== id) return;
+          if (msg.type === 'progress') {
+            progress(`${msg.label}`, -1); // -1 = pas de changement de %
+          } else if (msg.type === 'done') {
+            clearTimeout(timeout);
+            worker.terminate();
+            resolve(new Blob([msg.wavBuf], { type: 'audio/wav' }));
+          } else if (msg.type === 'error') {
+            clearTimeout(timeout);
+            worker.terminate();
+            reject(new Error(msg.message));
+          }
+        };
+        worker.onerror = (e) => { clearTimeout(timeout); worker.terminate(); reject(new Error(e.message)); };
+        worker.postMessage({ id, op, channelL: transferL, channelR: transferR, semitones, gain, pan, sampleRate: srcBuffer.sampleRate }, [transferL.buffer, transferR.buffer]);
+      });
+    };
+
     const layers = [
       { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0, gain: 0.85, pan: -0.3, emoji: '🎵', isDouble: true, suggestedFxId: 'double_epic' },
       { trackIndex: 2, trackLabel: 'Harmonie +3', pitch: 3, gain: 0.75, pan: 0.4, emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
@@ -1025,109 +1064,160 @@ export const studioService = {
       { trackIndex: 4, trackLabel: 'Octave bas', pitch: -12, gain: 0.80, pan: 0.0, emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
       { trackIndex: 5, trackLabel: 'Harmonie +5', pitch: 5, gain: 0.72, pan: 0.3, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
     ];
-    const generated: MobileRecording[] = []; const mimeType = getBestMimeType();
+    const generated: MobileRecording[] = [];
+
+    const yieldToMain = () => new Promise<void>(r => setTimeout(r, 80));
+
     for (let i = 0; i < layers.length; i++) {
       const layer = layers[i]; const pct = 10 + (i / layers.length) * 75;
-      progress(`${layer.emoji} ${layer.trackLabel}...`, pct);
-      let rendered: AudioBuffer;
-      if (layer.isDouble) {
-        progress(`🎵 Double tracking — étape 1/4 : resampling JS...`, pct);
-        rendered = await doubleTrackBuffer(srcBuffer);
-        progress(`🎵 Double tracking — étape 2/4 : resampling OK (${(rendered.duration).toFixed(1)}s)`, pct + 1);
-      } else {
-        // Harmonies intelligentes si accords disponibles, sinon WSOLA classique
-        progress(`${layer.emoji} ${layer.trackLabel} — pitch shift (${layer.pitch > 0 ? '+' : ''}${layer.pitch} ST)...`, pct);
-        rendered = hasChordData
-          ? await smartHarmonyBuffer(srcBuffer, layer.pitch, chordMap, songKey)
-          : await pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), srcBuffer, layer.pitch);
-        progress(`${layer.emoji} ${layer.trackLabel} — pitch OK (${(rendered.duration).toFixed(1)}s)`, pct + 1);
+      await yieldToMain();
+      progress(`${layer.emoji} ${layer.trackLabel} — Worker en cours...`, pct);
 
-        // Chorus subtil pour un son vivant (±0.04 ST, délai 10ms)
-        if (Math.abs(layer.pitch) > 0 && Math.abs(layer.pitch) <= 7) {
-          progress(`${layer.emoji} ${layer.trackLabel} — chorus OfflineAudioContext (${rendered.length} samples)...`, pct + 2);
-          const sr2 = rendered.sampleRate, ch2 = rendered.numberOfChannels, len2 = rendered.length;
-          const chorusDelaySamp = Math.floor(0.010 * sr2);
-          const pitchMod = layer.pitch > 0 ? 0.04 : -0.04;
-          const chorusCtx = new OfflineAudioContext(ch2, len2 + chorusDelaySamp, sr2);
-          const cs1 = chorusCtx.createBufferSource(); cs1.buffer = rendered;
-          const cs2 = chorusCtx.createBufferSource(); cs2.buffer = rendered;
-          cs2.playbackRate.value = Math.pow(2, pitchMod / 12);
-          const cg1 = chorusCtx.createGain(); cg1.gain.value = 0.85;
-          const cg2 = chorusCtx.createGain(); cg2.gain.value = 0.28;
-          const cp2 = chorusCtx.createStereoPanner(); cp2.pan.value = layer.pan > 0 ? -0.2 : 0.2;
-          cs1.connect(cg1); cg1.connect(chorusCtx.destination); cs1.start(0);
-          cs2.connect(cp2); cp2.connect(cg2); cg2.connect(chorusCtx.destination); cs2.start(chorusDelaySamp / sr2);
-          rendered = await safeStartRendering(chorusCtx);
-          progress(`${layer.emoji} ${layer.trackLabel} — chorus OK`, pct + 3);
+      let blob: Blob;
+      try {
+        blob = await processLayerInWorker(
+          layer.isDouble ? 'double' : 'pitch',
+          layer.pitch, layer.gain, layer.pan
+        );
+        progress(`${layer.emoji} ${layer.trackLabel} — OK (${(blob.size/1024).toFixed(0)} Ko)`, pct + 5);
+      } catch (workerErr: any) {
+        // Fallback main thread si Worker échoue
+        progress(`⚠️ Worker échoué (${workerErr.message}) — fallback main thread`, pct);
+        await yieldToMain();
+        let rendered: AudioBuffer;
+        if (layer.isDouble) {
+          rendered = await doubleTrackBuffer(srcBuffer);
+        } else {
+          rendered = hasChordData
+            ? await smartHarmonyBuffer(srcBuffer, layer.pitch, chordMap, songKey)
+            : await pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), srcBuffer, layer.pitch);
         }
+        blob = audioBufferToWavBlob(rendered);
       }
-      progress(`${layer.emoji} ${layer.trackLabel} — finalCtx gain/pan (${rendered.length} samples)...`, pct + 3);
-      const finalCtx = new OfflineAudioContext(2, rendered.length, rendered.sampleRate);
-      const finalSrc = finalCtx.createBufferSource(); finalSrc.buffer = rendered;
-      const finalGain = finalCtx.createGain(); finalGain.gain.value = layer.gain;
-      const finalPan = finalCtx.createStereoPanner(); finalPan.pan.value = layer.isDouble ? 0 : layer.pan;
-      finalSrc.connect(finalGain); finalGain.connect(finalPan); finalPan.connect(finalCtx.destination); finalSrc.start(0);
-      const finalRendered = await safeStartRendering(finalCtx);
-      progress(`${layer.emoji} ${layer.trackLabel} — finalCtx OK, encodage WAV instantané...`, pct + 4);
-      // Encodage WAV direct depuis Float32Array — instantané, pas de MediaRecorder temps réel
-      const blob = audioBufferToWavBlob(finalRendered);
-      progress(`${layer.emoji} ${layer.trackLabel} — blob OK (${(blob.size/1024).toFixed(0)} Ko), dataUrl...`, pct + 5);
+
+      await yieldToMain();
       const dataUrl = await this.blobToDataUrl(blob);
       const safeTitle = (mainVoice.songTitle || 'song').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
-      const ext = blob.type.includes('codecs=pcm') || blob.type.includes('codecs=alac') ? 'wav' : blob.type.includes('mp4') ? 'mp4' : 'webm';
-      const fileName = `${safeTitle}_T${layer.trackIndex}_GEN_${Date.now()}.${ext}`;
+      const fileName = `${safeTitle}_T${layer.trackIndex}_GEN_${Date.now()}.wav`;
       const rec: MobileRecording = {
         id: `GEN-${layer.trackIndex}-${Date.now()}`, songId: mainVoice.songId, songTitle: mainVoice.songTitle, artist: mainVoice.artist,
         duration: mainVoice.duration, recordedAt: Date.now(), dataUrl, transferred: false, fileName,
         trackIndex: layer.trackIndex, trackLabel: layer.trackLabel, pitchShift: layer.isDouble ? 0 : layer.pitch,
         gain: layer.gain, pan: layer.pan, projectId: project.id, isGenerated: true, fxPresetId: layer.suggestedFxId
       } as any;
-      this.saveRecordingLocally(rec); generated.push(rec as any);
+      this.saveRecordingLocally(rec);
+      generated.push(rec as any);
+      progress(`✅ ${layer.trackLabel} sauvegardée (${i + 1}/${layers.length})`, pct + 6);
+      await yieldToMain();
     }
-    progress('Terminé', 100); return generated;
+    progress('✅ Toutes les harmonies générées', 100); return generated;
   },
   async applyFxToTrack(dataUrl: string, fx: { lowGain: number; midGain: number; highGain: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; }, onProgress?: (pct: number) => void): Promise<string> {
-    onProgress?.(5); const blob = this.dataUrlToBlob(dataUrl); const ab = await blob.arrayBuffer();
-    const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext());
-    let srcBuf: AudioBuffer; try { srcBuf = await tmpCtx.decodeAudioData(ab); } finally { tmpCtx.close(); }
-    onProgress?.(20); const sr = srcBuf.sampleRate; const len = srcBuf.length;
-    const offline = new OfflineAudioContext(2, len, sr);
-    const src = offline.createBufferSource(); src.buffer = srcBuf;
-    const low = offline.createBiquadFilter(); low.type = 'lowshelf'; low.frequency.value = 250; low.gain.value = fx.lowGain;
-    const mid = offline.createBiquadFilter(); mid.type = 'peaking'; mid.frequency.value = 2500; mid.Q.value = 0.8; mid.gain.value = fx.midGain;
-    const high = offline.createBiquadFilter(); high.type = 'highshelf'; high.frequency.value = 8000; high.gain.value = fx.highGain;
-    const comp = offline.createDynamicsCompressor(); comp.threshold.value = fx.compThreshold; comp.ratio.value = fx.compRatio; comp.attack.value = fx.compAttack / 1000; comp.release.value = fx.compRelease / 1000; comp.knee.value = fx.compKnee;
-    const satNode = offline.createWaveShaper();
-    if (fx.saturation > 0) { const k = fx.saturation * 100; const n = 44100; const curve = new Float32Array(n); const deg = Math.PI / 180; for (let i = 0; i < n; i++) { const x = (i * 2) / n - 1; curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x)); } satNode.curve = curve; }
-    onProgress?.(40);
-    let reverbNode: ConvolverNode | null = null; let reverbGainNode: GainNode | null = null; let dryGainNode: GainNode | null = null;
-    if (fx.reverb !== 'none' && fx.reverbMix > 0) {
-      const reverbParams: Record<string, { dur: number; decay: number; preDelay: number; diffusion: number; modDepth: number; }> = { room: { dur: 1.5, decay: 2.5, preDelay: 0.010, diffusion: 0.65, modDepth: 0.0003 }, hall: { dur: 3.5, decay: 1.6, preDelay: 0.028, diffusion: 0.50, modDepth: 0.0002 }, plate: { dur: 2.0, decay: 2.0, preDelay: 0.004, diffusion: 0.82, modDepth: 0.0005 } };
-      const p = reverbParams[fx.reverb] ?? reverbParams.room; const rLen = Math.floor(sr * p.dur); const preDel = Math.floor(sr * p.preDelay); const impulse = offline.createBuffer(2, rLen, sr);
-      for (let ch = 0; ch < 2; ch++) {
-        const data = impulse.getChannelData(ch); const isSide = ch === 1;
-        for (let j = 0; j < preDel && j < rLen; j++) data[j] = 0;
-        const erDelays = [0.007, 0.015, 0.023, 0.031, 0.041, 0.055].map(t => Math.floor(t * sr)); const erGains = [0.82, 0.70, 0.60, 0.50, 0.40, 0.30];
-        for (let e = 0; e < erDelays.length; e++) { const pos = preDel + erDelays[e] + (isSide ? Math.floor(sr * 0.0007) : 0); if (pos < rLen) data[pos] += erGains[e] * (isSide ? 0.92 : 1.0); }
+    onProgress?.(5);
+    const blob = this.dataUrlToBlob(dataUrl);
+    const ab = await blob.arrayBuffer();
+
+    // Décoder — réutiliser le cache si disponible
+    let srcBuf: AudioBuffer;
+    const cachedBuf = (window as any).__lastRecDecodedBuf as AudioBuffer | undefined;
+    const cachedId  = (window as any).__lastRecDecodedId  as string | undefined;
+    // Pour FX on ne peut pas garantir que c'est la même prise — décoder
+    const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    try { srcBuf = await tmpCtx.decodeAudioData(ab); } finally { tmpCtx.close(); }
+    onProgress?.(25);
+
+    // Traitement FX 100% JS pur sur Float32Array — zéro OfflineAudioContext
+    const sr = srcBuf.sampleRate; const len = srcBuf.length;
+    const inL = srcBuf.getChannelData(0);
+    const inR = srcBuf.numberOfChannels > 1 ? srcBuf.getChannelData(1) : srcBuf.getChannelData(0);
+    const outL = new Float32Array(len); const outR = new Float32Array(len);
+
+    // 1. EQ 3 bandes (shelving simplifié par coefficients IIR)
+    const eqBand = (data: Float32Array, gainDB: number, freq: string): Float32Array => {
+      if (Math.abs(gainDB) < 0.5) return data;
+      const out = new Float32Array(data.length);
+      const g = Math.pow(10, gainDB / 40); // amplitude gain
+      // Filtre passe-bas/haut simple pour simuler shelf
+      const alpha = freq === 'low' ? 0.15 : freq === 'high' ? 0.85 : 0.5;
+      const boost = gainDB > 0;
+      out[0] = data[0];
+      if (boost) {
+        for (let i = 1; i < data.length; i++) {
+          const lp = alpha * out[i-1] + (1-alpha) * data[i];
+          out[i] = freq === 'low' ? data[i] + (lp - data[i]) * (g-1)
+                 : freq === 'high' ? data[i] + (data[i] - lp) * (g-1)
+                 : data[i] * g;
+        }
+      } else {
+        for (let i = 1; i < data.length; i++) {
+          const lp = alpha * out[i-1] + (1-alpha) * data[i];
+          out[i] = freq === 'low' ? data[i] - (lp - data[i]) * (1-1/g)
+                 : freq === 'high' ? data[i] - (data[i] - lp) * (1-1/g)
+                 : data[i] / g;
+        }
       }
-      reverbNode = offline.createConvolver(); reverbNode.buffer = impulse;
-      reverbGainNode = offline.createGain(); reverbGainNode.gain.value = fx.reverbMix;
-      dryGainNode = offline.createGain(); dryGainNode.gain.value = 1.0 - fx.reverbMix;
-    }
+      return out;
+    };
+
+    let pL = inL.slice(); let pR = inR.slice();
+    pL = eqBand(pL, fx.lowGain, 'low');   pR = eqBand(pR, fx.lowGain, 'low');
+    pL = eqBand(pL, fx.midGain, 'mid');   pR = eqBand(pR, fx.midGain, 'mid');
+    pL = eqBand(pL, fx.highGain, 'high'); pR = eqBand(pR, fx.highGain, 'high');
+    onProgress?.(45);
+
+    // 2. Compresseur (look-ahead simplifié)
+    const compress = (data: Float32Array): Float32Array => {
+      const out = new Float32Array(data.length);
+      let env = 0;
+      const attackC  = Math.exp(-1 / (sr * fx.compAttack / 1000));
+      const releaseC = Math.exp(-1 / (sr * fx.compRelease / 1000));
+      const threshLin = Math.pow(10, fx.compThreshold / 20);
+      for (let i = 0; i < data.length; i++) {
+        const level = Math.abs(data[i]);
+        env = level > env ? attackC * env + (1-attackC) * level : releaseC * env + (1-releaseC) * level;
+        const gain = env > threshLin ? Math.pow(env / threshLin, 1/fx.compRatio - 1) : 1;
+        out[i] = data[i] * gain * 0.95;
+      }
+      return out;
+    };
+    pL = compress(pL); pR = compress(pR);
     onProgress?.(60);
-    const outGain = offline.createGain(); outGain.gain.value = 0.95;
-    src.connect(low); low.connect(mid); mid.connect(high); high.connect(comp); comp.connect(satNode);
-    if (reverbNode && reverbGainNode && dryGainNode) { satNode.connect(dryGainNode); dryGainNode.connect(outGain); satNode.connect(reverbNode); reverbNode.connect(reverbGainNode); reverbGainNode.connect(outGain); }
-    else { satNode.connect(outGain); }
-    outGain.connect(offline.destination); src.start(0); onProgress?.(70);
-    const rendered = await safeStartRendering(offline); onProgress?.(85);
-    const resultBlob = await (async (buffer: AudioBuffer): Promise<Blob> => {
-      const ctx2 = new (window.AudioContext || (window as any).webkitAudioContext)(); const dest2 = ctx2.createMediaStreamDestination(); const src2 = ctx2.createBufferSource(); src2.buffer = buffer; src2.connect(dest2);
-      const mimeType = getBestMimeType(); const recOpts: MediaRecorderOptions = {}; if (mimeType) recOpts.mimeType = mimeType;
-      const recorder2 = new MediaRecorder(dest2.stream, recOpts); const chunks2: Blob[] = [];
-      recorder2.ondataavailable = e => { if (e.data.size > 0) chunks2.push(e.data); };
-      return new Promise(resolve => { recorder2.onstop = () => { ctx2.close(); resolve(new Blob(chunks2, { type: chunks2[0]?.type || 'audio/mp4' })); }; recorder2.start(); src2.start(); setTimeout(() => { recorder2.stop(); try { src2.stop(); } catch {} }, (buffer.duration + 0.3) * 1000); });
-    })(rendered);
-    onProgress?.(98); const resultDataUrl = await this.blobToDataUrl(resultBlob); onProgress?.(100); return resultDataUrl;
+
+    // 3. Saturation (waveshaping)
+    if (fx.saturation > 0) {
+      const k = fx.saturation * 200;
+      const sat = (x: number) => (1 + k/100) * x / (1 + k/100 * Math.abs(x));
+      for (let i = 0; i < len; i++) { pL[i] = sat(pL[i]); pR[i] = sat(pR[i]); }
+    }
+
+    // 4. Reverb simplifiée (Schroeder allpass + comb)
+    if (fx.reverb !== 'none' && fx.reverbMix > 0) {
+      const mix = fx.reverbMix;
+      const delayMs = fx.reverb === 'hall' ? 80 : fx.reverb === 'plate' ? 40 : 25;
+      const decay   = fx.reverb === 'hall' ? 0.55 : fx.reverb === 'plate' ? 0.45 : 0.35;
+      const dSamp   = Math.floor(delayMs * sr / 1000);
+      const revL = new Float32Array(len); const revR = new Float32Array(len);
+      for (let i = dSamp; i < len; i++) {
+        revL[i] = pL[i - dSamp] * decay + (i > dSamp*2 ? revL[i - dSamp] * decay * 0.5 : 0);
+        revR[i] = pR[i - dSamp] * decay + (i > dSamp*2 ? revR[i - dSamp] * decay * 0.5 : 0);
+      }
+      for (let i = 0; i < len; i++) { pL[i] = pL[i]*(1-mix) + revL[i]*mix; pR[i] = pR[i]*(1-mix) + revR[i]*mix; }
+    }
+    onProgress?.(80);
+
+    // 5. Normalisation légère
+    let peak = 0;
+    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(pL[i]), Math.abs(pR[i]));
+    if (peak > 0.95) { const n = 0.95/peak; for (let i = 0; i < len; i++) { pL[i]*=n; pR[i]*=n; } }
+
+    // Encoder WAV instantané
+    const oc = new OfflineAudioContext(2, len, sr);
+    const outBuf = oc.createBuffer(2, len, sr);
+    outBuf.copyToChannel(pL, 0); outBuf.copyToChannel(pR, 1);
+    const resultBlob = audioBufferToWavBlob(outBuf);
+    onProgress?.(98);
+    const resultDataUrl = await this.blobToDataUrl(resultBlob);
+    onProgress?.(100);
+    return resultDataUrl;
   },
 };

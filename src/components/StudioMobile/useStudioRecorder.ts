@@ -274,9 +274,9 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           const bsrc = ctx.createBufferSource();
           bsrc.buffer = instBuf;
           // iOS réduit le volume AudioContext ~50% quand le micro est actif (Voice Processing)
-          // On compense avec un gain de 2.0 pour matcher le volume du bouton ÉCOUTER
+          // On compense avec un gain de 1.4 (2.0 était trop fort — écrasait la voix)
           const instGain = ctx.createGain();
-          instGain.gain.value = 2.0;
+          instGain.gain.value = 1.4;
           bsrc.connect(instGain);
           instGain.connect(ctx.destination);
           (window as any).__instBufSrc    = bsrc;
