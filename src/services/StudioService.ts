@@ -201,72 +201,74 @@ async function safeStartRendering(ctx: OfflineAudioContext, timeoutMs = 30000): 
   });
 }
 
+
 async function doubleTrackBuffer(buffer: AudioBuffer): Promise<AudioBuffer> {
   const sr  = buffer.sampleRate;
   const len = buffer.length;
+  const ch  = buffer.numberOfChannels;
 
-  // iOS Safari freeze sur OfflineAudioContext > ~60s — traiter en chunks si nécessaire
-  const MAX_CHUNK_S = 55; // 55 secondes max par chunk
-  const maxChunkLen = Math.floor(MAX_CHUNK_S * sr);
+  // iOS Safari freeze sur OfflineAudioContext > ~60s à 44100Hz (~2.6M samples)
+  // Traitement par chunks de 50s maximum
+  const MAX_CHUNK_SAMPLES = Math.floor(50 * sr);
 
-  if (len > maxChunkLen) {
-    // Traitement par chunks puis concaténation
-    const chunks: AudioBuffer[] = [];
+  if (len > MAX_CHUNK_SAMPLES) {
+    // Traitement par chunks — chaque chunk est rendu indépendamment
+    const chunkResults: AudioBuffer[] = [];
     let offset = 0;
+    let chunkIdx = 0;
     while (offset < len) {
-      const chunkLen = Math.min(maxChunkLen, len - offset);
-      const chunkBuf = new (window.AudioContext || (window as any).webkitAudioContext)().createBuffer(
-        buffer.numberOfChannels, chunkLen, sr
-      );
-      for (let c = 0; c < buffer.numberOfChannels; c++) {
-        chunkBuf.copyToChannel(buffer.getChannelData(c).slice(offset, offset + chunkLen), c);
-      }
-      chunks.push(await doubleTrackBuffer(chunkBuf));
+      const chunkLen = Math.min(MAX_CHUNK_SAMPLES, len - offset);
+      // Extraire le chunk via OfflineAudioContext (pas de new AudioContext)
+      const extractCtx = new OfflineAudioContext(ch, chunkLen, sr);
+      const src = extractCtx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(extractCtx.destination);
+      src.start(0, offset / sr, chunkLen / sr);
+      const chunkBuf = await safeStartRendering(extractCtx, 15000);
+      // Traiter ce chunk
+      const rendered = await doubleTrackBuffer(chunkBuf);
+      chunkResults.push(rendered);
       offset += chunkLen;
+      chunkIdx++;
     }
-    // Concaténer tous les chunks
-    const totalLen = chunks.reduce((s, c) => s + c.length, 0);
-    const result = new (window.AudioContext || (window as any).webkitAudioContext)().createBuffer(2, totalLen, sr);
+    // Concaténer tous les chunks rendus
+    const totalLen = chunkResults.reduce((s, c) => s + c.length, 0);
+    const finalCtx = new OfflineAudioContext(2, totalLen, sr);
     let pos = 0;
-    for (const chunk of chunks) {
-      for (let c = 0; c < 2; c++) {
-        result.copyToChannel(chunk.getChannelData(c < chunk.numberOfChannels ? c : 0), c, pos);
-      }
+    for (const chunk of chunkResults) {
+      const cSrc = finalCtx.createBufferSource();
+      cSrc.buffer = chunk;
+      cSrc.connect(finalCtx.destination);
+      cSrc.start(pos / sr);
       pos += chunk.length;
     }
-    return result;
+    return safeStartRendering(finalCtx, 30000);
   }
 
-  // 3 couches : voix légèrement désaccordée L, R, et centre — son "studio" épais
+  // Chunk court (<= 50s) : traitement direct
   // Couche gauche : +0.08 semitones, délai 12ms
-  const bufL = await (async () => {
-    const ch = buffer.numberOfChannels;
-    const delayS = Math.floor(0.012 * sr);
-    const oc = new OfflineAudioContext(ch, len + delayS, sr);
-    const s  = oc.createBufferSource(); s.buffer = buffer;
-    s.playbackRate.value = Math.pow(2, 0.08 / 12);
-    s.connect(oc.destination); s.start(delayS / sr);
-    return safeStartRendering(oc);
-  })();
+  const delayL = Math.floor(0.012 * sr);
+  const ocL = new OfflineAudioContext(ch, len + delayL, sr);
+  const sL  = ocL.createBufferSource(); sL.buffer = buffer;
+  sL.playbackRate.value = Math.pow(2, 0.08 / 12);
+  sL.connect(ocL.destination); sL.start(delayL / sr);
+  const bufL = await safeStartRendering(ocL, 20000);
 
   // Couche droite : -0.07 semitones, délai 23ms
-  const bufR = await (async () => {
-    const ch = buffer.numberOfChannels;
-    const delayS = Math.floor(0.023 * sr);
-    const oc = new OfflineAudioContext(ch, len + delayS, sr);
-    const s  = oc.createBufferSource(); s.buffer = buffer;
-    s.playbackRate.value = Math.pow(2, -0.07 / 12);
-    s.connect(oc.destination); s.start(delayS / sr);
-    return safeStartRendering(oc);
-  })();
+  const delayR = Math.floor(0.023 * sr);
+  const ocR = new OfflineAudioContext(ch, len + delayR, sr);
+  const sR  = ocR.createBufferSource(); sR.buffer = buffer;
+  sR.playbackRate.value = Math.pow(2, -0.07 / 12);
+  sR.connect(ocR.destination); sR.start(delayR / sr);
+  const bufR = await safeStartRendering(ocR, 20000);
 
   // Mix final stéréo : original centre, L gauche, R droite
   const totalLen = len + Math.floor(0.025 * sr);
   const offline  = new OfflineAudioContext(2, totalLen, sr);
 
-  const s0  = offline.createBufferSource(); s0.buffer  = buffer;
-  const s1  = offline.createBufferSource(); s1.buffer  = bufL;
-  const s2  = offline.createBufferSource(); s2.buffer  = bufR;
+  const s0 = offline.createBufferSource(); s0.buffer = buffer;
+  const s1 = offline.createBufferSource(); s1.buffer = bufL;
+  const s2 = offline.createBufferSource(); s2.buffer = bufR;
 
   const p0 = offline.createStereoPanner(); p0.pan.value =  0.0;
   const p1 = offline.createStereoPanner(); p1.pan.value = -0.6;
@@ -280,7 +282,7 @@ async function doubleTrackBuffer(buffer: AudioBuffer): Promise<AudioBuffer> {
   s1.connect(p1); p1.connect(g1); g1.connect(offline.destination); s1.start(0);
   s2.connect(p2); p2.connect(g2); g2.connect(offline.destination); s2.start(0);
 
-  return safeStartRendering(offline);
+  return safeStartRendering(offline, 20000);
 }
 
 function getOfflineDB() {
