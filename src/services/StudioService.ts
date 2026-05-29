@@ -965,8 +965,6 @@ export const studioService = {
       throw new Error(`Fichier audio introuvable (id: ${mainVoice.id}). Veuillez ré-enregistrer la voix principale.`);
     }
 
-    const srcAb = await srcBlob.arrayBuffer();
-
     // Réutiliser le buffer déjà décodé si disponible (mis en cache après l'enregistrement)
     // Évite decodeAudioData sur un gros fichier — cause principale du freeze iOS
     let srcBuffer: AudioBuffer;
@@ -976,9 +974,14 @@ export const studioService = {
       progress('Buffer audio en cache ✅', 9);
       srcBuffer = cachedBuf;
     } else {
+      // Pas de cache — décoder maintenant (peut être lent sur iOS pour les gros fichiers)
       progress('Décodage audio...', 6);
+      const srcAb = await srcBlob.arrayBuffer();
       const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext());
       try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); } finally { tmpCtx.close(); }
+      // Mettre en cache pour les prochaines générations
+      (window as any).__lastRecDecodedBuf = srcBuffer;
+      (window as any).__lastRecDecodedId  = mainVoice.id;
     }
     // Construire la carte des accords depuis realPartition
     const songKey  = parseKey(songMeta?.key || '');
@@ -999,15 +1002,20 @@ export const studioService = {
       progress(`${layer.emoji} ${layer.trackLabel}...`, pct);
       let rendered: AudioBuffer;
       if (layer.isDouble) {
+        progress(`🎵 Double tracking — étape 1/4 : resampling JS...`, pct);
         rendered = await doubleTrackBuffer(srcBuffer);
+        progress(`🎵 Double tracking — étape 2/4 : resampling OK (${(rendered.duration).toFixed(1)}s)`, pct + 1);
       } else {
         // Harmonies intelligentes si accords disponibles, sinon WSOLA classique
+        progress(`${layer.emoji} ${layer.trackLabel} — pitch shift (${layer.pitch > 0 ? '+' : ''}${layer.pitch} ST)...`, pct);
         rendered = hasChordData
           ? await smartHarmonyBuffer(srcBuffer, layer.pitch, chordMap, songKey)
           : await pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), srcBuffer, layer.pitch);
+        progress(`${layer.emoji} ${layer.trackLabel} — pitch OK (${(rendered.duration).toFixed(1)}s)`, pct + 1);
 
         // Chorus subtil pour un son vivant (±0.04 ST, délai 10ms)
         if (Math.abs(layer.pitch) > 0 && Math.abs(layer.pitch) <= 7) {
+          progress(`${layer.emoji} ${layer.trackLabel} — chorus OfflineAudioContext (${rendered.length} samples)...`, pct + 2);
           const sr2 = rendered.sampleRate, ch2 = rendered.numberOfChannels, len2 = rendered.length;
           const chorusDelaySamp = Math.floor(0.010 * sr2);
           const pitchMod = layer.pitch > 0 ? 0.04 : -0.04;
@@ -1021,14 +1029,17 @@ export const studioService = {
           cs1.connect(cg1); cg1.connect(chorusCtx.destination); cs1.start(0);
           cs2.connect(cp2); cp2.connect(cg2); cg2.connect(chorusCtx.destination); cs2.start(chorusDelaySamp / sr2);
           rendered = await safeStartRendering(chorusCtx);
+          progress(`${layer.emoji} ${layer.trackLabel} — chorus OK`, pct + 3);
         }
       }
+      progress(`${layer.emoji} ${layer.trackLabel} — finalCtx gain/pan (${rendered.length} samples)...`, pct + 3);
       const finalCtx = new OfflineAudioContext(2, rendered.length, rendered.sampleRate);
       const finalSrc = finalCtx.createBufferSource(); finalSrc.buffer = rendered;
       const finalGain = finalCtx.createGain(); finalGain.gain.value = layer.gain;
       const finalPan = finalCtx.createStereoPanner(); finalPan.pan.value = layer.isDouble ? 0 : layer.pan;
       finalSrc.connect(finalGain); finalGain.connect(finalPan); finalPan.connect(finalCtx.destination); finalSrc.start(0);
       const finalRendered = await safeStartRendering(finalCtx);
+      progress(`${layer.emoji} ${layer.trackLabel} — finalCtx OK, encodage WAV...`, pct + 4);
       const blob = await (async (buffer: AudioBuffer): Promise<Blob> => {
         const ctx2 = new (window.AudioContext || (window as any).webkitAudioContext)();
         const dest2 = ctx2.createMediaStreamDestination(); const src2 = ctx2.createBufferSource(); src2.buffer = buffer; src2.connect(dest2);
@@ -1037,9 +1048,12 @@ export const studioService = {
         recorder2.ondataavailable = e => { if (e.data.size > 0) chunks2.push(e.data); };
         return new Promise(resolve => {
           recorder2.onstop = () => { ctx2.close(); resolve(new Blob(chunks2, { type: chunks2[0]?.type || 'audio/mp4' })); };
-          recorder2.start(); src2.start(); setTimeout(() => { recorder2.stop(); try { src2.stop(); } catch {} }, (buffer.duration + 0.3) * 1000);
+          recorder2.start(); src2.start();
+          progress(`${layer.emoji} ${layer.trackLabel} — MediaRecorder en cours (${buffer.duration.toFixed(0)}s réel)...`, pct + 4);
+          setTimeout(() => { recorder2.stop(); try { src2.stop(); } catch {} }, (buffer.duration + 0.3) * 1000);
         });
       })(finalRendered);
+      progress(`${layer.emoji} ${layer.trackLabel} — blob OK (${(blob.size/1024).toFixed(0)} Ko), dataUrl...`, pct + 5);
       const dataUrl = await this.blobToDataUrl(blob);
       const safeTitle = (mainVoice.songTitle || 'song').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
       const ext = blob.type.includes('codecs=pcm') || blob.type.includes('codecs=alac') ? 'wav' : blob.type.includes('mp4') ? 'mp4' : 'webm';

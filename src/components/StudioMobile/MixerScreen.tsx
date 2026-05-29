@@ -105,7 +105,20 @@ export default function MixerScreen({
     }
   }, [mixDone, project.mixedDataUrl]);
 
-  // Callback quand un FX est appliqué sur une piste → mettre à jour le projet
+  // État du cache audio — prêt quand window.__lastRecDecodedId === mainVoice.id
+  const [audioCacheReady, setAudioCacheReady] = React.useState(false);
+  useEffect(() => {
+    if (!mainVoice) return;
+    const check = () => {
+      const ready = !!(window as any).__lastRecDecodedBuf &&
+                    (window as any).__lastRecDecodedId === mainVoice.id;
+      setAudioCacheReady(ready);
+      if (!ready) setTimeout(check, 800);
+    };
+    check();
+  }, [mainVoice?.id]);
+
+
   const handleTrackUpdate = (updated: MobileRecording) => {
     const newTracks = project.tracks.map(t =>
       t.trackIndex === updated.trackIndex ? updated : t
@@ -695,7 +708,7 @@ export default function MixerScreen({
                           ) : hasTrack ? (
                             <button
                               onClick={() => generateOne(h)}
-                              disabled={generatingIndex !== null}
+                              disabled={generatingIndex !== null || !audioCacheReady}
                               className="w-9 h-9 rounded-xl flex items-center justify-center active:scale-90 disabled:opacity-30 transition-all"
                               style={{ background: h.color + '20' }}
                               title="Régénérer">
@@ -704,7 +717,7 @@ export default function MixerScreen({
                           ) : (
                             <button
                               onClick={() => generateOne(h)}
-                              disabled={generatingIndex !== null}
+                              disabled={generatingIndex !== null || !audioCacheReady}
                               className="w-9 h-9 rounded-xl flex items-center justify-center active:scale-90 disabled:opacity-30 transition-all"
                               style={{ background: h.color + '25' }}
                               title="Générer">
@@ -805,15 +818,25 @@ export default function MixerScreen({
                 </div>
               )}
 
+              {/* Indicateur cache audio */}
+              {mainVoice && !audioCacheReady && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800 text-zinc-400 text-[11px] mb-1">
+                  <Loader2 size={11} className="animate-spin text-purple-400"/>
+                  <span>Préparation audio en cours… (patienter avant de générer)</span>
+                </div>
+              )}
+
               {/* Bouton Tout générer */}
               <button
                 onClick={generateAll}
-                disabled={generatingIndex !== null}
+                disabled={generatingIndex !== null || !audioCacheReady}
                 className={`w-full py-3 rounded-xl font-black text-[12px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50 ${
                   hasAnyHarmony ? 'bg-zinc-800 text-zinc-300' : 'bg-purple-700 text-white'
                 }`}>
                 {generatingIndex === -1
                   ? <><Loader2 size={14} className="animate-spin"/> Génération...</>
+                  : !audioCacheReady
+                  ? <><Loader2 size={14} className="animate-spin"/> Préparation audio...</>
                   : hasAnyHarmony
                   ? <><RefreshCw size={14}/> Tout régénérer</>
                   : <><Sparkles size={14}/> Générer toutes les harmonies</>
