@@ -959,7 +959,7 @@ export const studioService = {
     const rendered = await safeStartRendering(offline); return audioBufferToBlob(rendered);
   },
 
-  async generateLayersFromVoice
+  async generateLayersFromVoice(mainVoice: MobileRecording, project: TrackProject, onProgress?: (label: string, pct: number) => void, songMeta?: { realPartition?: any[]; key?: string }): Promise<MobileRecording[]> {
     const progress = (label: string, pct: number) => onProgress?.(label, pct);
     progress('Décodage voix principale', 5);
 
