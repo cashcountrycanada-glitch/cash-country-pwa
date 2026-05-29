@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.114';
+const BUILD_VERSION = 'v7.6.115';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -417,6 +417,17 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
             if (blob && blob.size > 1000) {
               const dataUrl = await studioService.blobToDataUrl(blob);
               addLog(`💾 Slot ${track.takeSlot || track.trackIndex} rechargé depuis IndexedDB (${(blob.size/1024).toFixed(0)} KB)`);
+              // Décoder en arrière-plan pour le cache harmonies (évite freeze iOS sur decodeAudioData)
+              if (track.trackIndex === 0) {
+                blob.arrayBuffer().then(ab => {
+                  const tmp = new (window.AudioContext || (window as any).webkitAudioContext)();
+                  return tmp.decodeAudioData(ab).then(buf => {
+                    (window as any).__lastRecDecodedBuf = buf;
+                    (window as any).__lastRecDecodedId  = track.id;
+                    tmp.close();
+                  }).catch(() => { tmp.close(); });
+                }).catch(() => {});
+              }
               return { ...track, dataUrl };
             }
           } catch {}

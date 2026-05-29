@@ -966,9 +966,20 @@ export const studioService = {
     }
 
     const srcAb = await srcBlob.arrayBuffer();
-    const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext());
+
+    // Réutiliser le buffer déjà décodé si disponible (mis en cache après l'enregistrement)
+    // Évite decodeAudioData sur un gros fichier — cause principale du freeze iOS
     let srcBuffer: AudioBuffer;
-    try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); } finally { tmpCtx.close(); }
+    const cachedBuf = (window as any).__lastRecDecodedBuf as AudioBuffer | undefined;
+    const cachedId  = (window as any).__lastRecDecodedId  as string | undefined;
+    if (cachedBuf && cachedId === mainVoice.id) {
+      progress('Buffer audio en cache ✅', 9);
+      srcBuffer = cachedBuf;
+    } else {
+      progress('Décodage audio...', 6);
+      const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext());
+      try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); } finally { tmpCtx.close(); }
+    }
     // Construire la carte des accords depuis realPartition
     const songKey  = parseKey(songMeta?.key || '');
     const chordMap = songMeta?.realPartition ? buildChordMap(songMeta.realPartition, songKey) : [];

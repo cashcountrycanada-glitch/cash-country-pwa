@@ -522,6 +522,16 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           pitchShift: optsRef.current.currentPreset.pitch, gain: optsRef.current.currentPreset.gain,
           pan: optsRef.current.currentPreset.pan, projectId: project.id,
         };
+
+        // Décoder et mettre en cache l'AudioBuffer en arrière-plan (évite decodeAudioData au moment de générer les harmonies)
+        finalBlob.arrayBuffer().then(ab => {
+          const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          return tmpCtx.decodeAudioData(ab).then(buf => {
+            (window as any).__lastRecDecodedBuf = buf;
+            (window as any).__lastRecDecodedId  = id;
+            tmpCtx.close();
+          }).catch(() => { tmpCtx.close(); });
+        }).catch(() => {});
         // 1. Ajouter immédiatement au projet (dataUrl en mémoire) — prise disponible instantanément
         const updatedProject = studioService.addTrackToProject(project.id, rec);
         optsRef.current.onLog?.(`✅ Prise en mémoire (${(dataUrl.length/1024).toFixed(0)} KB) | slot=${optsRef.current.takeSlot ?? 'A'}`);
