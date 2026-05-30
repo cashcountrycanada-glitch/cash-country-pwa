@@ -296,20 +296,8 @@ function getOfflineDB() {
 }
 
 async function audioBufferToBlob(buffer: AudioBuffer): Promise<Blob> {
-  const mimeType = getBestMimeType();
-  const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-  const dest = ctx.createMediaStreamDestination();
-  const src = ctx.createBufferSource(); src.buffer = buffer; src.connect(dest);
-  const recOpts: MediaRecorderOptions = {};
-  if (mimeType) recOpts.mimeType = mimeType;
-  const recorder = new MediaRecorder(dest.stream, recOpts);
-  const chunks: Blob[] = [];
-  recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-  return new Promise(resolve => {
-    recorder.onstop = () => { ctx.close(); const type = chunks[0]?.type || mimeType || 'audio/mp4'; resolve(new Blob(chunks, { type })); };
-    recorder.start(); src.start();
-    setTimeout(() => { recorder.stop(); try { src.stop(); } catch {} }, (buffer.duration + 0.3) * 1000);
-  });
+  // Encodage WAV instantané — remplace MediaRecorder temps réel (évite l'attente de durée complète)
+  return audioBufferToWavBlob(buffer);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1085,18 +1073,11 @@ export const studioService = {
         );
         progress(`${layer.emoji} ${layer.trackLabel} — OK (${(blob.size/1024).toFixed(0)} Ko)`, pct + 5);
       } catch (workerErr: any) {
-        // Fallback main thread si Worker échoue
-        progress(`⚠️ Worker échoué (${workerErr.message}) — fallback main thread`, pct);
+        // Le Worker a échoué — pas de fallback main thread (crasherait iOS)
+        // Loguer et continuer avec les autres harmonies
+        progress(`⚠️ ${layer.trackLabel} échouée : ${workerErr.message}`, pct);
         await yieldToMain();
-        let rendered: AudioBuffer;
-        if (layer.isDouble) {
-          rendered = await doubleTrackBuffer(srcBuffer);
-        } else {
-          rendered = hasChordData
-            ? await smartHarmonyBuffer(srcBuffer, layer.pitch, chordMap, songKey)
-            : await pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), srcBuffer, layer.pitch);
-        }
-        blob = audioBufferToWavBlob(rendered);
+        continue;
       }
 
       await yieldToMain();
@@ -1116,199 +1097,55 @@ export const studioService = {
     }
     progress('✅ Toutes les harmonies générées', 100); return generated;
   },
-  async applyFxToTrack(dataUrl: string, fx: { lowGain: number; midGain: number; highGain: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; }, onProgress?: (pct: number) => void): Promise<string> {
+  async applyFxToTrack(dataUrl: string, fx: { lowGain: number; midGain: number; highGain: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; autotune?: number; autotuneSpeed?: string; }, onProgress?: (pct: number) => void): Promise<string> {
     onProgress?.(5);
-    // Décoder — réutiliser le cache si disponible (évite decodeAudioData sur gros fichiers iOS)
+    // Décoder — réutiliser le cache si disponible
     let srcBuf: AudioBuffer;
-    const cachedHarmonyBuf = (window as any).__lastRecDecodedBuf as AudioBuffer | undefined;
-    const lastFxUrl        = (window as any).__lastFxSourceUrl as string | undefined;
-    if (cachedHarmonyBuf && lastFxUrl === dataUrl) {
-      srcBuf = cachedHarmonyBuf;
-      onProgress?.(25);
+    const lastFxUrl = (window as any).__lastFxSourceUrl as string | undefined;
+    const cachedBuf = (window as any).__lastRecDecodedBuf as AudioBuffer | undefined;
+    if (cachedBuf && lastFxUrl === dataUrl) {
+      srcBuf = cachedBuf;
     } else {
       const blob = this.dataUrlToBlob(dataUrl);
-      // Vérifier la taille — un WAV 48kHz stéréo 3min = ~100MB en dataUrl base64
-      // Trop gros pour decodeAudioData sur iOS → limiter à 30MB de blob
-      if (blob.size > 30 * 1024 * 1024) {
-        throw new Error(`Fichier trop volumineux pour FX (${(blob.size/1024/1024).toFixed(0)} MB). Utilisez une prise plus courte.`);
-      }
+      if (blob.size > 40 * 1024 * 1024) throw new Error(`Fichier trop volumineux (${(blob.size/1024/1024).toFixed(0)} MB)`);
       const ab = await blob.arrayBuffer();
       const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       try { srcBuf = await tmpCtx.decodeAudioData(ab); } finally { tmpCtx.close(); }
       (window as any).__lastFxSourceUrl   = dataUrl;
       (window as any).__lastRecDecodedBuf = srcBuf;
-      onProgress?.(25);
     }
-
-    // Traitement FX 100% JS pur sur Float32Array — zéro OfflineAudioContext
-    const sr = srcBuf.sampleRate; const len = srcBuf.length;
-    const inL = srcBuf.getChannelData(0);
-    const inR = srcBuf.numberOfChannels > 1 ? srcBuf.getChannelData(1) : srcBuf.getChannelData(0);
-    const outL = new Float32Array(len); const outR = new Float32Array(len);
-
-    // 1. EQ 3 bandes — filtre IIR 1er ordre correct
-    const eqBand = (data: Float32Array, gainDB: number, freq: string): Float32Array => {
-      if (Math.abs(gainDB) < 0.5) return data;
-      const out = new Float32Array(data.length);
-      const g = Math.pow(10, gainDB / 20); // gain linéaire
-      // Fréquence de coupure normalisée
-      const fc = freq === 'low' ? 250 / (srcBuf.sampleRate / 2)
-               : freq === 'high' ? 8000 / (srcBuf.sampleRate / 2)
-               : 2500 / (srcBuf.sampleRate / 2);
-      const alpha = Math.exp(-2 * Math.PI * fc);
-      // Low shelf : boost les basses
-      // High shelf : boost les aigus
-      // Mid : gain direct sur la bande médiane
-      if (freq === 'mid') {
-        for (let i = 0; i < data.length; i++) out[i] = data[i] * g;
-        return out;
+    onProgress?.(20);
+    // Envoyer au Worker FX — tout le traitement hors main thread
+    return new Promise((resolve, reject) => {
+      let worker: Worker;
+      try { worker = new Worker('/fx-worker.js'); } catch(e: any) {
+        reject(new Error('FX Worker non disponible : ' + e.message)); return;
       }
-      let lp = 0;
-      for (let i = 0; i < data.length; i++) {
-        lp = alpha * lp + (1 - alpha) * data[i]; // passe-bas
-        const hp = data[i] - lp;                  // passe-haut = original - lp
-        out[i] = freq === 'low'
-          ? lp * g + hp           // boost les basses
-          : lp + hp * g;          // boost les aigus
-      }
-      return out;
-    };
-
-    let pL = inL.slice(); let pR = inR.slice();
-    pL = eqBand(pL, fx.lowGain, 'low');   pR = eqBand(pR, fx.lowGain, 'low');
-    pL = eqBand(pL, fx.midGain, 'mid');   pR = eqBand(pR, fx.midGain, 'mid');
-    pL = eqBand(pL, fx.highGain, 'high'); pR = eqBand(pR, fx.highGain, 'high');
-    onProgress?.(45);
-
-    // 2. Compresseur RMS avec protection ratio=1
-    const compress = (data: Float32Array): Float32Array => {
-      if (fx.compRatio <= 1.0) return data; // ratio 1:1 = bypass
-      const out = new Float32Array(data.length);
-      let env = 0;
-      const attackC  = Math.exp(-1 / Math.max(1, sr * fx.compAttack / 1000));
-      const releaseC = Math.exp(-1 / Math.max(1, sr * fx.compRelease / 1000));
-      const threshLin = Math.pow(10, fx.compThreshold / 20);
-      const slope = 1 - 1 / fx.compRatio;
-      for (let i = 0; i < data.length; i++) {
-        const level = Math.abs(data[i]);
-        env = level > env
-          ? 1 - (1 - env) * attackC
-          : env * releaseC;
-        const envClamp = Math.max(1e-6, env);
-        const gainDB = envClamp > threshLin
-          ? -slope * (20 * Math.log10(envClamp / threshLin))
-          : 0;
-        out[i] = data[i] * Math.pow(10, gainDB / 20) * 0.95;
-      }
-      return out;
-    };
-    pL = compress(pL); pR = compress(pR);
-    onProgress?.(60);
-
-    // 3. Auto-Tune léger (si activé)
-    if (fx.autotune && fx.autotune > 0) {
-      const strength = Math.min(1, fx.autotune);
-      const speedMs  = fx.autotuneSpeed === 'fast' ? 30 : fx.autotuneSpeed === 'medium' ? 80 : 150;
-      // Notes de la gamme chromatique (fréquences en Hz depuis A2=110Hz)
-      const noteFreqs: number[] = [];
-      for (let oct = 2; oct <= 6; oct++) {
-        for (let n = 0; n < 12; n++) noteFreqs.push(110 * Math.pow(2, (oct-2) + n/12));
-      }
-      const findNearestNote = (freq: number): number => {
-        let best = noteFreqs[0], bestDist = Infinity;
-        for (const f of noteFreqs) { const d = Math.abs(Math.log2(freq/f)); if (d < bestDist) { bestDist = d; best = f; } }
-        return best;
-      };
-      // Détection de pitch par autocorrélation (YIN simplifié) par fenêtres
-      const frameSize = Math.floor(sr * 0.025); // 25ms
-      const hopSize   = Math.floor(sr * speedMs / 1000 / 4);
-      const minPeriod = Math.floor(sr / 1200); // 1200 Hz max
-      const maxPeriod = Math.floor(sr / 60);   // 60 Hz min
-      const autotuneProcess = (data: Float32Array): Float32Array => {
-        const out = new Float32Array(data.length);
-        let pitchRatio = 1.0; // ratio courant (lissé)
-        for (let pos = 0; pos + frameSize < data.length; pos += hopSize) {
-          // Autocorrélation pour détecter le pitch
-          let bestCorr = 0, bestPeriod = 0;
-          for (let period = minPeriod; period <= maxPeriod; period += 2) {
-            let corr = 0;
-            for (let i = 0; i < Math.min(frameSize, data.length - pos - period); i++) {
-              corr += data[pos+i] * data[pos+i+period];
-            }
-            if (corr > bestCorr) { bestCorr = corr; bestPeriod = period; }
-          }
-          if (bestPeriod > 0 && bestCorr > 0.01) {
-            const detectedFreq = sr / bestPeriod;
-            if (detectedFreq > 60 && detectedFreq < 1200) {
-              const targetFreq  = findNearestNote(detectedFreq);
-              const targetRatio = targetFreq / detectedFreq;
-              // Lissage du ratio pour éviter les sauts brusques
-              const smoothK = Math.exp(-hopSize / (sr * speedMs / 1000));
-              pitchRatio = pitchRatio * smoothK + targetRatio * (1 - smoothK);
-              // Appliquer strength (0=off, 1=full)
-              const appliedRatio = 1 + (pitchRatio - 1) * strength;
-              // Resampling local sur ce hop
-              const hopEnd = Math.min(pos + hopSize, data.length);
-              for (let i = pos; i < hopEnd; i++) {
-                const srcPos = pos + (i - pos) * appliedRatio;
-                const idx = Math.min(Math.floor(srcPos), data.length - 2);
-                const frac = srcPos - Math.floor(srcPos);
-                out[i] += (data[idx] + (data[idx+1] - data[idx]) * frac) * 0.5;
-                out[i] += data[i] * 0.5; // blend avec original pour naturalité
-              }
-            } else {
-              for (let i = pos; i < Math.min(pos+hopSize, data.length); i++) out[i] = data[i];
-            }
-          } else {
-            for (let i = pos; i < Math.min(pos+hopSize, data.length); i++) out[i] = data[i];
-          }
+      const id = Date.now();
+      const chL = srcBuf.getChannelData(0).slice();
+      const chR = (srcBuf.numberOfChannels > 1 ? srcBuf.getChannelData(1) : srcBuf.getChannelData(0)).slice();
+      const timeout = setTimeout(() => { worker.terminate(); reject(new Error('FX timeout')); }, 180000);
+      worker.onmessage = async (e) => {
+        const msg = e.data;
+        if (msg.id !== id) return;
+        if (msg.type === 'progress') {
+          onProgress?.(msg.pct);
+        } else if (msg.type === 'done') {
+          clearTimeout(timeout); worker.terminate();
+          try {
+            const resultBlob = new Blob([msg.wavBuf], { type: 'audio/wav' });
+            const resultDataUrl = await this.blobToDataUrl(resultBlob);
+            (window as any).__lastFxSourceUrl = resultDataUrl;
+            onProgress?.(100);
+            resolve(resultDataUrl);
+          } catch(e2: any) { reject(e2); }
+        } else if (msg.type === 'error') {
+          clearTimeout(timeout); worker.terminate();
+          reject(new Error(msg.message));
         }
-        return out;
       };
-      pL = autotuneProcess(pL); pR = autotuneProcess(pR);
-      onProgress?.(72);
-    }
-
-    // 5. Saturation (waveshaping)
-    if (fx.saturation > 0) {
-      const k = fx.saturation * 200;
-      const sat = (x: number) => (1 + k/100) * x / (1 + k/100 * Math.abs(x));
-      for (let i = 0; i < len; i++) { pL[i] = sat(pL[i]); pR[i] = sat(pR[i]); }
-    }
-
-    // 6. Reverb simplifiée (Schroeder allpass + comb)
-    if (fx.reverb !== 'none' && fx.reverbMix > 0) {
-      const mix = fx.reverbMix;
-      const delayMs = fx.reverb === 'hall' ? 80 : fx.reverb === 'plate' ? 40 : 25;
-      const decay   = fx.reverb === 'hall' ? 0.55 : fx.reverb === 'plate' ? 0.45 : 0.35;
-      const dSamp   = Math.floor(delayMs * sr / 1000);
-      const revL = new Float32Array(len); const revR = new Float32Array(len);
-      for (let i = dSamp; i < len; i++) {
-        revL[i] = pL[i - dSamp] * decay + (i > dSamp*2 ? revL[i - dSamp] * decay * 0.5 : 0);
-        revR[i] = pR[i - dSamp] * decay + (i > dSamp*2 ? revR[i - dSamp] * decay * 0.5 : 0);
-      }
-      for (let i = 0; i < len; i++) { pL[i] = pL[i]*(1-mix) + revL[i]*mix; pR[i] = pR[i]*(1-mix) + revR[i]*mix; }
-    }
-    onProgress?.(80);
-
-    // 5. Normalisation légère
-    let peak = 0;
-    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(pL[i]), Math.abs(pR[i]));
-    if (peak > 0.95) { const n = 0.95/peak; for (let i = 0; i < len; i++) { pL[i]*=n; pR[i]*=n; } }
-
-    // Encoder WAV instantané — sans OfflineAudioContext (crasherait sur iOS pour 3 min)
-    // audioBufferToWavBlob attend un AudioBuffer — on crée un objet duck-typing minimal
-    const fakeBuffer = {
-      numberOfChannels: 2,
-      length: len,
-      sampleRate: sr,
-      duration: len / sr,
-      getChannelData: (ch: number) => ch === 0 ? pL : pR,
-    } as unknown as AudioBuffer;
-    const resultBlob = audioBufferToWavBlob(fakeBuffer);
-    onProgress?.(98);
-    const resultDataUrl = await this.blobToDataUrl(resultBlob);
-    onProgress?.(100);
-    return resultDataUrl;
+      worker.onerror = (e) => { clearTimeout(timeout); worker.terminate(); reject(new Error(e.message)); };
+      worker.postMessage({ id, channelL: chL, channelR: chR, sampleRate: srcBuf.sampleRate, fx }, [chL.buffer, chR.buffer]);
+    });
   },
 };

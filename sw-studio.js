@@ -19,7 +19,7 @@
  * ╚══════════════════════════════════════════════════════════════════╝
  */
 
-const CACHE = 'studio-v220';
+const CACHE = 'studio-v224';
 
 const CRITICAL = [
   '/index-pwa.html',
@@ -28,6 +28,8 @@ const CRITICAL = [
   '/sw-studio.js',
   '/recorder-worklet.js',
   '/env_config.js',
+  '/fx-worker.js',
+  '/harmony-worker.js',
 ];
 
 const USEFUL = [

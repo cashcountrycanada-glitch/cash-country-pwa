@@ -317,10 +317,8 @@ export default function MixerScreen({
     if (!mainVoice || generatingIndex !== null) return;
     // Backup automatique silencieux avant génération
     if (mainVoice) autoBackupToIndexedDB(mainVoice);
-    setGeneratingIndex(-1); // -1 = toutes
+    setGeneratingIndex(-1);
     setGeneratePct(0);
-
-    // Référence mutable au projet courant pour les mises à jour progressives
     let currentProject = { ...project };
 
     try {
@@ -329,33 +327,18 @@ export default function MixerScreen({
         (label, pct) => {
           setGenerateLabel(label);
           if (pct >= 0) setGeneratePct(Math.round(pct));
-
-          // Détecter quand une harmonie est sauvegardée et mettre à jour l'UI immédiatement
-          // Le label "✅ X sauvegardée" signale qu'une nouvelle piste est disponible
-          if (label.startsWith('✅') && label.includes('sauvegardée')) {
-            // Recharger le projet depuis studioService pour récupérer la piste ajoutée
-            const fresh = studioService.getProjects().find(p => p.id === project.id);
-            if (fresh) {
-              currentProject = {
-                ...fresh,
-                tracks: fresh.tracks.map(t =>
-                  t.id === mainVoice.id ? { ...t, dataUrl: mainVoice.dataUrl } : t
-                ),
-              };
-              onProjectUpdate(currentProject);
-            }
-          }
         },
         { realPartition: (selected as any).realPartition, key: (selected as any).key },
       );
 
-      // Mise à jour finale avec toutes les harmonies
+      // Ajouter toutes les harmonies au projet et mettre à jour l'UI
       if (generated.length > 0) {
         let up = { ...currentProject };
         for (const rec of generated) {
           const u = studioService.addTrackToProject(project.id, rec);
           if (u) up = u;
         }
+        // Réinjecter dataUrl de la voix principale (addTrackToProject ne stocke pas les dataUrls)
         up = {
           ...up,
           tracks: up.tracks.map(t =>
