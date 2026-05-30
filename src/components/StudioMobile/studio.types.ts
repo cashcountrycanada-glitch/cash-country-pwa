@@ -41,6 +41,9 @@ export interface FxPreset {
   // Reverb
   reverb:      ReverbType;
   reverbMix:   number;   // 0..1
+  // Auto-Tune léger (0 = off, 0.3 = transparent, 0.7 = audible, 1.0 = T-Pain)
+  autotune?:   number;
+  autotuneSpeed?: 'slow' | 'medium' | 'fast'; // vitesse de correction
 }
 
 // Banque de presets FX — inspirés des presets BandLab populaires
@@ -144,6 +147,28 @@ export const FX_PRESETS: FxPreset[] = [
     lowGain: 2.5, midGain: -0.5, highGain: -1.0,
     compThreshold: -22, compRatio: 3, compAttack: 15, compRelease: 250, compKnee: 15,
     saturation: 0.06, reverb: 'plate', reverbMix: 0.20,
+  },
+  {
+    id: 'autotune_transparent',
+    label: 'Auto-Tune Doux',
+    emoji: '🎯',
+    description: 'Correction transparente — intonation naturelle',
+    color: '#10b981',
+    lowGain: 0.5, midGain: 1.5, highGain: 1.0,
+    compThreshold: -18, compRatio: 2.5, compAttack: 12, compRelease: 160, compKnee: 8,
+    saturation: 0.03, reverb: 'room', reverbMix: 0.12,
+    autotune: 0.35, autotuneSpeed: 'slow',
+  },
+  {
+    id: 'autotune_country',
+    label: 'Country Pitch',
+    emoji: '🤠🎯',
+    description: 'Auto-Tune country — chaleureux et contrôlé',
+    color: '#f59e0b',
+    lowGain: 2.5, midGain: 1.0, highGain: 0.5,
+    compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 200, compKnee: 10,
+    saturation: 0.07, reverb: 'hall', reverbMix: 0.18,
+    autotune: 0.45, autotuneSpeed: 'medium',
   },
 ];
 

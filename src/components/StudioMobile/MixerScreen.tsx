@@ -278,9 +278,10 @@ export default function MixerScreen({
         { ...project, tracks: [mainVoice] },
         (label, pct) => {
           setGenerateLabel(label);
-          setGeneratePct(Math.round(pct));
+          setGeneratePct(pct > 0 ? Math.round(pct) : generatePct); // ignorer pct=-1 (progress Worker)
         },
         { realPartition: (selected as any).realPartition, key: (selected as any).key },
+        harmonyDef.trackIndex, // ← générer seulement cette harmonie
       );
 
       // Récupérer uniquement la couche demandée
@@ -327,7 +328,7 @@ export default function MixerScreen({
         mainVoice, project,
         (label, pct) => {
           setGenerateLabel(label);
-          setGeneratePct(Math.round(pct));
+          if (pct >= 0) setGeneratePct(Math.round(pct));
 
           // Détecter quand une harmonie est sauvegardée et mettre à jour l'UI immédiatement
           // Le label "✅ X sauvegardée" signale qu'une nouvelle piste est disponible
