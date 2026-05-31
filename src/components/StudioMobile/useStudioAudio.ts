@@ -339,14 +339,18 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     if (!blob && rec.dataUrl) {
       try {
         if (rec.dataUrl.startsWith('opfs:')) {
-          // Sentinelle — charger depuis OPFS ou cache mémoire
-          const fxKey = rec.dataUrl.slice(5);
-          const cached = (window as any).__lastFxBlob as Blob | undefined;
-          const cachedKey = (window as any).__lastFxKey as string | undefined;
-          if (cached && cachedKey === fxKey) {
-            blob = cached;
+          // Sentinelle — chercher dans les caches mémoire (FX ou harmony)
+          const key = rec.dataUrl.slice(5);
+          const fxBlob = (window as any).__lastFxBlob as Blob | undefined;
+          const fxKey  = (window as any).__lastFxKey  as string | undefined;
+          const harmBlobs = (window as any).__harmonyBlobs as Record<string,Blob> | undefined;
+          if (fxBlob && fxKey === key) {
+            blob = fxBlob;
+          } else if (harmBlobs && harmBlobs[key]) {
+            blob = harmBlobs[key];
           } else {
-            try { blob = await studioOfflineDB.getAudio(fxKey); } catch {}
+            // Fallback OPFS
+            try { blob = await studioOfflineDB.getAudio(key); } catch {}
           }
         } else {
           const [header, data] = rec.dataUrl.split(',');

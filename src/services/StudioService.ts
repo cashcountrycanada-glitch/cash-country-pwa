@@ -1087,7 +1087,18 @@ export const studioService = {
       }
 
       await yieldToMain();
-      const dataUrl = await this.blobToDataUrl(blob);
+
+      // Convertir en dataUrl seulement si < 5MB — sinon sentinelle opfs: pour éviter crash iOS
+      let dataUrl: string;
+      if (blob.size < 5 * 1024 * 1024) {
+        dataUrl = await this.blobToDataUrl(blob);
+      } else {
+        const harmKey = `harmony_${Date.now()}_${layer.trackIndex}`;
+        // Garder en mémoire — pas de sauvegarde OPFS (quota)
+        if (!(window as any).__harmonyBlobs) (window as any).__harmonyBlobs = {};
+        (window as any).__harmonyBlobs[harmKey] = blob;
+        dataUrl = `opfs:${harmKey}`;
+      }
       const safeTitle = (mainVoice.songTitle || 'song').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
       const fileName = `${safeTitle}_T${layer.trackIndex}_GEN_${Date.now()}.wav`;
       const rec: MobileRecording = {
@@ -1112,9 +1123,21 @@ export const studioService = {
     if (cachedBuf && lastFxUrl === dataUrl) {
       srcBuf = cachedBuf;
     } else {
-      const blob = this.dataUrlToBlob(dataUrl);
-      if (blob.size > 40 * 1024 * 1024) throw new Error(`Fichier trop volumineux (${(blob.size/1024/1024).toFixed(0)} MB)`);
-      const ab = await blob.arrayBuffer();
+      // Résoudre le blob source (dataUrl normale ou sentinelle opfs:)
+      let srcBlob: Blob;
+      if (dataUrl.startsWith('opfs:')) {
+        const key = dataUrl.slice(5);
+        const fxBlob    = (window as any).__lastFxBlob as Blob | undefined;
+        const fxKey     = (window as any).__lastFxKey  as string | undefined;
+        const harmBlobs = (window as any).__harmonyBlobs as Record<string,Blob> | undefined;
+        if (fxBlob && fxKey === key) srcBlob = fxBlob;
+        else if (harmBlobs && harmBlobs[key]) srcBlob = harmBlobs[key];
+        else throw new Error('Blob FX introuvable en mémoire — réappliquer le FX');
+      } else {
+        srcBlob = this.dataUrlToBlob(dataUrl);
+      }
+      if (srcBlob.size > 40 * 1024 * 1024) throw new Error(`Fichier trop volumineux (${(srcBlob.size/1024/1024).toFixed(0)} MB)`);
+      const ab = await srcBlob.arrayBuffer();
       const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       try { srcBuf = await tmpCtx.decodeAudioData(ab); } finally { tmpCtx.close(); }
       (window as any).__lastFxSourceUrl   = dataUrl;
