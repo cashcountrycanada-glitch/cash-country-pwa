@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.135';
+const BUILD_VERSION = 'v7.6.137';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -670,10 +670,20 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         mixProject = { ...project, tracks: [...project.tracks, ...layerTracks] };
       }
       const mixBlob = await studioService.mixProject(mixProject);
-      const dataUrl = await studioService.blobToDataUrl(mixBlob);
-      updateProject(p => ({ ...p, mixedDataUrl: dataUrl }));
+      // Stocker le blob mix en mémoire et utiliser une URL objet
+      // (évite blobToDataUrl qui crash sur iOS pour les gros fichiers ~30MB)
+      (window as any).__mixBlob = mixBlob;
+      const mixUrl = URL.createObjectURL(mixBlob);
+      if ((window as any).__mixUrl) URL.revokeObjectURL((window as any).__mixUrl);
+      (window as any).__mixUrl = mixUrl;
+      updateProject(p => ({ ...p, mixedDataUrl: mixUrl }));
       setMixDone(true);
-    } catch (e: any) { alert('Erreur mixage : ' + e.message); }
+    } catch (e: any) {
+      const isQuota = e?.name === 'QuotaExceededError'
+        || (e?.message && e.message.toLowerCase().includes('quota'));
+      if (!isQuota) alert('Erreur mixage : ' + e.message);
+      else console.warn('[Mix] Quota dépassé:', e.message);
+    }
     finally { setIsMixing(false); }
   };
 
@@ -681,7 +691,14 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     if (!project?.mixedDataUrl || !selected) return;
     setUploading('mix');
     try {
-      const blob = studioService.dataUrlToBlob(project.mixedDataUrl);
+      // mixedDataUrl peut être une blob: URL (créée par URL.createObjectURL) ou une data: URL legacy
+      const mixUrl = project.mixedDataUrl;
+      let blob: Blob;
+      if (mixUrl.startsWith('blob:') && (window as any).__mixBlob) {
+        blob = (window as any).__mixBlob as Blob;
+      } else {
+        blob = studioService.dataUrlToBlob(mixUrl);
+      }
       const fakeRec: MobileRecording = { id: `MIX-${project.id}`, songId: selected.id, songTitle: selected.title, artist: selected.artist || '', duration: project.tracks[0]?.duration || 0, recordedAt: Date.now(), dataUrl: project.mixedDataUrl, transferred: false, fileName: `MIX_${selected.title.replace(/\s+/g,'_')}_${Date.now()}.mp4` };
       const ok = await studioService.uploadToServer(fakeRec, blob);
       if (ok) { setUploadDone('mix'); setTimeout(() => setUploadDone(null), 3000); }

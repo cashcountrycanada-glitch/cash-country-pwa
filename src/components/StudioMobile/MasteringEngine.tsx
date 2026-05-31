@@ -295,7 +295,10 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
 }
 
 // Convertir AudioBuffer → Blob mp4 (iOS natif) — 256 kbps pour la qualité
-async function audioBufferToBlob(buffer: AudioBuffer): Promise<Blob> {
+async function audioBufferToBlob(
+  buffer: AudioBuffer,
+  onProgress?: (pct: number) => void
+): Promise<Blob> {
   const mimeType = isIOS() ? 'audio/mp4'
     : MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
     : 'audio/mp4';
@@ -312,20 +315,39 @@ async function audioBufferToBlob(buffer: AudioBuffer): Promise<Blob> {
   const chunks: Blob[] = [];
   recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
+  const totalMs = (buffer.duration + 0.5) * 1000;
+  let progressTimer: ReturnType<typeof setInterval> | null = null;
+  const startTime = Date.now();
+
   return new Promise((resolve, reject) => {
     recorder.onstop = () => {
+      if (progressTimer) clearInterval(progressTimer);
+      onProgress?.(100);
       ctx.close().catch(() => {});
       resolve(new Blob(chunks, { type: chunks[0]?.type || 'audio/mp4' }));
     };
     recorder.onerror = (e: any) => {
+      if (progressTimer) clearInterval(progressTimer);
       ctx.close().catch(() => {});
       reject(new Error(e?.error?.message || 'MediaRecorder error'));
     };
     try {
       recorder.start();
       src.start();
-      setTimeout(() => { try { recorder.stop(); } catch {} try { src.stop(); } catch {} }, (buffer.duration + 0.5) * 1000);
+      // Tick toutes les 500ms pour animer la progression
+      if (onProgress) {
+        progressTimer = setInterval(() => {
+          const elapsed = Date.now() - startTime;
+          const pct = Math.min(98, Math.round((elapsed / totalMs) * 100));
+          onProgress(pct);
+        }, 500);
+      }
+      setTimeout(() => {
+        try { recorder.stop(); } catch {}
+        try { src.stop(); } catch {}
+      }, totalMs);
     } catch (e: any) {
+      if (progressTimer) clearInterval(progressTimer);
       ctx.close().catch(() => {});
       reject(e);
     }
@@ -666,16 +688,24 @@ export default function MasteringEngine({
       setVocalMastered(vocalM);
       setOutputVocalLufs(Math.round(analyzeLoudness(vocalM) * 10) / 10);
 
-      // Préparer l'URL de lecture pour le mix vocal
+      // Encodage voix — progression animée en temps réel (durée réelle)
       if (vocalUrlRef.current) URL.revokeObjectURL(vocalUrlRef.current);
-      const vBlob = await audioBufferToBlob(vocalM);
+      const encDurVocal = Math.round(vocalM.duration);
+      setProgressLabel(`Encodage voix… (~${encDurVocal}s)`);
+      const vBlob = await audioBufferToBlob(vocalM, (pct) => {
+        // Plage 35→53% pendant l'encodage voix
+        setProgress(35 + Math.round(pct * 0.18));
+        if (pct < 100) {
+          const remaining = Math.max(0, Math.round(encDurVocal * (1 - pct / 100)));
+          setProgressLabel(`Encodage voix… (${remaining}s)`);
+        }
+      });
       vocalUrlRef.current = URL.createObjectURL(vBlob);
-
       setProgress(55);
 
       // 3. Si instrumental disponible → mixer + masteriser (Mode B)
       if (instBlob) {
-        setProgressLabel('Chargement de l\'instrumental...'); setProgress(60);
+        setProgressLabel("Chargement de l'instrumental..."); setProgress(60);
         const instRaw = await decodeBlob(instBlob);
 
         setProgressLabel('Mixage vocal + instrumental...'); setProgress(70);
@@ -686,12 +716,22 @@ export default function MasteringEngine({
         setFullMastered(fullM);
         setOutputFullLufs(Math.round(analyzeLoudness(fullM) * 10) / 10);
 
+        // Encodage mix complet — progression animée
         if (fullUrlRef.current) URL.revokeObjectURL(fullUrlRef.current);
-        const fBlob = await audioBufferToBlob(fullM);
+        const encDurFull = Math.round(fullM.duration);
+        setProgressLabel(`Encodage mix… (~${encDurFull}s)`);
+        const fBlob = await audioBufferToBlob(fullM, (pct) => {
+          // Plage 82→98% pendant l'encodage mix
+          setProgress(82 + Math.round(pct * 0.16));
+          if (pct < 100) {
+            const remaining = Math.max(0, Math.round(encDurFull * (1 - pct / 100)));
+            setProgressLabel(`Encodage mix… (${remaining}s)`);
+          }
+        });
         fullUrlRef.current = URL.createObjectURL(fBlob);
       }
 
-      setProgressLabel('Terminé'); setProgress(100);
+      setProgressLabel('Terminé ✓'); setProgress(100);
 
     } catch (e: any) {
       const isQuota = e?.name === 'QuotaExceededError'
@@ -1076,8 +1116,21 @@ export default function MasteringEngine({
         </button>
 
         {isMastering && (
-          <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden">
-            <div className="h-full bg-red-600 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}/>
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center">
+              <span className="text-[10px] text-zinc-500 font-black uppercase tracking-widest truncate pr-2">
+                {progressLabel || 'En cours...'}
+              </span>
+              <span className="text-[11px] font-black text-red-500 shrink-0">{progress}%</span>
+            </div>
+            <div className="h-2 bg-zinc-900 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${
+                  progressLabel.includes('Encodage') ? 'bg-gradient-to-r from-red-600 to-orange-500' : 'bg-red-600'
+                }`}
+                style={{ width: `${progress}%` }}
+              />
+            </div>
           </div>
         )}
 
@@ -1124,7 +1177,7 @@ export default function MasteringEngine({
                     sentToMac ? 'bg-emerald-900/30 text-emerald-400' : 'bg-red-600 text-white'
                   } disabled:opacity-60`}>
                   {sendingToMac
-                    ? <><Loader2 size={14} className="animate-spin"/> Transfert en cours...</>
+                    ? <><Loader2 size={14} className="animate-spin"/> Encodage &amp; transfert… (~{Math.round((vocalMastered?.duration||0))}s)</>
                     : sentToMac
                     ? <><CheckCircle2 size={14}/> Stem vocal mis à jour sur le Mac</>
                     : <><Send size={14}/> Envoyer au Mac → Stem vocal</>
@@ -1186,7 +1239,7 @@ export default function MasteringEngine({
                   <button onClick={exportAsMP4} disabled={exportingMp4}
                     className="w-full py-3 font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all text-blue-300/70 disabled:opacity-60">
                     {exportingMp4
-                      ? <><Loader2 size={13} className="animate-spin"/> Export MP4...</>
+                      ? <><Loader2 size={13} className="animate-spin"/> Encodage MP4… (~{Math.round(((fullMastered||vocalMastered)?.duration||0))}s)</>
                       : exportedMp4
                       ? <><CheckCircle2 size={13}/> MP4 partagé !</>
                       : <><Share2 size={13}/> MP4 (AirDrop / iCloud)</>

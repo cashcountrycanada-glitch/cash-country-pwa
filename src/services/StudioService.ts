@@ -865,6 +865,22 @@ export const studioService = {
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     return new Blob([bytes], { type: mime });
   },
+  /**
+   * Résout n'importe quelle dataUrl vers un Blob.
+   * Gère les sentinelles opfs: (harmonies, FX en mémoire) ainsi que les vrais dataUrl.
+   */
+  resolveBlob(dataUrl: string): Blob | null {
+    if (!dataUrl) return null;
+    if (dataUrl.startsWith('opfs:')) {
+      const key = dataUrl.slice(5); // retire "opfs:"
+      const harmBlobs = (window as any).__harmonyBlobs || {};
+      if (harmBlobs[key]) return harmBlobs[key] as Blob;
+      // Fallback fx blob
+      if ((window as any).__lastFxKey === key && (window as any).__lastFxBlob) return (window as any).__lastFxBlob as Blob;
+      return null; // blob non disponible en mémoire (session précédente)
+    }
+    try { return this.dataUrlToBlob(dataUrl); } catch { return null; }
+  },
   getProjects(): TrackProject[] { try { const data = localStorage.getItem('cash_studio_projects'); return data ? JSON.parse(data) : []; } catch { return []; } },
   saveProject(project: TrackProject): void { const projects = this.getProjects().filter(p => p.id !== project.id); projects.unshift(project); localStorage.setItem('cash_studio_projects', JSON.stringify(projects.slice(0, 20))); },
   deleteProject(projectId: string): void { const projects = this.getProjects().filter(p => p.id !== projectId); localStorage.setItem('cash_studio_projects', JSON.stringify(projects)); },
@@ -894,7 +910,9 @@ export const studioService = {
   async analyzeWaveform(dataUrl: string, points = 200): Promise<number[]> {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     try {
-      const blob = this.dataUrlToBlob(dataUrl); const arrayBuffer = await blob.arrayBuffer();
+      const blob = this.resolveBlob(dataUrl);
+      if (!blob) return []; // sentinelle sans blob en mémoire (session précédente)
+      const arrayBuffer = await blob.arrayBuffer();
       const audioBuffer = await ctx.decodeAudioData(arrayBuffer); const data = audioBuffer.getChannelData(0);
       const blockSize = Math.floor(data.length / points); const waveform: number[] = [];
       for (let i = 0; i < points; i++) { let sum = 0; for (let j = 0; j < blockSize; j++) sum += Math.abs(data[i * blockSize + j] || 0); waveform.push(sum / blockSize); }
@@ -907,7 +925,7 @@ export const studioService = {
     const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     const decoded: { track: MobileRecording; buffer: AudioBuffer }[] = [];
     for (const track of activeTracks) {
-      try { const blob = this.dataUrlToBlob(track.dataUrl!); const arrayBuffer = await blob.arrayBuffer(); const buffer = await tmpCtx.decodeAudioData(arrayBuffer); decoded.push({ track, buffer }); } catch (e) { console.warn(`[Studio] Erreur décodage piste "${track.trackLabel}":`, e); }
+      try { const blob = this.resolveBlob(track.dataUrl!); if (!blob) { console.warn(`[Studio] Blob introuvable pour "${track.trackLabel}" (sentinelle hors session)`); continue; } const arrayBuffer = await blob.arrayBuffer(); const buffer = await tmpCtx.decodeAudioData(arrayBuffer); decoded.push({ track, buffer }); } catch (e) { console.warn(`[Studio] Erreur décodage piste "${track.trackLabel}":`, e); }
     }
     await tmpCtx.close(); if (decoded.length === 0) throw new Error('Aucune piste décodable');
     const shifted: { track: MobileRecording; buffer: AudioBuffer }[] = [];
