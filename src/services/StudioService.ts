@@ -561,8 +561,12 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
 
 export const studioService = {
   async saveRecordingLocallyAsync(rec: MobileRecording): Promise<void> {
-    if (!rec.dataUrl || rec.dataUrl.length < 100) return;
-    const blob = this.dataUrlToBlob(rec.dataUrl);
+    // Accepter les sentinelles opfs: (FX gros fichiers stockés dans OPFS directement)
+    if (!rec.dataUrl || (rec.dataUrl.length < 100 && !rec.dataUrl.startsWith('opfs:'))) return;
+    // Pour les sentinelles opfs:, le blob est déjà dans OPFS sous la clé fx_xxx
+    // On sauvegarde seulement les métadonnées
+    const isOpfsSentinel = rec.dataUrl!.startsWith('opfs:');
+    const blob = isOpfsSentinel ? null : this.dataUrlToBlob(rec.dataUrl!);
     const MAX_ATTEMPTS = 5;
     let lastError: any = null;
 
@@ -572,13 +576,15 @@ export const studioService = {
         const db = getOfflineDB();
         await db.init();
 
-        // Sauvegarder le blob audio
-        await db.saveAudio(`rec_${rec.id}`, blob, {
-          songId: rec.songId,
-          songTitle: rec.songTitle,
-          type: 'recording',
-          savedAt: Date.now(),
-        });
+        // Sauvegarder le blob audio (sauf pour les sentinelles opfs: — déjà dans OPFS)
+        if (!isOpfsSentinel && blob) {
+          await db.saveAudio(`rec_${rec.id}`, blob, {
+            songId: rec.songId,
+            songTitle: rec.songTitle,
+            type: 'recording',
+            savedAt: Date.now(),
+          });
+        }
 
         // Sauvegarder aussi les métadonnées
         const meta = { ...rec, dataUrl: undefined, blob: undefined };
@@ -1134,7 +1140,26 @@ export const studioService = {
           clearTimeout(timeout); worker.terminate();
           try {
             const resultBlob = new Blob([msg.wavBuf], { type: 'audio/wav' });
-            const resultDataUrl = await this.blobToDataUrl(resultBlob);
+            // Sauvegarder dans OPFS avec une clé FX dédiée
+            const fxKey = `fx_${Date.now()}`;
+            try {
+              await studioOfflineDB.init();
+              await studioOfflineDB.saveAudio(fxKey, resultBlob, { type: 'fx', savedAt: Date.now() });
+              // Cacher la clé OPFS et le blob pour usage immédiat
+              (window as any).__lastFxKey  = fxKey;
+              (window as any).__lastFxBlob = resultBlob;
+            } catch {
+              (window as any).__lastFxBlob = resultBlob;
+            }
+            // Retourner une dataUrl SEULEMENT si le blob est < 5MB (court FX)
+            // Pour les gros fichiers, retourner une sentinelle qu'on intercepte dans playRecording
+            let resultDataUrl: string;
+            if (resultBlob.size < 5 * 1024 * 1024) {
+              resultDataUrl = await this.blobToDataUrl(resultBlob);
+            } else {
+              // Sentinelle : dataUrl vide, le blob est dans __lastFxBlob et __lastFxKey
+              resultDataUrl = `opfs:${fxKey}`;
+            }
             (window as any).__lastFxSourceUrl = resultDataUrl;
             onProgress?.(100);
             resolve(resultDataUrl);

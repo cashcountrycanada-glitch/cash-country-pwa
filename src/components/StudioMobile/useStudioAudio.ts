@@ -335,16 +335,28 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       console.warn('[Play] IndexedDB erreur:', e);
     }
 
-    // 2. dataUrl en mémoire
+    // 2. dataUrl en mémoire (ou sentinelle opfs:)
     if (!blob && rec.dataUrl) {
       try {
-        const [header, data] = rec.dataUrl.split(',');
-        const mime = header.match(/:(.*?);/)?.[1] ?? 'audio/mp4';
-        const binary = atob(data);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        blob = new Blob([bytes], { type: mime });
-        console.log(`[Play] dataUrl: ${(blob.size/1024).toFixed(0)} Ko | type=${mime}`);
+        if (rec.dataUrl.startsWith('opfs:')) {
+          // Sentinelle — charger depuis OPFS ou cache mémoire
+          const fxKey = rec.dataUrl.slice(5);
+          const cached = (window as any).__lastFxBlob as Blob | undefined;
+          const cachedKey = (window as any).__lastFxKey as string | undefined;
+          if (cached && cachedKey === fxKey) {
+            blob = cached;
+          } else {
+            try { blob = await studioOfflineDB.getAudio(fxKey); } catch {}
+          }
+        } else {
+          const [header, data] = rec.dataUrl.split(',');
+          const mime = header.match(/:(.*?);/)?.[1] ?? 'audio/mp4';
+          const binary = atob(data);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          blob = new Blob([bytes], { type: mime });
+          console.log(`[Play] dataUrl: ${(blob.size/1024).toFixed(0)} Ko | type=${mime}`);
+        }
       } catch(e) {
         console.error('[Play] Erreur décodage dataUrl:', e);
       }
