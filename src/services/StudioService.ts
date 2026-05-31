@@ -296,11 +296,8 @@ function getOfflineDB() {
 }
 
 async function audioBufferToBlob(buffer: AudioBuffer, onProgress?: (pct: number) => void): Promise<Blob> {
-  // Encodage WAV instantané — remplace MediaRecorder temps réel (évite l'attente de durée complète)
-  onProgress?.(50);
-  const blob = audioBufferToWavBlob(buffer);
-  onProgress?.(100);
-  return blob;
+  // Encodage WAV chunked — évite l'OOM iOS sur les gros buffers (>20 MB)
+  return audioBufferToWavBlobChunked(buffer, onProgress);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -534,12 +531,71 @@ async function smartHarmonyBuffer(
 
 // Encodage WAV instantané depuis AudioBuffer — zéro MediaRecorder, zéro attente temps réel
 // Format : PCM 16-bit little-endian stéréo interleaved
+/**
+ * Encode un AudioBuffer en WAV par chunks de 2 MB max.
+ * Évite l'allocation d'un seul ArrayBuffer de 30+ MB qui kill le tab iOS.
+ * Retourne un Blob WAV assemblé de petits morceaux.
+ */
+async function audioBufferToWavBlobChunked(
+  buffer: AudioBuffer,
+  onProgress?: (pct: number) => void
+): Promise<Blob> {
+  const numCh   = Math.min(buffer.numberOfChannels, 2);
+  const sr      = buffer.sampleRate;
+  const numSamp = buffer.length;
+  const bytesPerSamp = 2;
+  const dataLen = numSamp * numCh * bytesPerSamp;
+
+  // ── En-tête WAV (44 octets) ──
+  const header = new ArrayBuffer(44);
+  const v = new DataView(header);
+  const ws = (off: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); v.setUint32(4, 36 + dataLen, true);
+  ws(8, 'WAVE'); ws(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, numCh, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * numCh * bytesPerSamp, true);
+  v.setUint16(32, numCh * bytesPerSamp, true); v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, dataLen, true);
+
+  const chL = buffer.getChannelData(0);
+  const chR = numCh > 1 ? buffer.getChannelData(1) : chL;
+
+  // ── Encoder par chunks de ~1 MB (262 144 samples stéréo 16-bit = 1 048 576 octets) ──
+  const CHUNK_SAMPLES = 262144; // 1 MB par chunk
+  const blobs: Blob[] = [new Blob([header], { type: 'audio/wav' })];
+
+  for (let start = 0; start < numSamp; start += CHUNK_SAMPLES) {
+    const end  = Math.min(start + CHUNK_SAMPLES, numSamp);
+    const count = end - start;
+    const chunk = new Int16Array(count * numCh);
+    for (let i = 0; i < count; i++) {
+      const sL = Math.max(-1, Math.min(1, chL[start + i]));
+      const sR = Math.max(-1, Math.min(1, chR[start + i]));
+      chunk[i * numCh]     = sL < 0 ? sL * 0x8000 : sL * 0x7FFF;
+      chunk[i * numCh + 1] = sR < 0 ? sR * 0x8000 : sR * 0x7FFF;
+    }
+    blobs.push(new Blob([chunk.buffer], { type: 'audio/wav' }));
+    // Libérer la référence immédiatement
+    (chunk as any) = null;
+
+    // Yield au main thread + progress
+    const pct = Math.round((end / numSamp) * 100);
+    onProgress?.(pct);
+    await new Promise<void>(r => setTimeout(r, 0));
+  }
+
+  return new Blob(blobs, { type: 'audio/wav' });
+}
+
+// Alias synchrone conservé pour compatibilité (petits buffers)
 function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
   const numCh   = Math.min(buffer.numberOfChannels, 2);
   const sr      = buffer.sampleRate;
   const numSamp = buffer.length;
   const bytesPerSamp = 2;
   const dataLen = numSamp * numCh * bytesPerSamp;
+  // Limite de sécurité : refuser les buffers > 20 MB (utiliser la version chunked)
+  if (dataLen > 20 * 1024 * 1024) throw new Error('Buffer trop grand — utiliser audioBufferToWavBlobChunked');
   const wavBuf  = new ArrayBuffer(44 + dataLen);
   const view    = new DataView(wavBuf);
   const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
@@ -999,7 +1055,7 @@ export const studioService = {
     // Encodage en temps réel — animer la barre
     const encDur = rendered.duration;
     const encBlob = await audioBufferToBlob(rendered, (pct) => {
-      onProgress?.(`Encodage… (~${Math.max(0, Math.round(encDur * (1 - pct / 100)))}s)`, 76 + Math.round(pct * 0.22));
+      onProgress?.(`Encodage WAV… ${pct}%`, 76 + Math.round(pct * 0.22));
     });
 
     onProgress?.('Terminé ✓', 100);
