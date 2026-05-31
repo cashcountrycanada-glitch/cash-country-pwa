@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.138';
+const BUILD_VERSION = 'v7.6.139';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -671,21 +671,19 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
           }));
         mixProject = { ...project, tracks: [...project.tracks, ...layerTracks] };
       }
-      setMixProgress(20); setMixLabel('Décodage des pistes…');
-      // Petit délai pour laisser React render l'overlay
-      await new Promise(r => setTimeout(r, 50));
-      setMixProgress(30); setMixLabel('Mixage en cours…');
-      const mixBlob = await studioService.mixProject(mixProject);
-      setMixProgress(75); setMixLabel('Encodage du mix…');
+      // Petit délai pour laisser React render l'overlay avant le traitement
+      await new Promise(r => setTimeout(r, 80));
+      const mixBlob = await studioService.mixProject(mixProject, (label, pct) => {
+        setMixLabel(label);
+        setMixProgress(pct);
+      });
       // Stocker le blob mix en mémoire et utiliser une URL objet
       // (évite blobToDataUrl qui crash sur iOS pour les gros fichiers ~30MB)
-      setMixProgress(90); setMixLabel('Finalisation…');
       (window as any).__mixBlob = mixBlob;
       const mixUrl = URL.createObjectURL(mixBlob);
       if ((window as any).__mixUrl) URL.revokeObjectURL((window as any).__mixUrl);
       (window as any).__mixUrl = mixUrl;
       updateProject(p => ({ ...p, mixedDataUrl: mixUrl }));
-      setMixProgress(100); setMixLabel('Terminé ✓');
       setMixDone(true);
     } catch (e: any) {
       const isQuota = e?.name === 'QuotaExceededError'

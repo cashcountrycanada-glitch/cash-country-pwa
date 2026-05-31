@@ -187,7 +187,7 @@ async function pitchShiftBuffer(ctx: OfflineAudioContext | AudioContext, buffer:
 
 // Wrapper sécurisé pour OfflineAudioContext.startRendering() sur iOS Safari
 // iOS peut silencieusement ne jamais résoudre startRendering() sur de longs buffers
-async function safeStartRendering(ctx: OfflineAudioContext, timeoutMs = 30000): Promise<AudioBuffer> {
+async function safeStartRendering(ctx: OfflineAudioContext, timeoutMs = 120000): Promise<AudioBuffer> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error(`OfflineAudioContext timeout (${timeoutMs}ms) — buffer trop long pour iOS`));
@@ -295,9 +295,12 @@ function getOfflineDB() {
   return studioOfflineDB;
 }
 
-async function audioBufferToBlob(buffer: AudioBuffer): Promise<Blob> {
+async function audioBufferToBlob(buffer: AudioBuffer, onProgress?: (pct: number) => void): Promise<Blob> {
   // Encodage WAV instantané — remplace MediaRecorder temps réel (évite l'attente de durée complète)
-  return audioBufferToWavBlob(buffer);
+  onProgress?.(50);
+  const blob = audioBufferToWavBlob(buffer);
+  onProgress?.(100);
+  return blob;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -923,23 +926,51 @@ export const studioService = {
       const max = Math.max(...waveform, 0.001); return waveform.map(v => v / max);
     } finally { ctx.close(); }
   },
-  async mixProject(project: TrackProject): Promise<Blob> {
+  async mixProject(
+    project: TrackProject,
+    onProgress?: (label: string, pct: number) => void
+  ): Promise<Blob> {
+    const yield_ = () => new Promise<void>(r => setTimeout(r, 40));
     const activeTracks = project.tracks.filter(t => !t.muted && t.dataUrl);
     if (activeTracks.length === 0) throw new Error('Aucune piste valide à mixer');
+
+    onProgress?.('Décodage des pistes…', 10);
+    await yield_();
+
     const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     const decoded: { track: MobileRecording; buffer: AudioBuffer }[] = [];
-    for (const track of activeTracks) {
-      try { const blob = this.resolveBlob(track.dataUrl!); if (!blob) { console.warn(`[Studio] Blob introuvable pour "${track.trackLabel}" (sentinelle hors session)`); continue; } const arrayBuffer = await blob.arrayBuffer(); const buffer = await tmpCtx.decodeAudioData(arrayBuffer); decoded.push({ track, buffer }); } catch (e) { console.warn(`[Studio] Erreur décodage piste "${track.trackLabel}":`, e); }
+    for (let i = 0; i < activeTracks.length; i++) {
+      const track = activeTracks[i];
+      onProgress?.(`Décodage piste ${i + 1}/${activeTracks.length}…`, 10 + Math.round((i / activeTracks.length) * 25));
+      await yield_();
+      try {
+        const blob = this.resolveBlob(track.dataUrl!);
+        if (!blob) { console.warn(`[Studio] Blob introuvable pour "${track.trackLabel}"`); continue; }
+        const arrayBuffer = await blob.arrayBuffer();
+        const buffer = await tmpCtx.decodeAudioData(arrayBuffer);
+        decoded.push({ track, buffer });
+      } catch (e) { console.warn(`[Studio] Erreur décodage "${track.trackLabel}":`, e); }
     }
-    await tmpCtx.close(); if (decoded.length === 0) throw new Error('Aucune piste décodable');
+    await tmpCtx.close();
+    if (decoded.length === 0) throw new Error('Aucune piste décodable');
+
+    onProgress?.('Traitement pitch…', 38);
+    await yield_();
+
     const shifted: { track: MobileRecording; buffer: AudioBuffer }[] = [];
     for (const { track, buffer } of decoded) {
       const semitones = track.pitchShift ?? 0;
       if (semitones !== 0) {
         try { const shiftedBuf = await pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), buffer, semitones); shifted.push({ track, buffer: shiftedBuf }); } catch { shifted.push({ track, buffer }); }
       } else { shifted.push({ track, buffer }); }
+      await yield_();
     }
-    const maxDuration = Math.max(...shifted.map(s => s.buffer.duration)); const sampleRate = shifted[0].buffer.sampleRate;
+
+    onProgress?.('Rendu audio…', 50);
+    await yield_();
+
+    const maxDuration = Math.max(...shifted.map(s => s.buffer.duration));
+    const sampleRate = shifted[0].buffer.sampleRate;
     const offline = new OfflineAudioContext(2, Math.ceil(maxDuration * sampleRate) + 4096, sampleRate);
     for (const { track, buffer } of shifted) {
       const src = offline.createBufferSource(); src.buffer = buffer;
@@ -947,7 +978,32 @@ export const studioService = {
       const panner = offline.createStereoPanner(); panner.pan.value = track.pan ?? 0;
       src.connect(gainNode); gainNode.connect(panner); panner.connect(offline.destination); src.start(0);
     }
-    const rendered = await safeStartRendering(offline); return audioBufferToBlob(rendered);
+
+    // Animer la barre pendant le rendu OfflineAudioContext (durée inconnue, ~10-60s)
+    let renderPct = 52;
+    const renderTick = setInterval(() => {
+      renderPct = Math.min(74, renderPct + 1);
+      onProgress?.('Rendu audio…', renderPct);
+    }, 800);
+
+    let rendered: AudioBuffer;
+    try {
+      rendered = await safeStartRendering(offline);
+    } finally {
+      clearInterval(renderTick);
+    }
+
+    onProgress?.('Encodage du mix…', 76);
+    await yield_();
+
+    // Encodage en temps réel — animer la barre
+    const encDur = rendered.duration;
+    const encBlob = await audioBufferToBlob(rendered, (pct) => {
+      onProgress?.(`Encodage… (~${Math.max(0, Math.round(encDur * (1 - pct / 100)))}s)`, 76 + Math.round(pct * 0.22));
+    });
+
+    onProgress?.('Terminé ✓', 100);
+    return encBlob;
   },
   async mixComp(takes: Take[], gain = 1.0): Promise<Blob> {
     const allRegions = takes.flatMap(take => take.regions.map(r => ({ ...r, recording: take.recording }))).sort((a, b) => a.startSec - b.startSec);
