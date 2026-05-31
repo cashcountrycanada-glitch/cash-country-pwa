@@ -624,7 +624,7 @@ export const studioService = {
   },
   saveRecordingLocally(rec: MobileRecording): void {
     this.saveRecordingLocallyAsync(rec).catch((e: any) => {
-      if (e && (e.name === 'QuotaExceededError' || (e.message && e.message.includes('QUOTA_FULL')))) {
+      if (e && (e.name === 'QuotaExceededError' || (e.message && (e.message.includes('QUOTA_FULL') || e.message.toLowerCase().includes('quota'))))) {
         window.dispatchEvent(new CustomEvent('studio:quotaExceeded', { detail: { message: e.message } }));
       } else {
         console.warn('[StudioService] saveRecordingLocally:', e);
@@ -1089,15 +1089,29 @@ export const studioService = {
       await yieldToMain();
 
       // Convertir en dataUrl seulement si < 5MB — sinon sentinelle opfs: pour éviter crash iOS
+      // Si blobToDataUrl échoue (quota mémoire iOS), fallback automatique vers sentinelle mémoire
       let dataUrl: string;
-      if (blob.size < 5 * 1024 * 1024) {
-        dataUrl = await this.blobToDataUrl(blob);
-      } else {
+      const toInMemorySentinel = () => {
         const harmKey = `harmony_${Date.now()}_${layer.trackIndex}`;
-        // Garder en mémoire — pas de sauvegarde OPFS (quota)
         if (!(window as any).__harmonyBlobs) (window as any).__harmonyBlobs = {};
         (window as any).__harmonyBlobs[harmKey] = blob;
-        dataUrl = `opfs:${harmKey}`;
+        return `opfs:${harmKey}`;
+      };
+      if (blob.size < 5 * 1024 * 1024) {
+        try {
+          dataUrl = await this.blobToDataUrl(blob);
+        } catch (dataUrlErr: any) {
+          const isQuota = dataUrlErr?.name === 'QuotaExceededError'
+            || (dataUrlErr?.message && dataUrlErr.message.toLowerCase().includes('quota'));
+          if (isQuota) {
+            console.warn('[generateLayers] blobToDataUrl quota — fallback sentinelle mémoire:', dataUrlErr.message);
+            dataUrl = toInMemorySentinel();
+          } else {
+            throw dataUrlErr;
+          }
+        }
+      } else {
+        dataUrl = toInMemorySentinel();
       }
       const safeTitle = (mainVoice.songTitle || 'song').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
       const fileName = `${safeTitle}_T${layer.trackIndex}_GEN_${Date.now()}.wav`;
@@ -1171,9 +1185,21 @@ export const studioService = {
             (window as any).__lastFxBlob = resultBlob;
 
             // Retourner dataUrl seulement si < 5MB, sinon sentinelle opfs:
+            // Si blobToDataUrl échoue par quota iOS, fallback automatique vers sentinelle mémoire
             let resultDataUrl: string;
             if (resultBlob.size < 5 * 1024 * 1024) {
-              resultDataUrl = await this.blobToDataUrl(resultBlob);
+              try {
+                resultDataUrl = await this.blobToDataUrl(resultBlob);
+              } catch (dataUrlErr: any) {
+                const isQuota = dataUrlErr?.name === 'QuotaExceededError'
+                  || (dataUrlErr?.message && dataUrlErr.message.toLowerCase().includes('quota'));
+                if (isQuota) {
+                  console.warn('[FX] blobToDataUrl quota — fallback sentinelle mémoire:', dataUrlErr.message);
+                  resultDataUrl = `opfs:${fxKey}`;
+                } else {
+                  throw dataUrlErr;
+                }
+              }
             } else {
               resultDataUrl = `opfs:${fxKey}`;
             }

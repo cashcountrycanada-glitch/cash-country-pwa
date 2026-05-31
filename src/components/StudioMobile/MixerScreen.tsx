@@ -317,7 +317,13 @@ export default function MixerScreen({
         }), 3000);
       }
     } catch (e: any) {
-      alert('Erreur génération : ' + e.message);
+      const isQuota = e?.name === 'QuotaExceededError'
+        || (e?.message && e.message.toLowerCase().includes('quota'));
+      if (isQuota) {
+        console.warn('[Harmonie] Quota dépassé — harmonie conservée en mémoire:', e.message);
+      } else {
+        alert('Erreur génération : ' + e.message);
+      }
     } finally {
       setGeneratingIndex(null);
       setGenerateLabel('');
@@ -361,7 +367,13 @@ export default function MixerScreen({
         onProjectUpdate(up);
       }
     } catch (e: any) {
-      alert('Erreur génération : ' + e.message);
+      const isQuota = e?.name === 'QuotaExceededError'
+        || (e?.message && e.message.toLowerCase().includes('quota'));
+      if (isQuota) {
+        console.warn('[Harmonies] Quota dépassé — harmonies conservées en mémoire:', e.message);
+      } else {
+        alert('Erreur génération : ' + e.message);
+      }
     } finally {
       setGeneratingIndex(null);
       setGenerateLabel('');

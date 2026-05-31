@@ -80,7 +80,15 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
       setApplyDone(true);
       setTimeout(() => { setApplyDone(false); setShowFxPanel(false); }, 1500);
     } catch (e: any) {
-      alert('Erreur FX : ' + e.message);
+      const isQuota = e?.name === 'QuotaExceededError'
+        || (e?.message && e.message.toLowerCase().includes('quota'));
+      if (isQuota) {
+        // Erreur de stockage non-fatale : le FX est appliqué en mémoire.
+        // L'événement studio:quotaExceeded sera émis par saveRecordingLocally.
+        console.warn('[FX] Quota OPFS/IDB dépassé — FX conservé en mémoire:', e.message);
+      } else {
+        alert('Erreur FX : ' + e.message);
+      }
     } finally {
       setApplyingFx(false); setApplyPct(0);
     }

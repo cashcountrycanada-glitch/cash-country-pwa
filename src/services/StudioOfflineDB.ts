@@ -63,7 +63,7 @@ self.onmessage = async (e) => {
       self.postMessage({ id, ok: true, names });
     }
   } catch (err) {
-    self.postMessage({ id, ok: false, error: err && err.message ? err.message : String(err) });
+    self.postMessage({ id, ok: false, error: err && err.message ? err.message : String(err), errorName: err && err.name ? err.name : 'Error' });
   }
 };
 `;
@@ -85,7 +85,11 @@ function getOPFSWorker(): Worker | null {
       if (!p) return;
       _opfsPending.delete(id);
       if (ok) p.resolve(rest);
-      else p.reject(new Error(error || 'OPFS worker error'));
+      else {
+        const e2 = new Error(error || 'OPFS worker error');
+        if (rest.errorName) e2.name = rest.errorName;
+        p.reject(e2);
+      }
     };
     _opfsWorker.onerror = (e) => {
       console.error('[OPFS Worker] Erreur:', e.message);

@@ -312,14 +312,23 @@ async function audioBufferToBlob(buffer: AudioBuffer): Promise<Blob> {
   const chunks: Blob[] = [];
   recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
-  return new Promise(resolve => {
+  return new Promise((resolve, reject) => {
     recorder.onstop = () => {
-      ctx.close();
+      ctx.close().catch(() => {});
       resolve(new Blob(chunks, { type: chunks[0]?.type || 'audio/mp4' }));
     };
-    recorder.start();
-    src.start();
-    setTimeout(() => { recorder.stop(); try { src.stop(); } catch {} }, (buffer.duration + 0.5) * 1000);
+    recorder.onerror = (e: any) => {
+      ctx.close().catch(() => {});
+      reject(new Error(e?.error?.message || 'MediaRecorder error'));
+    };
+    try {
+      recorder.start();
+      src.start();
+      setTimeout(() => { try { recorder.stop(); } catch {} try { src.stop(); } catch {} }, (buffer.duration + 0.5) * 1000);
+    } catch (e: any) {
+      ctx.close().catch(() => {});
+      reject(e);
+    }
   });
 }
 
@@ -685,7 +694,10 @@ export default function MasteringEngine({
       setProgressLabel('Terminé'); setProgress(100);
 
     } catch (e: any) {
-      alert('Erreur masterisation : ' + e.message);
+      const isQuota = e?.name === 'QuotaExceededError'
+        || (e?.message && e.message.toLowerCase().includes('quota'));
+      if (!isQuota) alert('Erreur masterisation : ' + e.message);
+      else console.warn('[Mastering] Quota dépassé:', e.message);
     } finally {
       setIsMastering(false); setProgressLabel('');
     }
