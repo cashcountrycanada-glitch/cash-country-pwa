@@ -27,6 +27,8 @@ interface Props {
   project:     TrackProject;
   playingId:   string | null;
   isMixing:    boolean;
+  mixProgress: number;
+  mixLabel:    string;
   mixDone:     boolean;
   isOnline:    boolean;
   uploading:   string | null;
@@ -61,7 +63,7 @@ const HARMONY_DEFS = [
 ];
 
 export default function MixerScreen({
-  selected, project, playingId, isMixing, mixDone, isOnline,
+  selected, project, playingId, isMixing, mixProgress, mixLabel, mixDone, isOnline,
   uploading, uploadDone, playRef,
   onBack, onGoSongs, onAddTrack, onPlay, onMute, onSolo, onVolume, onPan,
   onDelete, onMix, onPlayMix, onMasterize, onUploadMix, onGoComp,
@@ -110,9 +112,20 @@ export default function MixerScreen({
   const totalDuration = mainVoice?.duration || Math.max(...tracks.map(t => t.duration), 0);
 
   // Charger la waveform du mix dès qu'il est prêt
+  // mixedDataUrl peut être une blob: URL (URL.createObjectURL) ou une data: URL legacy
   useEffect(() => {
-    if (mixDone && project.mixedDataUrl && mixWaveform.length === 0) {
-      studioService.analyzeWaveform(project.mixedDataUrl, 100)
+    if (!mixDone || !project.mixedDataUrl || mixWaveform.length > 0) return;
+    const url = project.mixedDataUrl;
+    if (url.startsWith('blob:')) {
+      // Blob URL → fetch le blob puis analyser
+      fetch(url)
+        .then(r => r.blob())
+        .then(blob => studioService.blobToDataUrl(blob))
+        .then(dataUrl => studioService.analyzeWaveform(dataUrl, 100))
+        .then(setMixWaveform)
+        .catch(() => {});
+    } else {
+      studioService.analyzeWaveform(url, 100)
         .then(setMixWaveform)
         .catch(() => {});
     }
@@ -383,14 +396,49 @@ export default function MixerScreen({
 
   const handleMasterize = () => {
     if (!project?.mixedDataUrl) return;
-    const vocalBlob = studioService.dataUrlToBlob(project.mixedDataUrl);
-    onMasterize(vocalBlob, instBlob);
+    const url = project.mixedDataUrl;
+    if (url.startsWith('blob:')) {
+      // blob: URL → récupérer le blob depuis __mixBlob en mémoire
+      const blob = (window as any).__mixBlob as Blob | undefined;
+      if (blob) onMasterize(blob, instBlob);
+      else fetch(url).then(r => r.blob()).then(b => onMasterize(b, instBlob)).catch(() => {});
+    } else {
+      const vocalBlob = studioService.dataUrlToBlob(url);
+      onMasterize(vocalBlob, instBlob);
+    }
   };
 
   const hasAnyHarmony = HARMONY_DEFS.some(h => tracks.some(t => t.trackIndex === h.trackIndex));
 
   return (
     <>
+    {/* ── Overlay mixage plein écran ── */}
+    {isMixing && (
+      <div className="fixed inset-0 z-50 bg-[#020202] flex flex-col items-center justify-center gap-6 px-8">
+        <div className="text-5xl">🎛️</div>
+        <p className="text-white font-black text-[18px] uppercase tracking-widest text-center">
+          Mixage en cours…
+        </p>
+        <p className="text-zinc-400 text-[13px] font-black text-center">
+          {mixLabel || 'Traitement des pistes…'}
+        </p>
+        <div className="w-full max-w-xs space-y-2">
+          <div className="flex justify-between">
+            <span className="text-[11px] text-zinc-500 font-black uppercase tracking-widest">Progression</span>
+            <span className="text-[12px] font-black text-red-400">{mixProgress}%</span>
+          </div>
+          <div className="h-2 bg-zinc-900 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-red-600 to-orange-500 rounded-full transition-all duration-500"
+              style={{ width: `${Math.max(5, mixProgress)}%` }}
+            />
+          </div>
+        </div>
+        <p className="text-zinc-600 text-[10px] font-black uppercase tracking-widest text-center">
+          Ne pas quitter l'application
+        </p>
+      </div>
+    )}
     <div className="min-h-screen bg-[#020202] text-white flex flex-col">
 
       {/* ── Header ── */}

@@ -872,12 +872,16 @@ export const studioService = {
   resolveBlob(dataUrl: string): Blob | null {
     if (!dataUrl) return null;
     if (dataUrl.startsWith('opfs:')) {
-      const key = dataUrl.slice(5); // retire "opfs:"
+      const key = dataUrl.slice(5);
       const harmBlobs = (window as any).__harmonyBlobs || {};
       if (harmBlobs[key]) return harmBlobs[key] as Blob;
-      // Fallback fx blob
       if ((window as any).__lastFxKey === key && (window as any).__lastFxBlob) return (window as any).__lastFxBlob as Blob;
-      return null; // blob non disponible en mémoire (session précédente)
+      return null;
+    }
+    if (dataUrl.startsWith('blob:')) {
+      // blob: URLs ne peuvent pas être converties en Blob synchronement
+      // L'appelant doit utiliser fetch(url).then(r=>r.blob()) à la place
+      return null;
     }
     try { return this.dataUrlToBlob(dataUrl); } catch { return null; }
   },
