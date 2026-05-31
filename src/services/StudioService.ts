@@ -1140,24 +1140,18 @@ export const studioService = {
           clearTimeout(timeout); worker.terminate();
           try {
             const resultBlob = new Blob([msg.wavBuf], { type: 'audio/wav' });
-            // Sauvegarder dans OPFS avec une clé FX dédiée
             const fxKey = `fx_${Date.now()}`;
-            try {
-              await studioOfflineDB.init();
-              await studioOfflineDB.saveAudio(fxKey, resultBlob, { type: 'fx', savedAt: Date.now() });
-              // Cacher la clé OPFS et le blob pour usage immédiat
-              (window as any).__lastFxKey  = fxKey;
-              (window as any).__lastFxBlob = resultBlob;
-            } catch {
-              (window as any).__lastFxBlob = resultBlob;
-            }
-            // Retourner une dataUrl SEULEMENT si le blob est < 5MB (court FX)
-            // Pour les gros fichiers, retourner une sentinelle qu'on intercepte dans playRecording
+
+            // Garder le blob en mémoire — pas de sauvegarde OPFS (évite quota exceeded)
+            // Le FX est temporaire pour la session, le blob original est préservé dans OPFS
+            (window as any).__lastFxKey  = fxKey;
+            (window as any).__lastFxBlob = resultBlob;
+
+            // Retourner dataUrl seulement si < 5MB, sinon sentinelle opfs:
             let resultDataUrl: string;
             if (resultBlob.size < 5 * 1024 * 1024) {
               resultDataUrl = await this.blobToDataUrl(resultBlob);
             } else {
-              // Sentinelle : dataUrl vide, le blob est dans __lastFxBlob et __lastFxKey
               resultDataUrl = `opfs:${fxKey}`;
             }
             (window as any).__lastFxSourceUrl = resultDataUrl;

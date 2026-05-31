@@ -87,7 +87,20 @@ export default function MixerScreen({
 
   const tracks    = project?.tracks || [];
   // mainVoice = la voix du slot actif en priorité, sinon premier non-muté
-  const slotVoices = tracks.filter(t => t.trackIndex === 0 && !(t as any).isGenerated);
+  // slotVoices = une prise par slot (dédupliqué — garder la plus récente par takeSlot)
+  const slotVoices = React.useMemo(() => {
+    const all = tracks.filter(t => t.trackIndex === 0 && !(t as any).isGenerated);
+    const bySlot = new Map<string, typeof all[0]>();
+    for (const t of all) {
+      const slot = t.takeSlot ?? 'A';
+      const existing = bySlot.get(slot);
+      // Garder la plus récente (recordedAt)
+      if (!existing || (t.recordedAt ?? 0) > (existing.recordedAt ?? 0)) {
+        bySlot.set(slot, t);
+      }
+    }
+    return Array.from(bySlot.values());
+  }, [tracks]);
   const mainVoice  = slotVoices.find(t => t.takeSlot === takeSlot && t.dataUrl)  // slot actif avec data ← PRIORITÉ
     ?? slotVoices.find(t => t.takeSlot === takeSlot)                               // slot actif sans data encore
     ?? slotVoices.find(t => !t.muted && t.dataUrl)                                 // non-muté avec data
