@@ -131,17 +131,22 @@ export default function MixerScreen({
     }
   }, [mixDone, project.mixedDataUrl]);
 
-  // État du cache audio — prêt quand window.__lastRecDecodedId === mainVoice.id
+  // Préchargement actif du cache audio — remplace le polling passif qui bloquait après réouverture
   const [audioCacheReady, setAudioCacheReady] = React.useState(false);
+  const [audioCacheError, setAudioCacheError] = React.useState(false);
   useEffect(() => {
     if (!mainVoice) return;
-    const check = () => {
-      const ready = !!(window as any).__lastRecDecodedBuf &&
+    // Si déjà en cache (même session), prêt immédiatement
+    const already = !!(window as any).__lastRecDecodedBuf &&
                     (window as any).__lastRecDecodedId === mainVoice.id;
-      setAudioCacheReady(ready);
-      if (!ready) setTimeout(check, 800);
-    };
-    check();
+    if (already) { setAudioCacheReady(true); return; }
+    // Sinon déclencher le chargement actif depuis OPFS/IDB
+    setAudioCacheReady(false);
+    setAudioCacheError(false);
+    studioService.warmAudioCache(mainVoice).then(ok => {
+      if (ok) setAudioCacheReady(true);
+      else setAudioCacheError(true);
+    });
   }, [mainVoice?.id]);
 
 
@@ -163,8 +168,9 @@ export default function MixerScreen({
     try {
       // Récupérer le blob source (dataUrl ou IndexedDB)
       let blob: Blob | null = null;
-      if (voice.dataUrl && voice.dataUrl.length > 1000) {
-        blob = studioService.dataUrlToBlob(voice.dataUrl);
+      // resolveBlobAsync gère data:, blob:, opfs: et les clés IDB
+      if (voice.dataUrl) {
+        blob = await studioService.resolveBlobAsync(voice.dataUrl);
       }
       if (!blob || blob.size < 1000) {
         blob = await studioOfflineDB.getAudio(`rec_${voice.id}`);
@@ -230,7 +236,7 @@ export default function MixerScreen({
       onProjectUpdate(studioService.addTrackToProject(project.id, rec) || project);
       setShowRecovery(false);
       alert('✅ Voix restaurée dans le slot A !');
-    } catch (e: any) { alert('Erreur restauration : ' + e.message); }
+    } catch (e: any) { const isQ = e?.message?.toLowerCase().includes('quota'); if (!isQ) alert('Erreur restauration : ' + e.message); }
     finally { setRecovering(null); }
   };
 
@@ -258,7 +264,7 @@ export default function MixerScreen({
       setTimeout(() => setBackupDone(false), 4000);
     } catch (e: any) {
       if (!e.message?.includes('cancel') && e.name !== 'AbortError')
-        alert('Erreur backup : ' + e.message);
+        const isQ = e?.message?.toLowerCase().includes('quota'); if (!isQ) alert('Erreur backup : ' + e.message);
     }
   };
 
@@ -282,7 +288,7 @@ export default function MixerScreen({
         setTimeout(() => URL.revokeObjectURL(url), 5000);
       }
     } catch (e: any) {
-      if (!e.message?.includes('cancel')) alert('Erreur export : ' + e.message);
+      if (!e.message?.includes('cancel') && !e.message?.toLowerCase().includes('quota')) alert('Erreur export : ' + e.message);
     } finally { setExportingVoice(false); }
   };
 
@@ -403,8 +409,9 @@ export default function MixerScreen({
       if (blob) onMasterize(blob, instBlob);
       else fetch(url).then(r => r.blob()).then(b => onMasterize(b, instBlob)).catch(() => {});
     } else {
-      const vocalBlob = studioService.dataUrlToBlob(url);
-      onMasterize(vocalBlob, instBlob);
+      const resolved = await studioService.resolveBlobAsync(url);
+      if (resolved) onMasterize(resolved, instBlob);
+      else console.warn('[Masterize] Blob mix introuvable');
     }
   };
 
@@ -900,10 +907,15 @@ export default function MixerScreen({
               )}
 
               {/* Indicateur cache audio */}
-              {mainVoice && !audioCacheReady && (
+              {mainVoice && !audioCacheReady && !audioCacheError && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800 text-zinc-400 text-[11px] mb-1">
                   <Loader2 size={11} className="animate-spin text-purple-400"/>
-                  <span>Préparation audio en cours… (patienter avant de générer)</span>
+                  <span>Chargement de la voix… (quelques secondes)</span>
+                </div>
+              )}
+              {mainVoice && audioCacheError && (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-950 text-red-400 text-[11px] mb-1">
+                  <span>⚠️ Voix introuvable — re-enregistrez ou utilisez "Récupérer une voix perdue"</span>
                 </div>
               )}
 
@@ -916,8 +928,10 @@ export default function MixerScreen({
                 }`}>
                 {generatingIndex === -1
                   ? <><Loader2 size={14} className="animate-spin"/> Génération...</>
-                  : !audioCacheReady
-                  ? <><Loader2 size={14} className="animate-spin"/> Préparation audio...</>
+                  : !audioCacheReady && !audioCacheError
+                  ? <><Loader2 size={14} className="animate-spin"/> Chargement voix...</>
+                  : audioCacheError
+                  ? <>⚠️ Voix introuvable</>
                   : hasAnyHarmony
                   ? <><RefreshCw size={14}/> Tout régénérer</>
                   : <><Sparkles size={14}/> Générer toutes les harmonies</>

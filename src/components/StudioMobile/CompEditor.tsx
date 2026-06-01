@@ -19,11 +19,12 @@ import { studioOfflineDB } from '../../services/StudioOfflineDB';
 import { Song } from '../../types';
 
 interface Props {
-  song:         Song;
-  takes:        Take[];
-  onBack:       () => void;
-  onCompReady:  (blob: Blob) => void;
-  isOnline:     boolean;
+  song:           Song;
+  takes:          Take[];
+  onBack:         () => void;
+  onCompReady:    (blob: Blob) => void;
+  isOnline:       boolean;
+  onTakesChange?: (takes: Take[]) => void;
 }
 
 const TAKE_COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#a855f7','#ec4899'];
@@ -222,8 +223,32 @@ function WaveformTrack({
 }
 
 // ── CompEditor principal ───────────────────────────────────────────────────────
-export default function CompEditor({ song, takes: initialTakes, onBack, onCompReady, isOnline }: Props) {
-  const [takes, setTakes]             = useState<Take[]>(initialTakes);
+export default function CompEditor({ song, takes: initialTakes, onBack, onCompReady, isOnline, onTakesChange }: Props) {
+  const [takes, setTakes] = useState<Take[]>(initialTakes);
+
+  // Sync si initialTakes change depuis le parent (ex: projet rechargé)
+  // On ne sync que si les IDs changent pour éviter les boucles
+  const prevTakeIds = React.useRef(initialTakes.map(t => t.recording.id).join(','));
+  useEffect(() => {
+    const newIds = initialTakes.map(t => t.recording.id).join(',');
+    if (newIds !== prevTakeIds.current) {
+      prevTakeIds.current = newIds;
+      setTakes(initialTakes);
+    }
+  }, [initialTakes]);
+
+  // Wrapper autour de setTakes qui persiste les régions vers le projet parent
+  const onTakesChangeRef = React.useRef(onTakesChange);
+  useEffect(() => { onTakesChangeRef.current = onTakesChange; }, [onTakesChange]);
+
+  const updateTakes = React.useCallback((updater: (prev: Take[]) => Take[]) => {
+    setTakes(prev => {
+      const next = updater(prev);
+      // Appel via ref pour éviter les captures de closure obsolètes
+      onTakesChangeRef.current?.(next);
+      return next;
+    });
+  }, []);
   const [playingId, setPlayingId]     = useState<string | null>(null);
   const [isMixing, setIsMixing]       = useState(false);
   const [compBlob, setCompBlob]       = useState<Blob | null>(null);
@@ -255,12 +280,12 @@ export default function CompEditor({ song, takes: initialTakes, onBack, onCompRe
   }, []);
 
   const addRegion = (takeId: string, region: Region) =>
-    setTakes(prev => prev.map(t =>
+    updateTakes(prev => prev.map(t =>
       t.recording.id === takeId ? { ...t, regions: [...t.regions, region] } : t
     ));
 
   const removeRegion = (takeId: string, regionId: string) =>
-    setTakes(prev => prev.map(t =>
+    updateTakes(prev => prev.map(t =>
       t.recording.id === takeId ? { ...t, regions: t.regions.filter(r => r.id !== regionId) } : t
     ));
 
@@ -296,7 +321,7 @@ export default function CompEditor({ song, takes: initialTakes, onBack, onCompRe
       const url = URL.createObjectURL(blob);
       setCompBlob(blob); setCompUrl(url);
     } catch (e: any) {
-      alert('Erreur comp : ' + e.message);
+      const isQ = e?.message?.toLowerCase().includes('quota'); if (!isQ) alert('Erreur comp : ' + e.message);
     } finally {
       setIsMixing(false);
     }

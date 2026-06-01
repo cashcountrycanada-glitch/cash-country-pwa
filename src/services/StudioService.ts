@@ -139,7 +139,11 @@ function applyFormantCorrection(data: Float32Array, semitones: number): Float32A
 }
 
 async function pitchShiftBuffer(ctx: OfflineAudioContext | AudioContext, buffer: AudioBuffer, semitones: number): Promise<AudioBuffer> {
-  if (semitones === 0) return buffer;
+  if (semitones === 0) {
+    // Fermer le ctx si c'est un AudioContext (pas OfflineAudioContext)
+    if (ctx instanceof AudioContext) ctx.close().catch(() => {});
+    return buffer;
+  }
   const sr       = buffer.sampleRate;
   const channels = buffer.numberOfChannels;
   const len      = buffer.length;
@@ -182,7 +186,10 @@ async function pitchShiftBuffer(ctx: OfflineAudioContext | AudioContext, buffer:
 
   eqSrc.connect(eq1); eq1.connect(eq2); eq2.connect(gain); gain.connect(eqCtx.destination);
   eqSrc.start(0);
-  return safeStartRendering(eqCtx);
+  const result = await safeStartRendering(eqCtx);
+  // Fermer le AudioContext passé en paramètre s'il en est un (pas OfflineAudioContext)
+  if (ctx instanceof AudioContext) ctx.close().catch(() => {});
+  return result;
 }
 
 // Wrapper sécurisé pour OfflineAudioContext.startRendering() sur iOS Safari
@@ -567,16 +574,15 @@ async function audioBufferToWavBlobChunked(
   for (let start = 0; start < numSamp; start += CHUNK_SAMPLES) {
     const end  = Math.min(start + CHUNK_SAMPLES, numSamp);
     const count = end - start;
-    const chunk = new Int16Array(count * numCh);
+    let chunkData = new Int16Array(count * numCh);
     for (let i = 0; i < count; i++) {
       const sL = Math.max(-1, Math.min(1, chL[start + i]));
       const sR = Math.max(-1, Math.min(1, chR[start + i]));
-      chunk[i * numCh]     = sL < 0 ? sL * 0x8000 : sL * 0x7FFF;
-      chunk[i * numCh + 1] = sR < 0 ? sR * 0x8000 : sR * 0x7FFF;
+      chunkData[i * numCh]     = sL < 0 ? sL * 0x8000 : sL * 0x7FFF;
+      chunkData[i * numCh + 1] = sR < 0 ? sR * 0x8000 : sR * 0x7FFF;
     }
-    blobs.push(new Blob([chunk.buffer], { type: 'audio/wav' }));
-    // Libérer la référence immédiatement
-    (chunk as any) = null;
+    blobs.push(new Blob([chunkData.buffer], { type: 'audio/wav' }));
+    chunkData = new Int16Array(0); // libérer (let, réassignable)
 
     // Yield au main thread + progress
     const pct = Math.round((end / numSamp) * 100);
@@ -624,8 +630,8 @@ export const studioService = {
     if (!rec.dataUrl || (rec.dataUrl.length < 100 && !rec.dataUrl.startsWith('opfs:'))) return;
     // Pour les sentinelles opfs:, le blob est déjà dans OPFS sous la clé fx_xxx
     // On sauvegarde seulement les métadonnées
-    const isOpfsSentinel = rec.dataUrl!.startsWith('opfs:');
-    const blob = isOpfsSentinel ? null : this.dataUrlToBlob(rec.dataUrl!);
+    const isOpfsSentinel = rec.dataUrl!.startsWith('opfs:') || rec.dataUrl!.startsWith('blob:');
+    const blob = isOpfsSentinel ? null : (() => { try { return this.dataUrlToBlob(rec.dataUrl!); } catch { return null; } })();
     const MAX_ATTEMPTS = 5;
     let lastError: any = null;
 
@@ -935,18 +941,122 @@ export const studioService = {
       const harmBlobs = (window as any).__harmonyBlobs || {};
       if (harmBlobs[key]) return harmBlobs[key] as Blob;
       if ((window as any).__lastFxKey === key && (window as any).__lastFxBlob) return (window as any).__lastFxBlob as Blob;
+      // Blob non en mémoire — l'appelant doit utiliser resolveBlobAsync()
       return null;
     }
     if (dataUrl.startsWith('blob:')) {
-      // blob: URLs ne peuvent pas être converties en Blob synchronement
-      // L'appelant doit utiliser fetch(url).then(r=>r.blob()) à la place
-      return null;
+      return null; // blob: URLs doivent passer par fetch()
     }
     try { return this.dataUrlToBlob(dataUrl); } catch { return null; }
   },
+
+  /**
+   * Précharge le buffer audio de la voix principale en mémoire.
+   * Appelé au montage de MixerScreen pour éviter le "Préparation audio" bloqué après réouverture.
+   * Retourne true si le cache est prêt.
+   */
+  async warmAudioCache(voice: MobileRecording): Promise<boolean> {
+    // Déjà en cache ?
+    const cached = (window as any).__lastRecDecodedBuf as AudioBuffer | undefined;
+    const cachedId = (window as any).__lastRecDecodedId as string | undefined;
+    if (cached && cachedId === voice.id) return true;
+
+    // Charger le blob depuis toutes les sources disponibles
+    let blob: Blob | null = await this.resolveBlobAsync(voice.dataUrl || '');
+    if (!blob || blob.size < 1000) {
+      const db = getOfflineDB();
+      try { blob = await db.getAudio(`rec_${voice.id}`); } catch {}
+    }
+    if (!blob || blob.size < 1000) {
+      try {
+        const db = getOfflineDB();
+        blob = await db.getAudio(`backup_voice_${voice.id}`);
+      } catch {}
+    }
+    if (!blob || blob.size < 1000) {
+      console.warn('[warmAudioCache] Impossible de charger le blob pour', voice.id);
+      return false;
+    }
+
+    // Décoder en AudioBuffer
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const ab = await blob.arrayBuffer();
+      const buffer = await ctx.decodeAudioData(ab);
+      await ctx.close().catch(() => {});
+      (window as any).__lastRecDecodedBuf = buffer;
+      (window as any).__lastRecDecodedId  = voice.id;
+      return true;
+    } catch (e) {
+      console.warn('[warmAudioCache] decodeAudioData échoué:', e);
+      return false;
+    }
+  },
+
+  /**
+   * Version async de resolveBlob — charge depuis OPFS/IDB si pas en mémoire.
+   * À utiliser dans mixProject et analyzeWaveform.
+   */
+  async resolveBlobAsync(dataUrl: string): Promise<Blob | null> {
+    if (!dataUrl) return null;
+    // Essai synchrone d'abord
+    const sync = this.resolveBlob(dataUrl);
+    if (sync) return sync;
+    if (dataUrl.startsWith('opfs:')) {
+      const key = dataUrl.slice(5);
+      try {
+        const db = getOfflineDB();
+        const blob = await db.getAudio(key);
+        if (blob && blob.size > 100) {
+          // Mettre en cache mémoire pour les prochains accès
+          if (!(window as any).__harmonyBlobs) (window as any).__harmonyBlobs = {};
+          (window as any).__harmonyBlobs[key] = blob;
+          return blob;
+        }
+      } catch (e) {
+        console.warn('[resolveBlobAsync] OPFS load error:', key, e);
+      }
+      return null;
+    }
+    if (dataUrl.startsWith('blob:')) {
+      // Chercher dans les blobs de pistes stockés en mémoire
+      const trackBlobs = Object.keys(window as any)
+        .filter(k => k.startsWith('__trackBlob_'))
+        .map(k => (window as any)[k] as Blob);
+      // Essayer fetch d'abord (rapide si l'URL est encore valide)
+      try { return await fetch(dataUrl).then(r => r.blob()); } catch {}
+      return null;
+    }
+    return null;
+  },
   getProjects(): TrackProject[] { try { const data = localStorage.getItem('cash_studio_projects'); return data ? JSON.parse(data) : []; } catch { return []; } },
-  saveProject(project: TrackProject): void { const projects = this.getProjects().filter(p => p.id !== project.id); projects.unshift(project); localStorage.setItem('cash_studio_projects', JSON.stringify(projects.slice(0, 20))); },
-  deleteProject(projectId: string): void { const projects = this.getProjects().filter(p => p.id !== projectId); localStorage.setItem('cash_studio_projects', JSON.stringify(projects)); },
+  saveProject(project: TrackProject): void {
+    // Nettoyer les dataUrls longs et blob: URLs avant localStorage (limite ~5MB)
+    // On conserve seulement les sentinelles opfs: et les métadonnées
+    const sanitize = (p: TrackProject): TrackProject => ({
+      ...p,
+      // mixedDataUrl blob: non sérialisable → retirer
+      mixedDataUrl: p.mixedDataUrl?.startsWith('blob:') ? undefined : p.mixedDataUrl,
+      tracks: p.tracks.map(t => ({
+        ...t,
+        // dataUrl data: long (>50KB) → retirer, le blob est dans OPFS/IDB
+        dataUrl: t.dataUrl && t.dataUrl.length > 50000 && !t.dataUrl.startsWith('opfs:')
+          ? undefined
+          : t.dataUrl,
+      })),
+    });
+    const projects = this.getProjects().filter(p => p.id !== project.id);
+    projects.unshift(sanitize(project));
+    try {
+      localStorage.setItem('cash_studio_projects', JSON.stringify(projects.slice(0, 20)));
+    } catch (e) {
+      // localStorage plein — essayer avec seulement le projet courant
+      try {
+        localStorage.setItem('cash_studio_projects', JSON.stringify([sanitize(project)]));
+      } catch {}
+    }
+  },
+  deleteProject(projectId: string): void { const projects = this.getProjects().filter(p => p.id !== projectId); try { localStorage.setItem('cash_studio_projects', JSON.stringify(projects)); } catch {} },
   getOrCreateProject(songId: string, songTitle: string): TrackProject {
     const existing = this.getProjects().find(p => p.songId === songId);
     if (existing) return existing;
@@ -1000,8 +1110,8 @@ export const studioService = {
       onProgress?.(`Décodage piste ${i + 1}/${activeTracks.length}…`, 10 + Math.round((i / activeTracks.length) * 25));
       await yield_();
       try {
-        const blob = this.resolveBlob(track.dataUrl!);
-        if (!blob) { console.warn(`[Studio] Blob introuvable pour "${track.trackLabel}"`); continue; }
+        const blob = await this.resolveBlobAsync(track.dataUrl!);
+        if (!blob) { console.warn(`[Studio] Blob introuvable pour "${track.trackLabel}" — ignoré`); continue; }
         const arrayBuffer = await blob.arrayBuffer();
         const buffer = await tmpCtx.decodeAudioData(arrayBuffer);
         decoded.push({ track, buffer });
@@ -1068,7 +1178,7 @@ export const studioService = {
     const bufferMap = new Map<string, AudioBuffer>();
     for (const take of takes) {
       if (!take.recording.dataUrl || bufferMap.has(take.recording.id)) continue;
-      try { const blob = this.dataUrlToBlob(take.recording.dataUrl); const ab = await blob.arrayBuffer(); const buf = await tmpCtx.decodeAudioData(ab); bufferMap.set(take.recording.id, buf); } catch (e) { console.warn(`[Comp] Erreur décodage prise ${take.recording.id}:`, e); }
+      try { const blob = await this.resolveBlobAsync(take.recording.dataUrl); if (!blob) { console.warn(`[Comp] Blob introuvable prise ${take.recording.id}`); continue; } const ab = await blob.arrayBuffer(); const buf = await tmpCtx.decodeAudioData(ab); bufferMap.set(take.recording.id, buf); } catch (e) { console.warn(`[Comp] Erreur décodage prise ${take.recording.id}:`, e); }
     }
     await tmpCtx.close();
     const totalDuration = allRegions.reduce((sum, r) => sum + (r.endSec - r.startSec), 0); const sampleRate = 44100;
@@ -1097,7 +1207,7 @@ export const studioService = {
     let srcBlob: Blob | null = null;
     const db = getOfflineDB();
     if (mainVoice.dataUrl && mainVoice.dataUrl.length > 1000) {
-      srcBlob = this.dataUrlToBlob(mainVoice.dataUrl);
+      srcBlob = await this.resolveBlobAsync(mainVoice.dataUrl);
     }
     if (!srcBlob || srcBlob.size < 1000) {
       try {
@@ -1225,27 +1335,38 @@ export const studioService = {
       // Convertir en dataUrl seulement si < 5MB — sinon sentinelle opfs: pour éviter crash iOS
       // Si blobToDataUrl échoue (quota mémoire iOS), fallback automatique vers sentinelle mémoire
       let dataUrl: string;
-      const toInMemorySentinel = () => {
-        const harmKey = `harmony_${Date.now()}_${layer.trackIndex}`;
+      const saveHarmonyBlob = async (b: Blob, trackIdx: number): Promise<string> => {
+        const harmKey = `harmony_${mainVoice.id}_t${trackIdx}`;
+        // 1. Garder en mémoire pour la session courante
         if (!(window as any).__harmonyBlobs) (window as any).__harmonyBlobs = {};
-        (window as any).__harmonyBlobs[harmKey] = blob;
+        (window as any).__harmonyBlobs[harmKey] = b;
+        // 2. Persister en OPFS/IDB pour les sessions futures
+        try {
+          await db.saveAudio(harmKey, b, { type: 'harmony', trackIndex: trackIdx, voiceId: mainVoice.id });
+        } catch (saveErr: any) {
+          const isQ = saveErr?.name === 'QuotaExceededError' || (saveErr?.message && saveErr.message.toLowerCase().includes('quota'));
+          if (!isQ) console.warn('[Harmony] Erreur persistance OPFS:', saveErr?.message);
+          // En cas de quota, le blob reste au moins en mémoire pour cette session
+        }
         return `opfs:${harmKey}`;
       };
       if (blob.size < 5 * 1024 * 1024) {
         try {
           dataUrl = await this.blobToDataUrl(blob);
+          // Persister aussi en OPFS pour les sessions futures
+          await saveHarmonyBlob(blob, layer.trackIndex);
         } catch (dataUrlErr: any) {
           const isQuota = dataUrlErr?.name === 'QuotaExceededError'
             || (dataUrlErr?.message && dataUrlErr.message.toLowerCase().includes('quota'));
           if (isQuota) {
             console.warn('[generateLayers] blobToDataUrl quota — fallback sentinelle mémoire:', dataUrlErr.message);
-            dataUrl = toInMemorySentinel();
+            dataUrl = await saveHarmonyBlob(blob, layer.trackIndex);
           } else {
             throw dataUrlErr;
           }
         }
       } else {
-        dataUrl = toInMemorySentinel();
+        dataUrl = await saveHarmonyBlob(blob, layer.trackIndex);
       }
       const safeTitle = (mainVoice.songTitle || 'song').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
       const fileName = `${safeTitle}_T${layer.trackIndex}_GEN_${Date.now()}.wav`;
@@ -1282,7 +1403,9 @@ export const studioService = {
         else if (harmBlobs && harmBlobs[key]) srcBlob = harmBlobs[key];
         else throw new Error('Blob FX introuvable en mémoire — réappliquer le FX');
       } else {
-        srcBlob = this.dataUrlToBlob(dataUrl);
+        const resolved = await this.resolveBlobAsync(dataUrl);
+        if (!resolved) throw new Error('Blob audio introuvable — réessayez');
+        srcBlob = resolved;
       }
       if (srcBlob.size > 40 * 1024 * 1024) throw new Error(`Fichier trop volumineux (${(srcBlob.size/1024/1024).toFixed(0)} MB)`);
       const ab = await srcBlob.arrayBuffer();

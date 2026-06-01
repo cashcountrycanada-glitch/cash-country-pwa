@@ -79,6 +79,7 @@ function getOPFSWorker(): Worker | null {
     const blob = new Blob([OPFS_WORKER_SRC], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
     _opfsWorker = new Worker(url);
+    URL.revokeObjectURL(url); // libérer immédiatement — le Worker a déjà chargé le script
     _opfsWorker.onmessage = (e) => {
       const { id, ok, error, ...rest } = e.data;
       const p = _opfsPending.get(id);

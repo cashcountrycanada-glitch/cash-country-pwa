@@ -812,7 +812,7 @@ export default function MasteringEngine({
         alert('Échec du transfert — Mac allumé et WiFi même réseau ?');
       }
     } catch (e: any) {
-      alert('Erreur : ' + e.message);
+      if (!e?.message?.toLowerCase().includes('quota')) alert('Erreur : ' + e.message);
     } finally {
       setSendingToMac(false);
     }
@@ -832,7 +832,7 @@ export default function MasteringEngine({
       await shareFileIOS(mp3Blob, fileName, `${songTitle} — Master MP3`);
       setExportedMp3(true);
     } catch (e: any) {
-      if ((e as any).name !== 'AbortError') alert('Erreur export MP3 : ' + e.message);
+      if ((e as any).name !== 'AbortError' && !e?.message?.toLowerCase().includes('quota')) alert('Erreur export MP3 : ' + e.message);
     } finally {
       setExportingMp3(false);
     }
@@ -852,7 +852,7 @@ export default function MasteringEngine({
       await shareFileIOS(mp4Blob, fileName, `${songTitle} — Master MP4`);
       setExportedMp4(true);
     } catch (e: any) {
-      if ((e as any).name !== 'AbortError') alert('Erreur export MP4 : ' + e.message);
+      if ((e as any).name !== 'AbortError' && !e?.message?.toLowerCase().includes('quota')) alert('Erreur export MP4 : ' + e.message);
     } finally {
       setExportingMp4(false);
     }
@@ -872,7 +872,7 @@ export default function MasteringEngine({
       await shareFileIOS(wavBlob, fileName, `${songTitle} — Master WAV 24-bit`);
       setExportedWav(true);
     } catch (e: any) {
-      if ((e as any).name !== 'AbortError') alert('Erreur export WAV : ' + e.message);
+      if ((e as any).name !== 'AbortError' && !e?.message?.toLowerCase().includes('quota')) alert('Erreur export WAV : ' + e.message);
     } finally {
       setExportingWav(false);
     }
@@ -891,7 +891,7 @@ export default function MasteringEngine({
       await shareFileIOS(wavBlob, `${safeTitle}_VOCAL_STEM.wav`, `${songTitle} — Stem Vocal`);
       setExportedVocal(true);
     } catch (e: any) {
-      if (e.name !== 'AbortError') alert('Erreur export vocal : ' + e.message);
+      if (e.name !== 'AbortError' && !e?.message?.toLowerCase().includes('quota')) alert('Erreur export vocal : ' + e.message);
     } finally { setExportingVocal(false); }
   };
 
@@ -905,7 +905,7 @@ export default function MasteringEngine({
       await shareFileIOS(instBlob, `${safeTitle}_INST_STEM.${ext}`, `${songTitle} — Stem Instrumental`);
       setExportedInst(true);
     } catch (e: any) {
-      if (e.name !== 'AbortError') alert('Erreur export instrumental : ' + e.message);
+      if (e.name !== 'AbortError' && !e?.message?.toLowerCase().includes('quota')) alert('Erreur export instrumental : ' + e.message);
     } finally { setExportingInst(false); }
   };
 
@@ -931,7 +931,7 @@ export default function MasteringEngine({
       }
       setExportedZip(true);
     } catch (e: any) {
-      if (e.name !== 'AbortError') alert('Erreur export stems : ' + e.message);
+      if (e.name !== 'AbortError' && !e?.message?.toLowerCase().includes('quota')) alert('Erreur export stems : ' + e.message);
     } finally { setExportingZip(false); }
   };
 

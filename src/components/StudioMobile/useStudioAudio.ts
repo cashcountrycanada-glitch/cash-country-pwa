@@ -30,12 +30,16 @@ function iosSupportsFlac(): boolean {
 function fixBlobType(blob: Blob): Blob {
   if (isIOS()) {
     const t = blob.type.toLowerCase();
-    // Si c'est du FLAC et qu'iOS le supporte nativement → garder tel quel
-    if ((t.includes('flac') || t === '') && iosSupportsFlac()) return blob;
-    // Sinon pour les types non supportés (WebM, OGG, etc.) → forcer audio/mp4
-    if (!t.includes('mp4') && !t.includes('mpeg') && !t.includes('aac') && !t.includes('mp3') && !t.includes('flac')) {
+    // iOS supporte nativement : mp4/aac, mp3, flac, WAV, aiff
+    if (t.includes('mp4') || t.includes('mpeg') || t.includes('aac') || 
+        t.includes('mp3') || t.includes('flac') || t.includes('wav') || 
+        t.includes('wave') || t.includes('aiff')) return blob;
+    // Types non supportés (WebM, OGG, Opus) → forcer audio/mp4
+    if (t.includes('webm') || t.includes('ogg') || t.includes('opus')) {
       return new Blob([blob], { type: 'audio/mp4' });
     }
+    // Type vide → laisser tel quel (iOS essaiera de détecter)
+    if (t === '') return blob;
   }
   return blob;
 }
@@ -338,7 +342,10 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     // 2. dataUrl en mémoire (ou sentinelle opfs:)
     if (!blob && rec.dataUrl) {
       try {
-        if (rec.dataUrl.startsWith('opfs:')) {
+        if (rec.dataUrl.startsWith('blob:')) {
+          // blob: URL directe (ex: mix)
+          blob = await fetch(rec.dataUrl).then(r => r.blob());
+        } else if (rec.dataUrl.startsWith('opfs:')) {
           // Sentinelle — chercher dans les caches mémoire (FX ou harmony)
           const key = rec.dataUrl.slice(5);
           const fxBlob = (window as any).__lastFxBlob as Blob | undefined;
@@ -372,8 +379,13 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       return;
     }
 
+    // Révoquer l'URL précédente si elle existe
+    const prevUrl = (playRef.current as any).__blobUrl as string | undefined;
+    if (prevUrl) { URL.revokeObjectURL(prevUrl); }
+
     const fixedBlob = fixBlobType(blob);
     const src = URL.createObjectURL(fixedBlob);
+    (playRef.current as any).__blobUrl = src;
     console.log(`[Play] URL créée: ${src} | type=${fixedBlob.type}`);
 
     playRef.current.src = src;
@@ -383,10 +395,17 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       console.log('[Play] Lecture demarree');
     } catch(e: any) {
       console.error('[Play] Erreur play():', e.name, e.message);
-      alert(`Erreur lecture: ${e.message}`);
+      URL.revokeObjectURL(src);
+      (playRef.current as any).__blobUrl = undefined;
+      if (e.name !== 'AbortError') alert(`Erreur lecture: ${e.message}`);
+      return;
     }
     setPlayingId(rec.id);
-    playRef.current.onended = () => { setPlayingId(null); URL.revokeObjectURL(src); };
+    playRef.current.onended = () => {
+      setPlayingId(null);
+      URL.revokeObjectURL(src);
+      if (playRef.current) (playRef.current as any).__blobUrl = undefined;
+    };
   }, [playingId]);
 
   const playMix = useCallback((dataUrl: string) => {
@@ -396,7 +415,13 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     setPlayingId('mix'); playRef.current.onended = () => setPlayingId(null);
   }, [playingId]);
 
-  const stopPlayback = useCallback(() => { playRef.current?.pause(); setPlayingId(null); }, []);
+  const stopPlayback = useCallback(() => {
+    if (!playRef.current) return;
+    playRef.current.pause();
+    const prevUrl = (playRef.current as any).__blobUrl as string | undefined;
+    if (prevUrl) { URL.revokeObjectURL(prevUrl); (playRef.current as any).__blobUrl = undefined; }
+    setPlayingId(null);
+  }, []);
 
   return {
     instUrl, vocalGuideUrl, vocalGuideVol, playingId,
