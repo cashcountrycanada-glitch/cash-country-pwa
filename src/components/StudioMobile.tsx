@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.150';
+const BUILD_VERSION = 'v7.6.151';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -415,25 +415,23 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       else setTakeSlot('A');
     }).catch(() => setTakeSlot('A'));
 
-    // Recharger les dataUrl depuis IndexedDB pour tous les tracks
-    // RÈGLE : les blob: URLs sont éphémères (mortes au redémarrage iOS) — toujours les recréer depuis IDB
-    // Les data: URLs base64 courtes (<100KB) sont conservées telles quelles
+    // Recharger les dataUrl depuis IDB pour tous les tracks au demarrage
+    // blob: URLs meurent au redemarrage iOS -> toujours recrer depuis IDB
+    // data: URLs base64 -> conserver (petites harmonies)
     if (proj.tracks.length > 0) {
       Promise.all(
         proj.tracks.map(async (track) => {
-          // Réutiliser seulement les data: URLs base64 valides (pas les blob: qui meurent au redémarrage)
-          const isLiveDataUrl = track.dataUrl && track.dataUrl.startsWith('data:') && track.dataUrl.length > 1000;
-          if (isLiveDataUrl) return track;
-          // Sinon charger depuis IndexedDB (clé principale)
+          // data: URL base64 valide -> conserver
+          if (track.dataUrl && track.dataUrl.startsWith('data:') && track.dataUrl.length > 1000) return track;
+          // blob: URL ou vide -> invalide, on nettoie et recharge depuis IDB
+          const cleanTrack = { ...track, dataUrl: undefined as any };
+          // Cle principale rec_
           try {
             const blob = await studioOfflineDB.getAudio(`rec_${track.id}`);
             if (blob && blob.size > 1000) {
-              // Utiliser URL.createObjectURL pour éviter l'OOM iOS sur les gros blobs
-              // (blobToDataUrl crée une string base64 de 40 MB en mémoire)
               const dataUrl = URL.createObjectURL(blob);
-              (window as any)[`__trackBlob_${track.id}`] = blob; // garder le blob vivant
-              addLog(`💾 Slot ${track.takeSlot || track.trackIndex} rechargé depuis IndexedDB (${(blob.size/1024).toFixed(0)} KB)`);
-              // Décoder en arrière-plan pour le cache harmonies (évite freeze iOS sur decodeAudioData)
+              (window as any)[`__trackBlob_${track.id}`] = blob;
+              addLog(`Slot ${track.takeSlot ?? track.trackIndex} recharge IDB (${(blob.size/1024).toFixed(0)} KB)`);
               if (track.trackIndex === 0) {
                 blob.arrayBuffer().then(ab => {
                   const tmp = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -444,27 +442,39 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
                   }).catch(() => { tmp.close(); });
                 }).catch(() => {});
               }
-              return { ...track, dataUrl };
+              return { ...cleanTrack, dataUrl };
             }
           } catch {}
-          // Dernier recours : clé backup
+          // Cle harmonie generee
+          if ((track as any).isGenerated && track.songId && track.trackIndex != null) {
+            try {
+              const harmKey = `harmony_${track.songId}_t${track.trackIndex}`;
+              const blob = await studioOfflineDB.getAudio(harmKey);
+              if (blob && blob.size > 1000) {
+                const dataUrl = URL.createObjectURL(blob);
+                (window as any)[`__trackBlob_${track.id}`] = blob;
+                (window as any).__harmonyBlobs = (window as any).__harmonyBlobs || {};
+                (window as any).__harmonyBlobs[harmKey] = blob;
+                addLog(`Harmonie t${track.trackIndex} rechargee IDB`);
+                return { ...cleanTrack, dataUrl };
+              }
+            } catch {}
+          }
+          // Cle backup
           try {
             const backup = await studioOfflineDB.getAudio(`backup_voice_${track.id}`);
             if (backup && backup.size > 1000) {
               const dataUrl = URL.createObjectURL(backup);
               (window as any)[`__trackBlob_${track.id}`] = backup;
-              addLog(`🛡 Slot ${track.takeSlot || track.trackIndex} restauré depuis BACKUP`);
-              return { ...track, dataUrl };
+              addLog(`Slot ${track.takeSlot ?? track.trackIndex} restaure BACKUP`);
+              return { ...cleanTrack, dataUrl };
             }
           } catch {}
-          addLog(`⚠️ Slot ${track.takeSlot || track.trackIndex} — audio introuvable (id: ${track.id.slice(-6)})`);
-          return track;
+          addLog(`Slot ${track.takeSlot ?? track.trackIndex} introuvable (${track.id.slice(-6)})`);
+          return cleanTrack;
         })
       ).then(tracksWithData => {
-        const hasAnyData = tracksWithData.some((t: any) => t.dataUrl);
-        if (hasAnyData) {
-          setProject(prev => prev ? { ...prev, tracks: tracksWithData } : prev);
-        }
+        setProject(prev => prev ? { ...prev, tracks: tracksWithData } : prev);
       }).catch(() => {});
     }
   }, [selected?.id]);
