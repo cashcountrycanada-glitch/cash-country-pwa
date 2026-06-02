@@ -136,13 +136,20 @@ function doubleTrack(mono, sr) {
 }
 
 // ── Gain/Pan ──────────────────────────────────────────────────────────────
-function applyGainPan(inL, inR, len, gain, pan) {
-  const p=Math.max(-1,Math.min(1,pan)), pr=(p+1)*Math.PI/4;
-  const pL=Math.cos(pr)*gain, pR=Math.sin(pr)*gain;
+// isDouble=true : préserver la stéréo L/R déjà construite par doubleTrack
+// (fusion mid+pan détruirait l'effet de largeur)
+function applyGainPan(inL, inR, len, gain, pan, isDouble) {
   const outL=new Float32Array(len), outR=new Float32Array(len);
-  for (let i=0;i<len;i++) {
-    const mid=((inL[i]||0)+(inR[i]||0))*0.5;
-    outL[i]=mid*pL; outR[i]=mid*pR;
+  if (isDouble) {
+    // Conserver les canaux distincts de doubleTrack — appliquer seulement le gain global
+    for (let i=0;i<len;i++) { outL[i]=(inL[i]||0)*gain; outR[i]=(inR[i]||0)*gain; }
+  } else {
+    const p=Math.max(-1,Math.min(1,pan)), pr=(p+1)*Math.PI/4;
+    const pL=Math.cos(pr)*gain, pR=Math.sin(pr)*gain;
+    for (let i=0;i<len;i++) {
+      const mid=((inL[i]||0)+(inR[i]||0))*0.5;
+      outL[i]=mid*pL; outR[i]=mid*pR;
+    }
   }
   return { outL, outR };
 }
@@ -186,7 +193,7 @@ self.onmessage = function(e) {
       }
       outLen=shifted.length; outL=shifted; outR=shifted;
     }
-    const gp=applyGainPan(outL,outR,outLen,gain,op==='double'?0:pan);
+    const gp=applyGainPan(outL,outR,outLen,gain,op==='double'?0:pan,op==='double');
     self.postMessage({id,type:'progress',label:'Encodage WAV...'});
     const wavBuf=audioToWav(gp.outL,gp.outR,sampleRate);
     self.postMessage({id,type:'done',wavBuf},[wavBuf]);

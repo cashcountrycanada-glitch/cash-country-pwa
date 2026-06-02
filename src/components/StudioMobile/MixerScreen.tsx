@@ -263,8 +263,9 @@ export default function MixerScreen({
       setBackupDone(true);
       setTimeout(() => setBackupDone(false), 4000);
     } catch (e: any) {
-      if (!e.message?.includes('cancel') && e.name !== 'AbortError')
+      if (!e.message?.includes('cancel') && e.name !== 'AbortError') {
         const isQ = e?.message?.toLowerCase().includes('quota'); if (!isQ) alert('Erreur backup : ' + e.message);
+      }
     }
   };
 

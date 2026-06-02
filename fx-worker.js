@@ -19,19 +19,29 @@ function applyEQ(data, gainDB, freq, sr) {
   return out;
 }
 
-function compress(data, threshold, ratio, attackMs, releaseMs, sr) {
+function compress(data, threshold, ratio, attackMs, releaseMs, sr, kneeDb) {
   if (ratio <= 1.0) return data;
   const out=new Float32Array(data.length);
   const aC=Math.exp(-1/Math.max(1,sr*attackMs/1000));
   const rC=Math.exp(-1/Math.max(1,sr*releaseMs/1000));
   const tL=Math.pow(10,threshold/20);
   const slope=1-1/ratio;
+  const knee=Math.max(0, kneeDb||6); // knee en dB, 0=hard knee
+  const kL=knee>0?Math.pow(10,(threshold-knee/2)/20):tL; // début du knee
+  const kH=knee>0?Math.pow(10,(threshold+knee/2)/20):tL; // fin du knee
   let env=0;
   for (let i=0;i<data.length;i++) {
     const lv=Math.abs(data[i]);
     env=lv>env?1-(1-env)*aC:env*rC;
     const e=Math.max(1e-6,env);
-    const gDB=e>tL?-slope*(20*Math.log10(e/tL)):0;
+    let gDB=0;
+    if (knee>0 && e>kL && e<kH) {
+      // Zone de knee : interpolation douce
+      const t=(20*Math.log10(e/tL)+knee/2)/knee;
+      gDB=-slope*(20*Math.log10(e/tL)+knee/2)*t*0.5;
+    } else if (e>=kH) {
+      gDB=-slope*(20*Math.log10(e/tL));
+    }
     out[i]=data[i]*Math.pow(10,gDB/20)*0.95;
   }
   return out;
@@ -99,14 +109,37 @@ function saturate(data, amount) {
 
 function reverb(dL, dR, type, mix, sr) {
   if (type==='none'||mix<=0) return {L:dL,R:dR};
-  const delayMs=type==='hall'?80:type==='plate'?40:25;
-  const decay=type==='hall'?0.55:type==='plate'?0.45:0.35;
-  const ds=Math.floor(delayMs*sr/1000), len=dL.length;
+  // Multi-tap comb + allpass pour un son plus diffus et stéréo
+  const len=dL.length;
+  const cfg = type==='hall'
+    ? { taps:[0.043,0.081,0.127,0.173], decay:0.52, apDelay:0.011 }
+    : type==='plate'
+    ? { taps:[0.030,0.059,0.089,0.127], decay:0.42, apDelay:0.008 }
+    : { taps:[0.020,0.037,0.059,0.083], decay:0.32, apDelay:0.006 };
+
   const rvL=new Float32Array(len), rvR=new Float32Array(len);
-  for (let i=ds;i<len;i++) {
-    rvL[i]=dL[i-ds]*decay+(i>ds*2?rvL[i-ds]*decay*0.5:0);
-    rvR[i]=dR[i-ds]*decay+(i>ds*2?rvR[i-ds]*decay*0.5:0);
+  // Multi-tap comb filter — L et R avec délais légèrement décalés (décorrélation stéréo)
+  for (let t=0;t<cfg.taps.length;t++) {
+    const dsL=Math.floor(cfg.taps[t]*sr);
+    const dsR=Math.floor(cfg.taps[t]*sr * (t%2===0 ? 1.013 : 0.988)); // ±1.3% décorrélation
+    const g=Math.pow(cfg.decay, t+1);
+    for (let i=0;i<len;i++) {
+      if (i>=dsL) rvL[i]+=dL[i-dsL]*g;
+      if (i>=dsR) rvR[i]+=dR[i-dsR]*g;
+    }
   }
+  // Allpass léger pour disperser les réflexions
+  const apD=Math.floor(cfg.apDelay*sr);
+  const apG=0.5;
+  for (let i=apD;i<len;i++) {
+    rvL[i]= rvL[i] + rvL[i-apD]*apG;
+    rvR[i]= rvR[i] + rvR[i-apD]*apG;
+  }
+  // Normaliser la reverb pour éviter les clips
+  let peak=0;
+  for (let i=0;i<len;i++) peak=Math.max(peak,Math.abs(rvL[i]),Math.abs(rvR[i]));
+  if (peak>1.0) { const n=1.0/peak; for(let i=0;i<len;i++){rvL[i]*=n;rvR[i]*=n;} }
+
   const outL=new Float32Array(len), outR=new Float32Array(len);
   for (let i=0;i<len;i++) { outL[i]=dL[i]*(1-mix)+rvL[i]*mix; outR[i]=dR[i]*(1-mix)+rvR[i]*mix; }
   return {L:outL,R:outR};
@@ -137,8 +170,8 @@ self.onmessage = function(e) {
     pL=applyEQ(pL,fx.midGain,'mid',sampleRate);   pR=applyEQ(pR,fx.midGain,'mid',sampleRate);
     pL=applyEQ(pL,fx.highGain,'high',sampleRate); pR=applyEQ(pR,fx.highGain,'high',sampleRate);
     self.postMessage({id,type:'progress',pct:30,label:'Compression...'});
-    pL=compress(pL,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate);
-    pR=compress(pR,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate);
+    pL=compress(pL,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate,fx.compKnee);
+    pR=compress(pR,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate,fx.compKnee);
     self.postMessage({id,type:'progress',pct:50,label:'Auto-Tune...'});
     const atStrength=fx.autotune||0;
     if (atStrength>0) {
