@@ -343,8 +343,22 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     if (!blob && rec.dataUrl) {
       try {
         if (rec.dataUrl.startsWith('blob:')) {
-          // blob: URL directe (ex: mix)
-          blob = await fetch(rec.dataUrl).then(r => r.blob());
+          // blob: URL — peut être morte après redémarrage iOS
+          // Essayer d'abord le blob vivant en mémoire (mis là par reloadRecordings)
+          const memBlob = (window as any)[`__trackBlob_${rec.id}`] as Blob | undefined;
+          if (memBlob && memBlob.size > 0) {
+            blob = memBlob;
+          } else {
+            // Tenter le fetch — si ça échoue (URL morte), on passera au fallback IDB dessous
+            try { blob = await fetch(rec.dataUrl).then(r => r.blob()); } catch {}
+          }
+          // Si toujours rien → retenter IDB avec clé backup
+          if (!blob || blob.size === 0) {
+            try {
+              const bk = await studioOfflineDB.getAudio(`backup_voice_${rec.id}`);
+              if (bk && bk.size > 0) { blob = bk; console.log(`[Play] blob: mort → backup IDB`); }
+            } catch {}
+          }
         } else if (rec.dataUrl.startsWith('opfs:')) {
           // Sentinelle — chercher dans les caches mémoire (FX ou harmony)
           const key = rec.dataUrl.slice(5);

@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.149';
+const BUILD_VERSION = 'v7.6.150';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -416,11 +416,14 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     }).catch(() => setTakeSlot('A'));
 
     // Recharger les dataUrl depuis IndexedDB pour tous les tracks
+    // RÈGLE : les blob: URLs sont éphémères (mortes au redémarrage iOS) — toujours les recréer depuis IDB
+    // Les data: URLs base64 courtes (<100KB) sont conservées telles quelles
     if (proj.tracks.length > 0) {
       Promise.all(
         proj.tracks.map(async (track) => {
-          // Essayer d'abord dataUrl en mémoire
-          if (track.dataUrl && track.dataUrl.length > 1000) return track;
+          // Réutiliser seulement les data: URLs base64 valides (pas les blob: qui meurent au redémarrage)
+          const isLiveDataUrl = track.dataUrl && track.dataUrl.startsWith('data:') && track.dataUrl.length > 1000;
+          if (isLiveDataUrl) return track;
           // Sinon charger depuis IndexedDB (clé principale)
           try {
             const blob = await studioOfflineDB.getAudio(`rec_${track.id}`);
