@@ -401,7 +401,7 @@ export default function MixerScreen({
     }
   };
 
-  const handleMasterize = () => {
+  const handleMasterize = async () => {
     if (!project?.mixedDataUrl) return;
     const url = project.mixedDataUrl;
     if (url.startsWith('blob:')) {
