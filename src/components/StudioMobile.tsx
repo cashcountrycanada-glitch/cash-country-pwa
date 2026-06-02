@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.147';
+const BUILD_VERSION = 'v7.6.149';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -407,6 +407,14 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     setProject(proj);
     setMixDone(!!proj.mixedDataUrl);
 
+    // Restaurer le slot actif depuis IDB (survit aux redémarrages iOS)
+    studioOfflineDB.init().then(() =>
+      studioOfflineDB.getState<string>(`takeSlot_${selected.id}`, 'A')
+    ).then(saved => {
+      if (saved && ['A','B','C'].includes(saved)) setTakeSlot(saved as 'A'|'B'|'C');
+      else setTakeSlot('A');
+    }).catch(() => setTakeSlot('A'));
+
     // Recharger les dataUrl depuis IndexedDB pour tous les tracks
     if (proj.tracks.length > 0) {
       Promise.all(
@@ -656,6 +664,12 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       setSlotGuideActive(null);
     }
     setTakeSlot(slot);
+    // Persister le slot actif en IDB — survit aux redémarrages et à la pression mémoire iOS
+    if (selected?.id) {
+      studioOfflineDB.init().then(() =>
+        studioOfflineDB.setState(`takeSlot_${selected.id}`, slot)
+      ).catch(() => {});
+    }
   };
 
   const handleMix = async (layerIds: string[] = []) => {

@@ -1083,8 +1083,10 @@ export const studioService = {
   async analyzeWaveform(dataUrl: string, points = 200): Promise<number[]> {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     try {
-      const blob = this.resolveBlob(dataUrl);
-      if (!blob) return []; // sentinelle sans blob en mémoire (session précédente)
+      // Chercher d'abord en mémoire (sync), puis IndexedDB si absent (session précédente)
+      let blob = this.resolveBlob(dataUrl);
+      if (!blob) blob = await this.resolveBlobAsync(dataUrl);
+      if (!blob) return []; // introuvable même en IDB
       const arrayBuffer = await blob.arrayBuffer();
       const audioBuffer = await ctx.decodeAudioData(arrayBuffer); const data = audioBuffer.getChannelData(0);
       const blockSize = Math.floor(data.length / points); const waveform: number[] = [];
