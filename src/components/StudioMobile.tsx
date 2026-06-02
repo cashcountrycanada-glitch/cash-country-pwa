@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.151';
+const BUILD_VERSION = 'v7.6.152';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -429,8 +429,11 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
           try {
             const blob = await studioOfflineDB.getAudio(`rec_${track.id}`);
             if (blob && blob.size > 1000) {
-              const dataUrl = URL.createObjectURL(blob);
-              (window as any)[`__trackBlob_${track.id}`] = blob;
+              // Forcer audio/mp4 sur iOS si type inconnu ou webm (non supporté)
+              const safeBlob = (blob.type === '' || blob.type.includes('webm') || blob.type.includes('ogg'))
+                ? new Blob([blob], { type: 'audio/mp4' }) : blob;
+              const dataUrl = URL.createObjectURL(safeBlob);
+              (window as any)[`__trackBlob_${track.id}`] = safeBlob;
               addLog(`Slot ${track.takeSlot ?? track.trackIndex} recharge IDB (${(blob.size/1024).toFixed(0)} KB)`);
               if (track.trackIndex === 0) {
                 blob.arrayBuffer().then(ab => {
@@ -451,10 +454,12 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
               const harmKey = `harmony_${track.songId}_t${track.trackIndex}`;
               const blob = await studioOfflineDB.getAudio(harmKey);
               if (blob && blob.size > 1000) {
-                const dataUrl = URL.createObjectURL(blob);
-                (window as any)[`__trackBlob_${track.id}`] = blob;
+                const safeHBlob = (blob.type === '' || blob.type.includes('webm') || blob.type.includes('ogg'))
+                  ? new Blob([blob], { type: 'audio/mp4' }) : blob;
+                const dataUrl = URL.createObjectURL(safeHBlob);
+                (window as any)[`__trackBlob_${track.id}`] = safeHBlob;
                 (window as any).__harmonyBlobs = (window as any).__harmonyBlobs || {};
-                (window as any).__harmonyBlobs[harmKey] = blob;
+                (window as any).__harmonyBlobs[harmKey] = safeHBlob;
                 addLog(`Harmonie t${track.trackIndex} rechargee IDB`);
                 return { ...cleanTrack, dataUrl };
               }

@@ -38,8 +38,8 @@ function fixBlobType(blob: Blob): Blob {
     if (t.includes('webm') || t.includes('ogg') || t.includes('opus')) {
       return new Blob([blob], { type: 'audio/mp4' });
     }
-    // Type vide → laisser tel quel (iOS essaiera de détecter)
-    if (t === '') return blob;
+    // Type vide → forcer audio/mp4 sur iOS (type inconnu = lecture impossible)
+    if (t === '') return new Blob([blob], { type: 'audio/mp4' });
   }
   return blob;
 }
