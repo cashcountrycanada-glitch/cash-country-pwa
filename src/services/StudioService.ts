@@ -625,8 +625,6 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
 
 
 export const studioService = {
-  _waveformQueue: Promise.resolve() as Promise<void>,
-  _waveformActive: 0,
   async saveRecordingLocallyAsync(rec: MobileRecording): Promise<void> {
     // Accepter les sentinelles opfs: (FX gros fichiers stockés dans OPFS directement)
     if (!rec.dataUrl || (rec.dataUrl.length < 100 && !rec.dataUrl.startsWith('opfs:'))) return;
@@ -1084,8 +1082,6 @@ export const studioService = {
   },
   // Queue pour analyzeWaveform — iOS limite les AudioContext simultanés à 6
   // On sérialise les analyses pour ne jamais en avoir plus de 2 en parallèle
-  _waveformQueue: Promise<void>,
-  _waveformActive: number,
 
   async analyzeWaveform(dataUrl: string, points = 200): Promise<number[]> {
     // Attendre si trop d'analyses en cours
