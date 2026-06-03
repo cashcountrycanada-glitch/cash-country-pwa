@@ -64,7 +64,18 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
     setApplyingFx(true); setApplyPct(0); setApplyDone(false);
     try {
       // Toujours appliquer depuis l'original — évite le double-application
-      const sourceDataUrl = (track as any).originalDataUrl || track.dataUrl;
+      // Pour les blob: URLs (rechargées depuis IDB), utiliser le blob en mémoire directement
+      let sourceDataUrl = (track as any).originalDataUrl || track.dataUrl;
+      // Si blob: URL potentiellement morte → essayer de la re-valider via __trackBlob_
+      if (sourceDataUrl.startsWith('blob:')) {
+        const memBlob = (window as any)[`__trackBlob_${track.id}`] as Blob | undefined;
+        if (memBlob && memBlob.size > 100) {
+          // Recréer une blob: URL fraîche depuis le blob en mémoire
+          const freshUrl = URL.createObjectURL(memBlob);
+          (window as any)[`__trackBlob_${track.id}`] = memBlob; // garder en vie
+          sourceDataUrl = freshUrl;
+        }
+      }
       const newDataUrl = await studioService.applyFxToTrack(
         sourceDataUrl, fx,
         (pct) => setApplyPct(pct),

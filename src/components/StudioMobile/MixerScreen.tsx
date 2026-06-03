@@ -51,6 +51,8 @@ interface Props {
   onProjectUpdate: (project: TrackProject) => void;
   instBlob:        Blob | null;
   takeSlot:        'A' | 'B' | 'C';
+  previewInstVol:  number;
+  onPreviewInstVol: (v: number) => void;
 }
 
 // Définition des harmonies avec info musicale
@@ -67,7 +69,7 @@ export default function MixerScreen({
   uploading, uploadDone, playRef,
   onBack, onGoSongs, onAddTrack, onPlay, onMute, onSolo, onVolume, onPan,
   onDelete, onMix, onPlayMix, onMasterize, onUploadMix, onGoComp,
-  onProjectUpdate, instBlob, takeSlot,
+  onProjectUpdate, instBlob, takeSlot, previewInstVol, onPreviewInstVol,
 }: Props) {
   const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
   const [backupDone, setBackupDone]           = useState(false);
@@ -405,10 +407,21 @@ export default function MixerScreen({
     if (!project?.mixedDataUrl) return;
     const url = project.mixedDataUrl;
     if (url.startsWith('blob:')) {
-      // blob: URL → récupérer le blob depuis __mixBlob en mémoire
-      const blob = (window as any).__mixBlob as Blob | undefined;
-      if (blob) onMasterize(blob, instBlob);
-      else fetch(url).then(r => r.blob()).then(b => onMasterize(b, instBlob)).catch(() => {});
+      // blob: URL → essayer __mixBlob mémoire d'abord
+      const memBlob = (window as any).__mixBlob as Blob | undefined;
+      if (memBlob && memBlob.size > 100) { onMasterize(memBlob, instBlob); return; }
+      // Tenter fetch (valide si même session)
+      try {
+        const b = await fetch(url).then(r => r.blob());
+        if (b && b.size > 100) { onMasterize(b, instBlob); return; }
+      } catch {}
+      // blob: URL morte — chercher le dernier mix dans IDB
+      try {
+        const db = (window as any).__studioOfflineDB || (await import('../../services/StudioOfflineDB')).studioOfflineDB;
+        const fromDb = await db.getAudio(`mix_${project.id}`).catch(() => null);
+        if (fromDb && fromDb.size > 100) { onMasterize(fromDb, instBlob); return; }
+      } catch {}
+      alert('Mix introuvable — veuillez relancer le mixage avant de masteriser.');
     } else {
       const resolved = await studioService.resolveBlobAsync(url);
       if (resolved) onMasterize(resolved, instBlob);
@@ -951,6 +964,22 @@ export default function MixerScreen({
         )}
 
         {/* ── Pistes ── */}
+        {/* Slider volume instrumental — visible pendant l'écoute d'une prise */}
+        {playingId && playingId !== 'mix' && (
+          <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-700">
+            <span className="text-[10px] text-zinc-400 font-black uppercase whitespace-nowrap">🎸 Inst</span>
+            <input
+              type="range" min={0} max={1} step={0.01}
+              value={previewInstVol}
+              onChange={e => onPreviewInstVol(parseFloat(e.target.value))}
+              className="flex-1 h-1 accent-orange-400"
+            />
+            <span className="text-[10px] text-orange-400 font-black w-8 text-right">
+              {Math.round(previewInstVol * 100)}%
+            </span>
+          </div>
+        )}
+
         {tracks.length > 0 && (
           <div className="space-y-2">
             {tracks.filter(t => !(t as any).isGenerated).length > 0 && (

@@ -278,7 +278,7 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
 
   // Gain makeup précis basé sur LUFS mesuré après compression
   const compressedLufs = analyzeLoudness(compressed);
-  const gainDb  = Math.min(s.targetLufs - compressedLufs, 14);
+  const gainDb  = Math.min(s.targetLufs - compressedLufs, 20); // 20dB max pour couvrir les enregistrements très doux
   const makeup  = offline2.createGain(); makeup.gain.value = Math.pow(10, gainDb / 20);
 
   // Limiteur transparent — très faible knee, ratio 20:1
@@ -342,10 +342,18 @@ async function audioBufferToBlob(
           onProgress(pct);
         }, 500);
       }
-      setTimeout(() => {
+      // Arrêter via onended du BufferSource — fiable même si setTimeout throttlé iOS
+      src.onended = () => {
         try { recorder.stop(); } catch {}
+        if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+      };
+      // Fallback setTimeout au cas où onended ne se déclenche pas
+      setTimeout(() => {
+        if (recorder.state !== 'inactive') {
+          try { recorder.stop(); } catch {}
+        }
         try { src.stop(); } catch {}
-      }, totalMs);
+      }, totalMs + 2000); // +2s de marge
     } catch (e: any) {
       if (progressTimer) clearInterval(progressTimer);
       ctx.close().catch(() => {});
@@ -763,7 +771,18 @@ export default function MasteringEngine({
     if (!vocalMastered || !isOnline) return;
     setSendingToMac(true);
     try {
-      const blob = await audioBufferToBlob(vocalMastered);
+      // Réutiliser le blob déjà encodé (vocalUrlRef) si disponible — évite un double encodage
+      let blob: Blob;
+      if (vocalUrlRef.current) {
+        try {
+          blob = await fetch(vocalUrlRef.current).then(r => r.blob());
+          if (blob.size < 1000) throw new Error('blob vide');
+        } catch {
+          blob = await audioBufferToBlob(vocalMastered);
+        }
+      } else {
+        blob = await audioBufferToBlob(vocalMastered);
+      }
       const safeTitle = songTitle.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
       const fileName  = `VOCAL_${safeTitle}_${Date.now()}.mp4`;
 

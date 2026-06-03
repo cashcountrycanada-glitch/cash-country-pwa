@@ -625,6 +625,8 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
 
 
 export const studioService = {
+  _waveformQueue: Promise.resolve() as Promise<void>,
+  _waveformActive: 0,
   async saveRecordingLocallyAsync(rec: MobileRecording): Promise<void> {
     // Accepter les sentinelles opfs: (FX gros fichiers stockés dans OPFS directement)
     if (!rec.dataUrl || (rec.dataUrl.length < 100 && !rec.dataUrl.startsWith('opfs:'))) return;
@@ -1080,7 +1082,18 @@ export const studioService = {
     const projectWithData = { ...project, tracks: [...project.tracks.filter(t => t.id !== track.id), track] };
     return projectWithData;
   },
+  // Queue pour analyzeWaveform — iOS limite les AudioContext simultanés à 6
+  // On sérialise les analyses pour ne jamais en avoir plus de 2 en parallèle
+  _waveformQueue: Promise<void>,
+  _waveformActive: number,
+
   async analyzeWaveform(dataUrl: string, points = 200): Promise<number[]> {
+    // Attendre si trop d'analyses en cours
+    const MAX_PARALLEL = 2;
+    while ((this as any)._waveformActive >= MAX_PARALLEL) {
+      await new Promise<void>(r => setTimeout(r, 80));
+    }
+    (this as any)._waveformActive = ((this as any)._waveformActive || 0) + 1;
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     try {
       // Chercher d'abord en mémoire (sync), puis IndexedDB si absent (session précédente)
@@ -1092,7 +1105,10 @@ export const studioService = {
       const blockSize = Math.floor(data.length / points); const waveform: number[] = [];
       for (let i = 0; i < points; i++) { let sum = 0; for (let j = 0; j < blockSize; j++) sum += Math.abs(data[i * blockSize + j] || 0); waveform.push(sum / blockSize); }
       const max = Math.max(...waveform, 0.001); return waveform.map(v => v / max);
-    } finally { ctx.close(); }
+    } finally {
+      ctx.close();
+      (this as any)._waveformActive = Math.max(0, ((this as any)._waveformActive || 1) - 1);
+    }
   },
   async mixProject(
     project: TrackProject,
@@ -1128,9 +1144,39 @@ export const studioService = {
     const shifted: { track: MobileRecording; buffer: AudioBuffer }[] = [];
     for (const { track, buffer } of decoded) {
       const semitones = track.pitchShift ?? 0;
-      if (semitones !== 0) {
-        try { const shiftedBuf = await pitchShiftBuffer(new (window.AudioContext || (window as any).webkitAudioContext)(), buffer, semitones); shifted.push({ track, buffer: shiftedBuf }); } catch { shifted.push({ track, buffer }); }
-      } else { shifted.push({ track, buffer }); }
+      // Les pistes isGenerated sont déjà pitch-shiftées à la génération — ne pas re-shifter
+      // Les pistes normales sans pitch → passer directement
+      if (semitones === 0 || (track as any).isGenerated) {
+        shifted.push({ track, buffer });
+      } else {
+        // Utiliser le harmony-worker (hors main thread) pour ne pas geler iOS
+        try {
+          const workerBlob = await new Promise<Blob>((resolve, reject) => {
+            let worker: Worker;
+            try { worker = new Worker('/harmony-worker.js'); } catch(e: any) { reject(e); return; }
+            const id = Date.now();
+            const chL = buffer.getChannelData(0).slice();
+            const chR = (buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0)).slice();
+            const timeout = setTimeout(() => { worker.terminate(); reject(new Error('pitch timeout')); }, 120000);
+            worker.onmessage = (e) => {
+              if (e.data.id !== id) return;
+              if (e.data.type === 'done') { clearTimeout(timeout); worker.terminate(); resolve(new Blob([e.data.wavBuf], { type: 'audio/wav' })); }
+              else if (e.data.type === 'error') { clearTimeout(timeout); worker.terminate(); reject(new Error(e.data.message)); }
+            };
+            worker.onerror = (e) => { clearTimeout(timeout); worker.terminate(); reject(new Error(e.message)); };
+            worker.postMessage({ id, op: 'pitch', channelL: chL, channelR: chR, semitones, gain: 1.0, pan: track.pan ?? 0, sampleRate: buffer.sampleRate }, [chL.buffer, chR.buffer]);
+          });
+          const tmpCtx2 = new (window.AudioContext || (window as any).webkitAudioContext)();
+          try {
+            const ab = await workerBlob.arrayBuffer();
+            const shiftedBuf = await tmpCtx2.decodeAudioData(ab);
+            shifted.push({ track, buffer: shiftedBuf });
+          } finally { tmpCtx2.close(); }
+        } catch (e) {
+          console.warn(`[Mix] Pitch worker échoué pour "${track.trackLabel}", skip shift:`, e);
+          shifted.push({ track, buffer });
+        }
+      }
       await yield_();
     }
 
@@ -1403,7 +1449,19 @@ export const studioService = {
         const harmBlobs = (window as any).__harmonyBlobs as Record<string,Blob> | undefined;
         if (fxBlob && fxKey === key) srcBlob = fxBlob;
         else if (harmBlobs && harmBlobs[key]) srcBlob = harmBlobs[key];
-        else throw new Error('Blob FX introuvable en mémoire — réappliquer le FX');
+        else {
+          // Mémoire vidée (navigation) → recharger depuis OPFS/IDB
+          const db = getOfflineDB();
+          const fromDb = await db.getAudio(key).catch(() => null);
+          if (fromDb && fromDb.size > 100) {
+            // Remettre en cache mémoire
+            if (!(window as any).__harmonyBlobs) (window as any).__harmonyBlobs = {};
+            (window as any).__harmonyBlobs[key] = fromDb;
+            srcBlob = fromDb;
+          } else {
+            throw new Error('Blob FX introuvable — réouvrez la chanson pour recharger les harmonies');
+          }
+        }
       } else {
         const resolved = await this.resolveBlobAsync(dataUrl);
         if (!resolved) throw new Error('Blob audio introuvable — réessayez');

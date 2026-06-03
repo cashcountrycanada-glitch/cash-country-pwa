@@ -71,6 +71,8 @@ interface AudioResult {
   playRef:          React.RefObject<HTMLAudioElement>;
   vocalVolRef:      React.RefObject<number>;
   setVocalGuideVol: (v: number) => void;
+  previewInstVol:   number;
+  setPreviewInstVol: (v: number) => void;
   playRecording:    (rec: MobileRecording) => Promise<void>;
   stopPlayback:     () => void;
   playMix:          (dataUrl: string) => void;
@@ -81,6 +83,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const [instUrl, setInstUrl] = useState<string | null>(null);
   const [vocalGuideUrl, setVocalGuideUrl] = useState<string | null>(null);
   const [vocalGuideVol, setVocalGuideVol] = useState(0.4);
+  const [previewInstVol, setPreviewInstVolState] = useState(0.25);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [instLoading, setInstLoading] = useState(false);
   const [vocalLoading, setVocalLoading] = useState(false);
@@ -172,6 +175,15 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       try { vocalGuideRef.current.volume = v; } catch {}
     }
     })(); // end async IIFE
+  }, []);
+
+  const setPreviewInstVol = useCallback((v: number) => {
+    setPreviewInstVolState(v);
+    // Appliquer immédiatement si l'instrumental est en mode aperçu
+    const instEl = instRef.current;
+    if (instEl && (instEl as any).__previewMode) {
+      try { instEl.volume = Math.max(0, Math.min(1, v)); } catch {}
+    }
   }, []);
 
   const updateVocalVol = useCallback((v: number) => {
@@ -414,11 +426,29 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       if (e.name !== 'AbortError') alert(`Erreur lecture: ${e.message}`);
       return;
     }
+
+    // Lancer l'instrumental en fond à volume réduit (aperçu contextuel)
+    const instEl = instRef.current;
+    if (instEl && instEl.src && instEl.readyState >= 1) {
+      try {
+        instEl.currentTime = 0;
+        instEl.volume = previewInstVol;
+        instEl.play().catch(() => {});
+        (instEl as any).__previewMode = true;
+      } catch {}
+    }
+
     setPlayingId(rec.id);
     playRef.current.onended = () => {
       setPlayingId(null);
       URL.revokeObjectURL(src);
       if (playRef.current) (playRef.current as any).__blobUrl = undefined;
+      // Arrêter l'instrumental quand la prise se termine
+      if (instEl && (instEl as any).__previewMode) {
+        instEl.pause();
+        instEl.volume = 1.0;
+        (instEl as any).__previewMode = false;
+      }
     };
   }, [playingId]);
 
@@ -434,6 +464,13 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     playRef.current.pause();
     const prevUrl = (playRef.current as any).__blobUrl as string | undefined;
     if (prevUrl) { URL.revokeObjectURL(prevUrl); (playRef.current as any).__blobUrl = undefined; }
+    // Arrêter l'instrumental si en mode aperçu
+    const instEl = instRef.current;
+    if (instEl && (instEl as any).__previewMode) {
+      instEl.pause();
+      instEl.volume = 1.0;
+      (instEl as any).__previewMode = false;
+    }
     setPlayingId(null);
   }, []);
 
@@ -443,6 +480,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     instCached, vocalCached,
     instRef, vocalGuideRef, playRef, vocalVolRef,
     setVocalGuideVol: updateVocalVol,
+    previewInstVol, setPreviewInstVol,
     playRecording, stopPlayback, playMix,
     getInstPlaybackTime,
   };
