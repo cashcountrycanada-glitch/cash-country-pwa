@@ -49,9 +49,9 @@ interface Props {
   onUploadMix:     () => void;
   onGoComp:        (takes: Take[]) => void;
   onProjectUpdate: (project: TrackProject) => void;
-  instBlob:        Blob | null;
-  takeSlot:        'A' | 'B' | 'C';
-  previewInstVol:  number;
+  instBlob:         Blob | null;
+  takeSlot:         'A' | 'B' | 'C';
+  previewInstVol:   number;
   onPreviewInstVol: (v: number) => void;
 }
 
@@ -964,12 +964,11 @@ export default function MixerScreen({
         )}
 
         {/* ── Pistes ── */}
-        {/* Slider volume instrumental — visible pendant l'écoute d'une prise */}
+        {/* Volume inst pendant ecoute prise */}
         {playingId && playingId !== 'mix' && (
           <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-700">
             <span className="text-[10px] text-zinc-400 font-black uppercase whitespace-nowrap">🎸 Inst</span>
-            <input
-              type="range" min={0} max={1} step={0.01}
+            <input type="range" min={0} max={1} step={0.01}
               value={previewInstVol}
               onChange={e => onPreviewInstVol(parseFloat(e.target.value))}
               className="flex-1 h-1 accent-orange-400"

@@ -83,7 +83,11 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const [instUrl, setInstUrl] = useState<string | null>(null);
   const [vocalGuideUrl, setVocalGuideUrl] = useState<string | null>(null);
   const [vocalGuideVol, setVocalGuideVol] = useState(0.4);
-  const [previewInstVol, setPreviewInstVolState] = useState(0.25);
+  const [previewInstVol, setPreviewInstVolRaw] = useState(0.3);
+  const setPreviewInstVol = useCallback((v: number) => {
+    setPreviewInstVolRaw(v);
+    try { if (previewInstRef.current) previewInstRef.current.volume = Math.max(0, Math.min(1, v)); } catch {}
+  }, []);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [instLoading, setInstLoading] = useState(false);
   const [vocalLoading, setVocalLoading] = useState(false);
@@ -93,6 +97,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const instRef = useRef(null as unknown as HTMLAudioElement);
   const vocalGuideRef = useRef(null as unknown as HTMLAudioElement);
   const playRef = useRef(null as unknown as HTMLAudioElement);
+  const previewInstRef = useRef(null as unknown as HTMLAudioElement);
   const vocalVolRef = useRef(0.4);
   const createdRef = useRef(false);
 
@@ -129,6 +134,8 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     (instRef as React.MutableRefObject<HTMLAudioElement>).current = makeAudioEl();
     (vocalGuideRef as React.MutableRefObject<HTMLAudioElement>).current = makeAudioEl();
     (playRef as React.MutableRefObject<HTMLAudioElement>).current = makeAudioEl();
+    // 4e élément dédié au preview inst — complètement séparé de instRef
+    (previewInstRef as React.MutableRefObject<HTMLAudioElement>).current = makeAudioEl();
   }
 
   useEffect(() => {
@@ -136,6 +143,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       instRef.current?.pause(); instRef.current?.remove();
       vocalGuideRef.current?.pause(); vocalGuideRef.current?.remove();
       playRef.current?.pause(); playRef.current?.remove();
+      previewInstRef.current?.pause(); previewInstRef.current?.remove();
     };
   }, []);
 
@@ -175,15 +183,6 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       try { vocalGuideRef.current.volume = v; } catch {}
     }
     })(); // end async IIFE
-  }, []);
-
-  const setPreviewInstVol = useCallback((v: number) => {
-    setPreviewInstVolState(v);
-    // Appliquer immédiatement si l'instrumental est en mode aperçu
-    const instEl = instRef.current;
-    if (instEl && (instEl as any).__previewMode) {
-      try { instEl.volume = Math.max(0, Math.min(1, v)); } catch {}
-    }
   }, []);
 
   const updateVocalVol = useCallback((v: number) => {
@@ -412,30 +411,39 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     const fixedBlob = fixBlobType(blob);
     const src = URL.createObjectURL(fixedBlob);
     (playRef.current as any).__blobUrl = src;
-    console.log(`[Play] URL créée: ${src} | type=${fixedBlob.type}`);
+
+    // Charger l'inst dans le 4e élément dédié (jamais le même que instRef)
+    const pInst = previewInstRef.current;
+    if (previewInstVol > 0 && instUrl && pInst) {
+      pInst.src = instUrl;
+      pInst.volume = previewInstVol;
+      pInst.currentTime = 0;
+      pInst.load();
+    }
 
     playRef.current.src = src;
     playRef.current.load();
     try {
       await playRef.current.play();
-      console.log('[Play] Lecture demarree');
+      // Demarrer l'inst preview — canplay guard pour eviter NotSupportedError sur iOS
+      if (previewInstVol > 0 && instUrl && pInst && pInst.src) {
+        if (pInst.readyState >= 3) {
+          pInst.play().catch(() => {});
+        } else {
+          const playWhenReady = () => {
+            if ((playRef.current as any).__blobUrl === src) {
+              pInst.play().catch(() => {});
+            }
+          };
+          pInst.addEventListener('canplay', playWhenReady, { once: true });
+          setTimeout(() => pInst.removeEventListener('canplay', playWhenReady), 5000);
+        }
+      }
     } catch(e: any) {
-      console.error('[Play] Erreur play():', e.name, e.message);
       URL.revokeObjectURL(src);
       (playRef.current as any).__blobUrl = undefined;
       if (e.name !== 'AbortError') alert(`Erreur lecture: ${e.message}`);
       return;
-    }
-
-    // Lancer l'instrumental en fond à volume réduit (aperçu contextuel)
-    const instEl = instRef.current;
-    if (instEl && instEl.src && instEl.readyState >= 1) {
-      try {
-        instEl.currentTime = 0;
-        instEl.volume = previewInstVol;
-        instEl.play().catch(() => {});
-        (instEl as any).__previewMode = true;
-      } catch {}
     }
 
     setPlayingId(rec.id);
@@ -443,14 +451,9 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       setPlayingId(null);
       URL.revokeObjectURL(src);
       if (playRef.current) (playRef.current as any).__blobUrl = undefined;
-      // Arrêter l'instrumental quand la prise se termine
-      if (instEl && (instEl as any).__previewMode) {
-        instEl.pause();
-        instEl.volume = 1.0;
-        (instEl as any).__previewMode = false;
-      }
+      try { previewInstRef.current?.pause(); } catch {}
     };
-  }, [playingId]);
+  }, [playingId, previewInstVol, instUrl]);
 
   const playMix = useCallback((dataUrl: string) => {
     if (!playRef.current) return;
@@ -462,15 +465,9 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const stopPlayback = useCallback(() => {
     if (!playRef.current) return;
     playRef.current.pause();
+    try { previewInstRef.current?.pause(); } catch {}
     const prevUrl = (playRef.current as any).__blobUrl as string | undefined;
     if (prevUrl) { URL.revokeObjectURL(prevUrl); (playRef.current as any).__blobUrl = undefined; }
-    // Arrêter l'instrumental si en mode aperçu
-    const instEl = instRef.current;
-    if (instEl && (instEl as any).__previewMode) {
-      instEl.pause();
-      instEl.volume = 1.0;
-      (instEl as any).__previewMode = false;
-    }
     setPlayingId(null);
   }, []);
 
