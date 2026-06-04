@@ -83,7 +83,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const [instUrl, setInstUrl] = useState<string | null>(null);
   const [vocalGuideUrl, setVocalGuideUrl] = useState<string | null>(null);
   const [vocalGuideVol, setVocalGuideVol] = useState(0.4);
-  const [previewInstVol, setPreviewInstVolRaw] = useState(0.3);
+  const [previewInstVol, setPreviewInstVolRaw] = useState(0.2);
   const setPreviewInstVol = useCallback((v: number) => {
     setPreviewInstVolRaw(v);
     try { if (previewInstRef.current) previewInstRef.current.volume = Math.max(0, Math.min(1, v)); } catch {}
@@ -337,7 +337,12 @@ export function useStudioAudio(selected: Song | null): AudioResult {
 
   const playRecording = useCallback(async (rec: MobileRecording) => {
     if (!playRef.current) return;
-    if (playingId === rec.id) { playRef.current.pause(); setPlayingId(null); return; }
+    if (playingId === rec.id) {
+      playRef.current.pause();
+      try { const p = previewInstRef.current; if (p) { p.pause(); p.currentTime = 0; } } catch {}
+      setPlayingId(null);
+      return;
+    }
 
     // ── Chercher le blob audio ────────────────────────────────────────────
     let blob: Blob | null = null;
@@ -412,36 +417,43 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     const src = URL.createObjectURL(fixedBlob);
     (playRef.current as any).__blobUrl = src;
 
-    // Charger l'inst dans le 4e élément dédié (jamais le même que instRef)
     const pInst = previewInstRef.current;
-    if (previewInstVol > 0 && instUrl && pInst) {
-      pInst.src = instUrl;
-      pInst.volume = previewInstVol;
-      pInst.currentTime = 0;
-      pInst.load();
-    }
+    const useInst = previewInstVol > 0 && !!instUrl && !!pInst;
 
     playRef.current.src = src;
     playRef.current.load();
+
+    // Preparer pInst en parallele — recharger seulement si chanson differente
+    if (useInst && pInst) {
+      if (pInst.src !== instUrl) { pInst.src = instUrl!; pInst.load(); }
+      pInst.volume = previewInstVol;
+      pInst.currentTime = 0;
+    }
+
+    // Attendre que les deux soient prets — synchronisation
+    const waitReady = (el: HTMLAudioElement): Promise<void> =>
+      el.readyState >= 3
+        ? Promise.resolve()
+        : new Promise(res => {
+            const h = () => { el.removeEventListener('canplay', h); res(); };
+            el.addEventListener('canplay', h, { once: true });
+            setTimeout(res, 4000);
+          });
+
     try {
-      await playRef.current.play();
-      // Demarrer l'inst preview — canplay guard pour eviter NotSupportedError sur iOS
-      if (previewInstVol > 0 && instUrl && pInst && pInst.src) {
-        if (pInst.readyState >= 3) {
-          pInst.play().catch(() => {});
-        } else {
-          const playWhenReady = () => {
-            if ((playRef.current as any).__blobUrl === src) {
-              pInst.play().catch(() => {});
-            }
-          };
-          pInst.addEventListener('canplay', playWhenReady, { once: true });
-          setTimeout(() => pInst.removeEventListener('canplay', playWhenReady), 5000);
-        }
+      if (useInst && pInst) {
+        await Promise.all([waitReady(playRef.current), waitReady(pInst)]);
+        pInst.currentTime = 0;
+        const p1 = playRef.current.play();
+        pInst.play().catch(() => {});
+        await p1;
+      } else {
+        await playRef.current.play();
       }
     } catch(e: any) {
       URL.revokeObjectURL(src);
       (playRef.current as any).__blobUrl = undefined;
+      if (pInst) { try { pInst.pause(); pInst.currentTime = 0; } catch {} }
       if (e.name !== 'AbortError') alert(`Erreur lecture: ${e.message}`);
       return;
     }
@@ -451,7 +463,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       setPlayingId(null);
       URL.revokeObjectURL(src);
       if (playRef.current) (playRef.current as any).__blobUrl = undefined;
-      try { previewInstRef.current?.pause(); } catch {}
+      try { if (pInst) { pInst.pause(); pInst.currentTime = 0; } } catch {}
     };
   }, [playingId, previewInstVol, instUrl]);
 
