@@ -833,11 +833,18 @@ export const studioService = {
       log(`Micro: ${s.sampleRate ?? '?'}Hz | echo=${s.echoCancellation} | noise=${s.noiseSuppression}`);
     }
 
-    // Chaîne SÈCHE : source → analyser uniquement. Aucun effet.
+    // Chaîne SÈCHE : source → inputGain → analyser uniquement. Aucun effet.
     const source = audioContext.createMediaStreamSource(stream);
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 256;
-    source.connect(analyser);
+
+    // GainNode d'entrée — amplifie le signal brut avant capture
+    // gainL/gainR de la config (défaut 1.0 = pas d'amplification)
+    // L'utilisateur peut passer gainL > 1.0 pour compenser une carte son qui envoie bas
+    const inputGain = audioContext.createGain();
+    inputGain.gain.value = Math.max(config.gainL ?? 1.0, config.gainR ?? 1.0);
+    source.connect(inputGain);
+    inputGain.connect(analyser);
 
     // MonitorGain à 0, non connecté à destination par défaut.
     // toggleMonitoring() dans useStudioRecorder connecte/déconnecte.

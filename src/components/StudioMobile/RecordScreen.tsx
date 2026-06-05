@@ -22,6 +22,7 @@ interface Props {
   selected: Song; project: TrackProject | null; currentPreset: TrackPreset; reverb: ReverbType;
   isRecording: boolean; isSaving: boolean; duration: number; analyser: AnalyserNode | null;
   vuLevel: number; monitoring: boolean; permError: boolean; httpsUrl: string;
+  inputGain: number; onInputGainChange: (v: number) => void;
   instUrl: string | null; instLoading: boolean; instCached: boolean;
   vocalGuideUrl: string | null; vocalLoading: boolean; vocalCached: boolean;
   vocalGuideVol: number; showLyrics: boolean;
@@ -125,7 +126,8 @@ function deviceStyle(dev: AudioDevice, isSelected: boolean, isAuto: boolean, aut
 
 export default function RecordScreen({
   selected, project, currentPreset, reverb, isRecording, isSaving, duration, analyser, vuLevel,
-  monitoring, permError, httpsUrl, instUrl, instLoading, instCached, vocalGuideUrl, vocalLoading, vocalCached,
+  monitoring, permError, httpsUrl, inputGain, onInputGainChange,
+  instUrl, instLoading, instCached, vocalGuideUrl, vocalLoading, vocalCached,
   vocalGuideVol, showLyrics, instRef, vocalGuideRef, getInstPlaybackTime, onRefreshSong,
   takeSlot, onTakeSlotChange, slotTakes, onSlotGuide, slotGuideActive,
   onBack, onGoMixer, onPresetChange, onReverbChange,
@@ -513,6 +515,18 @@ export default function RecordScreen({
             <div className="flex items-center justify-between mb-2">
               <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest">Niveau</p>
               {isRecording && <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /><span className="text-[9px] font-black text-red-400 uppercase tracking-widest">REC</span></div>}
+            </div>
+            {/* Gain micro entrée */}
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[9px] text-zinc-500 font-black uppercase tracking-widest whitespace-nowrap">🎙 Gain</span>
+              <input type="range" min={0.5} max={3.0} step={0.1}
+                value={inputGain}
+                onChange={e => onInputGainChange(parseFloat(e.target.value))}
+                className="flex-1 h-1 accent-red-500"
+              />
+              <span className="text-[9px] text-red-400 font-black w-8 text-right">
+                {inputGain >= 1.0 ? `+${((inputGain-1)*100).toFixed(0)}%` : `-${((1-inputGain)*100).toFixed(0)}%`}
+              </span>
             </div>
             <VUMeter analyser={analyser} vuLevel={vuLevel} active={isRecording} />
           </div>

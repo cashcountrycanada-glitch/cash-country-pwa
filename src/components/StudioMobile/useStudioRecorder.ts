@@ -121,6 +121,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
   useEffect(() => { optsRef.current = opts; }); // sync every render, no deps
   const [isRecording, setIsRecording]   = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
+  const [inputGain, setInputGain]       = useState(1.5);
   const [duration, setDuration]         = useState(0);
   const [analyser, setAnalyser]         = useState<AnalyserNode | null>(null);
   const [vuLevel, setVuLevel]           = useState<number>(0);
@@ -363,7 +364,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       // 3. Capture DRY
       optsRef.current.onLog?.(`🎤 Capture DRY → "${deviceLabel}"`);
       const result = await studioService.startRecordingPro({
-        reverb: 'none' as any, saturation: 0, compression: false, gainL: 1.0, gainR: 1.0,
+        reverb: 'none' as any, saturation: 0, compression: false, gainL: inputGain, gainR: inputGain,
         deviceId: effectiveDeviceId,
       }, (level) => setVuLevel(level), optsRef.current.onLog);
 
@@ -710,6 +711,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
 
   return {
     isRecording, isSaving, duration, analyser, vuLevel, monitoring, permError,
+    inputGain, setInputGain,
     audioDevices, selectedDevice, setSelectedDevice, refreshDevices,
     punchIn, punchOut, setPunchIn, setPunchOut,
     setPermError, toggleMonitoring, preWarmMic, startRecording, stopRecording,
