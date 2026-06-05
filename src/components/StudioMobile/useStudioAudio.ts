@@ -83,7 +83,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const [instUrl, setInstUrl] = useState<string | null>(null);
   const [vocalGuideUrl, setVocalGuideUrl] = useState<string | null>(null);
   const [vocalGuideVol, setVocalGuideVol] = useState(0.4);
-  const [previewInstVol, setPreviewInstVolRaw] = useState(0.2);
+  const [previewInstVol, setPreviewInstVolRaw] = useState(0.1);
   const setPreviewInstVol = useCallback((v: number) => {
     setPreviewInstVolRaw(v);
     try { if (previewInstRef.current) previewInstRef.current.volume = Math.max(0, Math.min(1, v)); } catch {}
@@ -335,6 +335,20 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     return () => { cancelled = true; };
   }, [selected?.id]);
 
+  // Précharger l'inst dans previewInstRef dès que instUrl change
+  // → quand on appuie Play, l'inst est déjà bufferisé = sync immédiate
+  useEffect(() => {
+    const pInst = previewInstRef.current;
+    if (!pInst) return;
+    if (instUrl) {
+      pInst.src = instUrl;
+      pInst.volume = 0; // silencieux pendant le préchargement
+      pInst.load();
+    } else {
+      pInst.src = '';
+    }
+  }, [instUrl]);
+
   const playRecording = useCallback(async (rec: MobileRecording) => {
     if (!playRef.current) return;
     if (playingId === rec.id) {
@@ -420,30 +434,35 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     const pInst = previewInstRef.current;
     const useInst = previewInstVol > 0 && !!instUrl && !!pInst;
 
+    // Si pInst n'a pas encore la bonne URL, la charger maintenant
+    // (normalement déjà fait par preloadPreviewInst au changement de chanson)
+    if (useInst && pInst && pInst.src !== instUrl) {
+      pInst.src = instUrl!;
+      pInst.load();
+    }
+
     playRef.current.src = src;
     playRef.current.load();
 
-    // Preparer pInst en parallele — recharger seulement si chanson differente
-    if (useInst && pInst) {
-      if (pInst.src !== instUrl) { pInst.src = instUrl!; pInst.load(); }
-      pInst.volume = previewInstVol;
-      pInst.currentTime = 0;
-    }
-
-    // Attendre que les deux soient prets — synchronisation
-    const waitReady = (el: HTMLAudioElement): Promise<void> =>
+    // Attendre canplay de la VOIX seulement — l'inst doit déjà être prêt (préchargé)
+    // Si l'inst n'est pas prêt dans 500ms, on joue quand même sans inst plutôt que d'attendre
+    const waitVoice = (el: HTMLAudioElement): Promise<void> =>
       el.readyState >= 3
         ? Promise.resolve()
         : new Promise(res => {
             const h = () => { el.removeEventListener('canplay', h); res(); };
             el.addEventListener('canplay', h, { once: true });
-            setTimeout(res, 4000);
+            setTimeout(res, 5000);
           });
 
     try {
+      await waitVoice(playRef.current);
+
       if (useInst && pInst) {
-        await Promise.all([waitReady(playRef.current), waitReady(pInst)]);
+        pInst.volume = previewInstVol;
         pInst.currentTime = 0;
+        playRef.current.volume = 1.0; // voix toujours au maximum
+        // Demarrer les deux ensemble
         const p1 = playRef.current.play();
         pInst.play().catch(() => {});
         await p1;
