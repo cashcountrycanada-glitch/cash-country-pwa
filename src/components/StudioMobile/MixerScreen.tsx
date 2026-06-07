@@ -300,7 +300,7 @@ export default function MixerScreen({
   const generateOne = async (harmonyDef: typeof HARMONY_DEFS[0]) => {
     if (!mainVoice || generatingIndex !== null) return;
     // Backup automatique silencieux avant génération
-    autoBackupToIndexedDB(mainVoice);
+    void autoBackupToIndexedDB(mainVoice).catch(() => {});
     setGeneratingIndex(harmonyDef.trackIndex);
     setGeneratePct(0);
     setGenerateLabel(`${harmonyDef.emoji} ${harmonyDef.label}...`);
@@ -314,7 +314,8 @@ export default function MixerScreen({
         { ...project, tracks: [mainVoice] },
         (label, pct) => {
           setGenerateLabel(label);
-          setGeneratePct(pct > 0 ? Math.round(pct) : generatePct); // ignorer pct=-1 (progress Worker)
+          if (pct >= 0) setGeneratePct(Math.round(pct));
+          // pct=-1 = progress Worker sans changement de % — on ignore
         },
         { realPartition: (selected as any).realPartition, key: (selected as any).key },
         harmonyDef.trackIndex, // ← générer seulement cette harmonie
@@ -358,7 +359,7 @@ export default function MixerScreen({
   const generateAll = async () => {
     if (!mainVoice || generatingIndex !== null) return;
     // Backup automatique silencieux avant génération
-    if (mainVoice) autoBackupToIndexedDB(mainVoice);
+    if (mainVoice) void autoBackupToIndexedDB(mainVoice).catch(() => {});
     setGeneratingIndex(-1);
     setGeneratePct(0);
     let currentProject = { ...project };
