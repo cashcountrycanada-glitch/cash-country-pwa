@@ -40,7 +40,9 @@ function phaseVocoderShift(input, semitones) {
   const win=new Float32Array(N);
   for (let i=0;i<N;i++) win[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));
   const numFrames=Math.ceil((input.length-N)/hop)+1;
-  const outLen=Math.ceil(numFrames*hopS)+N;
+  const targetLen=Math.floor(input.length/pitchFactor);
+  // Garantir outLen >= targetLen pour éviter le buffer underrun (critique à -12ST)
+  const outLen=Math.max(Math.ceil(numFrames*hopS)+N, targetLen+N);
   const output=new Float32Array(outLen), normOut=new Float32Array(outLen);
   const lastPhaseIn=new Float32Array(N/2+1), phaseOut=new Float32Array(N/2+1);
   for (let frame=0;frame<numFrames;frame++) {
@@ -65,7 +67,6 @@ function phaseVocoderShift(input, semitones) {
       output[outOff+i]+=outRe[i]*win[i]; normOut[outOff+i]+=win[i]*win[i];
     }
   }
-  const targetLen=Math.floor(input.length/pitchFactor);
   const result=new Float32Array(targetLen);
   for (let i=0;i<targetLen;i++) result[i]=normOut[i]>0.001?output[i]/normOut[i]:0;
   return result;
@@ -74,10 +75,18 @@ function phaseVocoderShift(input, semitones) {
 // ── Correction formants ───────────────────────────────────────────────────
 function applyFormantShift(shifted, semitones) {
   if (Math.abs(semitones) < 5) return shifted;
+  // Pour les voix graves (-10ST et moins): pas de correction formant
+  // La voix de géant naturelle sonne mieux sans réhaussement des formants
+  if (semitones <= -10) return shifted;
   const N=1024, hop=256;
   const win=new Float32Array(N);
   for (let i=0;i<N;i++) win[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));
-  const formantFactor=Math.pow(Math.pow(2,semitones/12),-0.65);
+  // Atténuer la correction pour les semitones négatifs (shifts vers le bas)
+  // pour éviter le son robotique/nasillard
+  const rawFactor = Math.pow(Math.pow(2,semitones/12),-0.65);
+  const formantFactor = semitones < 0
+    ? 1 + (rawFactor - 1) * 0.3  // 30% de la correction pour les graves
+    : rawFactor;                   // 100% pour les aigus (normal)
   const outLen=shifted.length;
   const output=new Float32Array(outLen), norm=new Float32Array(outLen);
   const numFrames=Math.ceil((outLen-N)/hop)+1;
