@@ -53,6 +53,7 @@ interface Props {
   takeSlot:         'A' | 'B' | 'C';
   previewInstVol:   number;
   onPreviewInstVol: (v: number) => void;
+  onInstOffset:     (ms: number) => void;
 }
 
 // Définition des harmonies avec info musicale
@@ -69,7 +70,7 @@ export default function MixerScreen({
   uploading, uploadDone, playRef,
   onBack, onGoSongs, onAddTrack, onPlay, onMute, onSolo, onVolume, onPan,
   onDelete, onMix, onPlayMix, onMasterize, onUploadMix, onGoComp,
-  onProjectUpdate, instBlob, takeSlot, previewInstVol, onPreviewInstVol,
+  onProjectUpdate, instBlob, takeSlot, previewInstVol, onPreviewInstVol, onInstOffset,
 }: Props) {
   const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
   const [backupDone, setBackupDone]           = useState(false);
@@ -964,18 +965,39 @@ export default function MixerScreen({
         )}
 
         {/* ── Pistes ── */}
-        {/* Volume inst pendant ecoute prise */}
+        {/* Volume inst + offset sync pendant ecoute prise */}
         {playingId && playingId !== 'mix' && (
-          <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-700">
-            <span className="text-[10px] text-zinc-400 font-black uppercase whitespace-nowrap">🎸 Inst</span>
-            <input type="range" min={0} max={1} step={0.01}
-              value={previewInstVol}
-              onChange={e => onPreviewInstVol(parseFloat(e.target.value))}
-              className="flex-1 h-1 accent-orange-400"
-            />
-            <span className="text-[10px] text-orange-400 font-black w-8 text-right">
-              {Math.round(previewInstVol * 100)}%
-            </span>
+          <div className="space-y-1.5 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-700">
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] text-zinc-400 font-black uppercase whitespace-nowrap">🎸 Inst</span>
+              <input type="range" min={0} max={1} step={0.01}
+                value={previewInstVol}
+                onChange={e => onPreviewInstVol(parseFloat(e.target.value))}
+                className="flex-1 h-1 accent-orange-400"
+              />
+              <span className="text-[10px] text-orange-400 font-black w-8 text-right">
+                {Math.round(previewInstVol * 100)}%
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-zinc-500 font-black uppercase whitespace-nowrap">⏱ Sync</span>
+              <button onClick={() => onInstOffset(-200)}
+                className="flex-1 py-1 rounded-lg bg-zinc-800 text-zinc-300 text-[10px] font-black active:bg-zinc-700">
+                ◀◀ -200ms
+              </button>
+              <button onClick={() => onInstOffset(-50)}
+                className="flex-1 py-1 rounded-lg bg-zinc-800 text-zinc-300 text-[10px] font-black active:bg-zinc-700">
+                ◀ -50ms
+              </button>
+              <button onClick={() => onInstOffset(50)}
+                className="flex-1 py-1 rounded-lg bg-zinc-800 text-zinc-300 text-[10px] font-black active:bg-zinc-700">
+                +50ms ▶
+              </button>
+              <button onClick={() => onInstOffset(200)}
+                className="flex-1 py-1 rounded-lg bg-zinc-800 text-zinc-300 text-[10px] font-black active:bg-zinc-700">
+                +200ms ▶▶
+              </button>
+            </div>
           </div>
         )}
 

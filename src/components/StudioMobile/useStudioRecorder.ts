@@ -121,7 +121,13 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
   useEffect(() => { optsRef.current = opts; }); // sync every render, no deps
   const [isRecording, setIsRecording]   = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
-  const [inputGain, setInputGain]       = useState(1.5);
+  const [inputGain, setInputGainRaw]    = useState(() => {
+    try { const v = parseFloat(localStorage.getItem('studio_inputGain') || '2.5'); return isNaN(v) ? 2.5 : Math.max(0.5, Math.min(3.0, v)); } catch { return 2.5; }
+  });
+  const setInputGain = (v: number) => {
+    setInputGainRaw(v);
+    try { localStorage.setItem('studio_inputGain', String(v)); } catch {}
+  };
   const [duration, setDuration]         = useState(0);
   const [analyser, setAnalyser]         = useState<AnalyserNode | null>(null);
   const [vuLevel, setVuLevel]           = useState<number>(0);

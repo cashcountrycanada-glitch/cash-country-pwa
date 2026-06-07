@@ -839,17 +839,19 @@ export const studioService = {
     analyser.fftSize = 256;
 
     // GainNode d'entrée — amplifie le signal brut avant capture
-    // gainL/gainR de la config (défaut 1.0 = pas d'amplification)
-    // L'utilisateur peut passer gainL > 1.0 pour compenser une carte son qui envoie bas
     const inputGain = audioContext.createGain();
     inputGain.gain.value = Math.max(config.gainL ?? 1.0, config.gainR ?? 1.0);
     source.connect(inputGain);
     inputGain.connect(analyser);
 
-    // MonitorGain à 0, non connecté à destination par défaut.
-    // toggleMonitoring() dans useStudioRecorder connecte/déconnecte.
+    // MonitorGain — connecté à inputGain pour que l'écoute soit aussi amplifiée
     const monitorGain = audioContext.createGain();
     monitorGain.gain.value = 0;
+    inputGain.connect(monitorGain);
+    // (monitorGain → destination est géré par toggleMonitoring)
+
+    // gainedDest créé plus bas si fallback nécessaire (évite noeud inutile si worklet disponible)
+    let gainedStream: MediaStream | null = null;
 
     // Gestion visibilitychange — utiliser un flag pour éviter les doublons
     const handleVisibilityChange = () => {
@@ -894,9 +896,13 @@ export const studioService = {
 
     let recorder: MediaRecorder | null = null;
     if (!useWorklet) {
+      // Créer gainedDest seulement maintenant — évite un noeud actif inutile si worklet dispo
+      const gainedDest = audioContext.createMediaStreamDestination();
+      inputGain.connect(gainedDest);
+      gainedStream = gainedDest.stream;
       const mimeType = getBestMimeType();
       const recOpts: MediaRecorderOptions = {}; if (mimeType) recOpts.mimeType = mimeType; recOpts.audioBitsPerSecond = 256000;
-      recorder = new MediaRecorder(stream, recOpts);
+      recorder = new MediaRecorder(gainedStream, recOpts);
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
       recorder.start(100);
       log(`MediaRecorder | ${mimeType || 'défaut'} | 256kbps`);
@@ -916,7 +922,17 @@ export const studioService = {
       w32(sr); w32(sr * 2); w16(2); w16(16); ws('data'); w32(total * 2);
       for (const chunk of pcmChunks) {
         for (let i = 0; i < chunk.length; i++) {
-          const s = Math.max(-1, Math.min(1, chunk[i]));
+          // Soft clip continu — linéaire jusqu'à 0.85, compression douce au-delà
+          // Pas de discontinuité (contrairement à un simple tanh avec seuil)
+          const raw = chunk[i];
+          const a = Math.abs(raw);
+          let s: number;
+          if (a <= 0.85) {
+            s = raw; // zone linéaire — aucune altération
+          } else {
+            const excess = (a - 0.85) / 0.15;
+            s = Math.sign(raw) * (0.85 + 0.15 * Math.tanh(excess));
+          }
           dv.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true); off += 2;
         }
       }

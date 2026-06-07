@@ -73,6 +73,7 @@ interface AudioResult {
   setVocalGuideVol: (v: number) => void;
   previewInstVol:   number;
   setPreviewInstVol: (v: number) => void;
+  adjustInstOffset: (ms: number) => void;
   playRecording:    (rec: MobileRecording) => Promise<void>;
   stopPlayback:     () => void;
   playMix:          (dataUrl: string) => void;
@@ -87,6 +88,14 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const setPreviewInstVol = useCallback((v: number) => {
     setPreviewInstVolRaw(v);
     try { if (previewInstRef.current) previewInstRef.current.volume = Math.max(0, Math.min(1, v)); } catch {}
+  }, []);
+
+  // Décaler la position de l'inst pendant l'écoute (+ms = avancer, -ms = reculer)
+  const adjustInstOffset = useCallback((ms: number) => {
+    const pInst = previewInstRef.current;
+    if (!pInst || pInst.paused) return;
+    const newTime = Math.max(0, pInst.currentTime + ms / 1000);
+    pInst.currentTime = newTime;
   }, []);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [instLoading, setInstLoading] = useState(false);
@@ -508,7 +517,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     instCached, vocalCached,
     instRef, vocalGuideRef, playRef, vocalVolRef,
     setVocalGuideVol: updateVocalVol,
-    previewInstVol, setPreviewInstVol,
+    previewInstVol, setPreviewInstVol, adjustInstOffset,
     playRecording, stopPlayback, playMix,
     getInstPlaybackTime,
   };
