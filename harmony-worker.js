@@ -36,13 +36,19 @@ function ifft(re, im) {
 function phaseVocoderShift(input, semitones) {
   if (semitones === 0) return input.slice();
   const pitchFactor = Math.pow(2, semitones / 12);
-  const N=2048, hop=512, hopS=Math.round(hop/pitchFactor);
+  const N = 4096, hop = N >> 2; // N/4 = 1024, overlap fixe de 4 — stable pour tous les semitones
+  // hopS plafonné à N/2 pour garantir overlap >= 2 minimum
+  // Pour les shifts extrêmes (-12ST), on time-stretch avec hopS raisonnable
+  // puis on resample le résultat au pitch correct
+  const hopS = Math.min(Math.round(hop / pitchFactor), N >> 1);
+  const stretchFactor = hopS / hop; // ratio temps réel obtenu
   const win=new Float32Array(N);
   for (let i=0;i<N;i++) win[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));
   const numFrames=Math.ceil((input.length-N)/hop)+1;
-  const targetLen=Math.floor(input.length/pitchFactor);
-  // Garantir outLen >= targetLen pour éviter le buffer underrun (critique à -12ST)
-  const outLen=Math.max(Math.ceil(numFrames*hopS)+N, targetLen+N);
+  // outLen basé sur stretchFactor — toujours suffisant
+  const stretchedLen = Math.ceil(numFrames * hopS) + N;
+  const outLen = stretchedLen;
+  const output=new Float32Array(outLen), normOut=new Float32Array(outLen);
   const output=new Float32Array(outLen), normOut=new Float32Array(outLen);
   const lastPhaseIn=new Float32Array(N/2+1), phaseOut=new Float32Array(N/2+1);
   for (let frame=0;frame<numFrames;frame++) {
@@ -67,8 +73,18 @@ function phaseVocoderShift(input, semitones) {
       output[outOff+i]+=outRe[i]*win[i]; normOut[outOff+i]+=win[i]*win[i];
     }
   }
+  const targetLen=Math.floor(input.length/pitchFactor);
+  // Resample depuis outLen vers targetLen avec interpolation lineaire
   const result=new Float32Array(targetLen);
-  for (let i=0;i<targetLen;i++) result[i]=normOut[i]>0.001?output[i]/normOut[i]:0;
+  const resampleRatio = outLen / targetLen;
+  for (let i=0;i<targetLen;i++) {
+    const src = i * resampleRatio;
+    const i0 = Math.floor(src); const frac = src - i0;
+    const i1 = Math.min(i0+1, outLen-1);
+    const v0 = i0<outLen && normOut[i0]>0.001 ? output[i0]/normOut[i0] : 0;
+    const v1 = i1<outLen && normOut[i1]>0.001 ? output[i1]/normOut[i1] : 0;
+    result[i] = v0 + (v1-v0)*frac;
+  }
   return result;
 }
 
