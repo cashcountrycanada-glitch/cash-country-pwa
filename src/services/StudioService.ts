@@ -1113,7 +1113,11 @@ export const studioService = {
       await new Promise<void>(r => setTimeout(r, 80));
     }
     (this as any)._waveformActive = ((this as any)._waveformActive || 0) + 1;
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const warmCtx = (window as any).__warmContext as AudioContext | undefined;
+    const ctx = (warmCtx && warmCtx.state !== 'closed')
+      ? warmCtx
+      : new (window.AudioContext || (window as any).webkitAudioContext)();
+    const shouldCloseCtx = ctx !== warmCtx;
     try {
       // Chercher d'abord en mémoire (sync), puis IndexedDB si absent (session précédente)
       let blob = this.resolveBlob(dataUrl);
@@ -1125,7 +1129,7 @@ export const studioService = {
       for (let i = 0; i < points; i++) { let sum = 0; for (let j = 0; j < blockSize; j++) sum += Math.abs(data[i * blockSize + j] || 0); waveform.push(sum / blockSize); }
       const max = Math.max(...waveform, 0.001); return waveform.map(v => v / max);
     } finally {
-      ctx.close();
+      if (shouldCloseCtx) ctx.close();
       (this as any)._waveformActive = Math.max(0, ((this as any)._waveformActive || 1) - 1);
     }
   },
@@ -1309,11 +1313,17 @@ export const studioService = {
       progress('Buffer audio en cache ✅', 9);
       srcBuffer = cachedBuf;
     } else {
-      // Pas de cache — décoder maintenant (peut être lent sur iOS pour les gros fichiers)
+      // Pas de cache — décoder maintenant
+      // Réutiliser __warmContext si disponible pour éviter de dépasser la limite iOS (6 contextes)
       progress('Décodage audio...', 6);
       const srcAb = await srcBlob.arrayBuffer();
-      const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext());
-      try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); } finally { tmpCtx.close(); }
+      const warmCtx = (window as any).__warmContext as AudioContext | undefined;
+      const tmpCtx = (warmCtx && warmCtx.state !== 'closed')
+        ? warmCtx
+        : new (window.AudioContext || (window as any).webkitAudioContext)();
+      const shouldClose = tmpCtx !== warmCtx;
+      try { srcBuffer = await tmpCtx.decodeAudioData(srcAb); }
+      finally { if (shouldClose) tmpCtx.close(); }
       // Mettre en cache pour les prochaines générations
       (window as any).__lastRecDecodedBuf = srcBuffer;
       (window as any).__lastRecDecodedId  = mainVoice.id;
