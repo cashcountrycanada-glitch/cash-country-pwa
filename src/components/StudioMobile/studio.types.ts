@@ -15,7 +15,8 @@ export interface FxSettings {
   reverbMix:     number; // 0..1
   autotune?:     number;
   autotuneSpeed?: 'slow' | 'medium' | 'fast';
-} from '../../services/StudioService';
+}
+
 
 export type Screen = 'songs' | 'record' | 'mixer' | 'recordings' | 'comp' | 'master';
 
