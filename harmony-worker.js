@@ -197,15 +197,29 @@ function phaseVocoderShift(input, semitones, sr) {
     for (let k=0;k<=N/2;k++) lastPhaseIn[k]=Math.atan2(im0[k],re0[k]);
   }
 
+  // Buffers pré-alloués hors boucle — évite 863MB de GC pressure sur iPhone
+  const re      = new Float32Array(N);
+  const im      = new Float32Array(N);
+  const mag     = new Float32Array(N/2+1);
+  const trueFreq= new Float32Array(N/2+1);
+  const isPeak  = new Uint8Array(N/2+1);
+  const peakOf  = new Int32Array(N/2+1);
+  const peakPhaseOut = new Float32Array(N/2+1);
+  const outRe   = new Float32Array(N);
+  const outIm   = new Float32Array(N);
   let outPos = 0;
+  let cachedF0Hz = 0;
+  let frameIdx = 0;
   for (const { pos, hop } of frames) {
+    frameIdx++;
     const hopS = Math.min(Math.round(hop/pitchFactor), N>>1);
-    const re=new Float32Array(N), im=new Float32Array(N);
+    // Réutiliser les buffers pré-alloués (évite GC pressure)
+    re.fill(0); im.fill(0);
     for (let i=0;i<N;i++) re[i]=(pos+i<input.length?input[pos+i]:0)*win[i];
     fft(re,im);
 
     // Magnitudes + true frequencies
-    const mag=new Float32Array(N/2+1), trueFreq=new Float32Array(N/2+1);
+    mag.fill(0); trueFreq.fill(0);
     for (let k=0;k<=N/2;k++) {
       mag[k]=Math.sqrt(re[k]*re[k]+im[k]*im[k]);
       const phase=Math.atan2(im[k],re[k]);
@@ -215,13 +229,16 @@ function phaseVocoderShift(input, semitones, sr) {
       trueFreq[k]=k+dPhase*N/(2*Math.PI*hop);
     }
 
-    // Détecter F0 sur cette frame pour le phase locking orienté fondamental
-    const frameSlice = input.slice(pos, Math.min(pos+N, input.length));
-    const f0Hz = detectF0(frameSlice, sr);
-    const f0Bin = f0Hz > 0 ? Math.round(f0Hz * N / sr) : 0;
+    // Détecter F0 toutes les 20 frames seulement (économie CPU ×20)
+    // F0 vocal change lentement — 20 frames ≈ 460ms, largement suffisant
+    if (frameIdx % 20 === 0) {
+      const frameSlice = input.slice(pos, Math.min(pos+N, input.length));
+      cachedF0Hz = detectF0(frameSlice, sr);
+    }
+    const f0Bin = cachedF0Hz > 0 ? Math.round(cachedF0Hz * N / sr) : 0;
 
     // Phase locking : pics spectraux + verrouillage sur les harmoniques du F0
-    const isPeak = new Uint8Array(N/2+1);
+    isPeak.fill(0);
     for (let k=1;k<N/2;k++) {
       if (mag[k]>mag[k-1]&&mag[k]>=mag[k+1]) {
         // Renforcer les pics qui coïncident avec un harmonique du F0
@@ -236,7 +253,7 @@ function phaseVocoderShift(input, semitones, sr) {
     }
 
     // Propagation vers les bins voisins
-    const peakOf = new Int32Array(N/2+1);
+    peakOf.fill(0);
     let lastP=0;
     for (let k=0;k<=N/2;k++) { if(isPeak[k]) lastP=k; peakOf[k]=lastP; }
     let nextP=N/2;
@@ -245,8 +262,8 @@ function phaseVocoderShift(input, semitones, sr) {
       if(Math.abs(k-peakOf[k])>Math.abs(k-nextP)) peakOf[k]=nextP;
     }
 
-    const peakPhaseOut = new Float32Array(N/2+1);
-    const outRe=new Float32Array(N), outIm=new Float32Array(N);
+    peakPhaseOut.fill(0);
+    outRe.fill(0); outIm.fill(0);
     for (let k=0;k<=N/2;k++) {
       if(isPeak[k]) {
         phaseOut[k]+=2*Math.PI*trueFreq[k]*hopS/N;

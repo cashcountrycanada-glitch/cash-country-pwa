@@ -1460,7 +1460,7 @@ export const studioService = {
     }
     progress('✅ Toutes les harmonies générées', 100); return generated;
   },
-  async applyFxToTrack(dataUrl: string, fx: { lowGain: number; midGain: number; highGain: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; autotune?: number; autotuneSpeed?: string; }, onProgress?: (pct: number) => void): Promise<string> {
+  async applyFxToTrack(dataUrl: string, fx: { hpf?: number; lowGain: number; lowMidGain?: number; midGain: number; highGain: number; airGain?: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; autotune?: number; autotuneSpeed?: string; }, onProgress?: (pct: number) => void): Promise<string> {
     onProgress?.(5);
     // Décoder — réutiliser le cache si disponible
     let srcBuf: AudioBuffer;

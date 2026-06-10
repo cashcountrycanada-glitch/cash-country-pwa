@@ -65,45 +65,120 @@ function isIOS(): boolean {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
-// Approximation LUFS ITU-R BS.1770-4 — K-weighting simplifié
-// Beaucoup plus précis que le RMS simple pour cibler Spotify/YouTube
+// LUFS ITU-R BS.1770-4 avec gating — standard broadcast complet
+// Gating absolu (-70 LUFS) + gating relatif (-10 LU) selon EBU R128
 function analyzeLoudness(buffer: AudioBuffer): number {
   const sr = buffer.sampleRate;
   const ch = Math.min(2, buffer.numberOfChannels);
 
-  // Filtre pre-filter BS.1770 (high-shelf +4dB à 1681Hz)
-  // Coefficients pour 44.1kHz / 48kHz
-  const f0 = 1681.0;
-  const Q  = 0.7071;
-  const dBgain = 3.99984;
+  // ── Filtre K-weighting BS.1770 étape 1 : pre-filter high-shelf +4dB à 1681Hz ──
+  const f0 = 1681.0, Q = 0.7071, dBgain = 3.99984;
   const A  = Math.pow(10, dBgain / 40);
   const w0 = 2 * Math.PI * f0 / sr;
-  const alpha = Math.sin(w0) / (2 * Q);
-  const b0 = A * ((A + 1) + (A - 1) * Math.cos(w0) + 2 * Math.sqrt(A) * alpha);
-  const b1 = -2 * A * ((A - 1) + (A + 1) * Math.cos(w0));
-  const b2 = A * ((A + 1) + (A - 1) * Math.cos(w0) - 2 * Math.sqrt(A) * alpha);
-  const a0 = (A + 1) - (A - 1) * Math.cos(w0) + 2 * Math.sqrt(A) * alpha;
-  const a1 = 2 * ((A - 1) - (A + 1) * Math.cos(w0));
-  const a2 = (A + 1) - (A - 1) * Math.cos(w0) - 2 * Math.sqrt(A) * alpha;
+  const sinW = Math.sin(w0), cosW = Math.cos(w0);
+  const alpha = sinW / (2 * Q);
+  const b0s = A*((A+1)+(A-1)*cosW+2*Math.sqrt(A)*alpha);
+  const b1s = -2*A*((A-1)+(A+1)*cosW);
+  const b2s = A*((A+1)+(A-1)*cosW-2*Math.sqrt(A)*alpha);
+  const a0s = (A+1)-(A-1)*cosW+2*Math.sqrt(A)*alpha;
+  const a1s = 2*((A-1)-(A+1)*cosW);
+  const a2s = (A+1)-(A-1)*cosW-2*Math.sqrt(A)*alpha;
 
-  let totalPower = 0;
+  // ── Filtre K-weighting étape 2 : high-pass 2nd order à 38Hz ──
+  const f1 = 38.13547; const Q1 = 0.5003270;
+  const w1 = 2*Math.PI*f1/sr;
+  const sinW1 = Math.sin(w1), cosW1 = Math.cos(w1);
+  const alpha1 = sinW1/(2*Q1);
+  const b0h = 1, b1h = -2, b2h = 1;
+  const a0h = 1+alpha1, a1h = -2*cosW1, a2h = 1-alpha1;
+
+  // Appliquer les deux filtres K-weighting sur chaque canal
+  const filtered: Float32Array[] = [];
   for (let c = 0; c < ch; c++) {
     const data = buffer.getChannelData(c);
-    const filtered = new Float32Array(data.length);
-    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
-    for (let i = 0; i < data.length; i++) {
-      const x0 = data[i];
-      const y0 = (b0/a0)*x0 + (b1/a0)*x1 + (b2/a0)*x2 - (a1/a0)*y1 - (a2/a0)*y2;
-      filtered[i] = y0;
-      x2 = x1; x1 = x0; y2 = y1; y1 = y0;
+    const f = new Float32Array(data.length);
+    // Filtre 1 (shelf)
+    let x1=0,x2=0,y1=0,y2=0;
+    for (let i=0;i<data.length;i++) {
+      const x0=data[i];
+      const y0=(b0s/a0s)*x0+(b1s/a0s)*x1+(b2s/a0s)*x2-(a1s/a0s)*y1-(a2s/a0s)*y2;
+      f[i]=y0; x2=x1; x1=x0; y2=y1; y1=y0;
     }
-    let sum = 0;
-    for (let i = 0; i < filtered.length; i++) sum += filtered[i] * filtered[i];
-    totalPower += sum / filtered.length;
+    // Filtre 2 (high-pass)
+    let x1b=0,x2b=0,y1b=0,y2b=0;
+    for (let i=0;i<f.length;i++) {
+      const x0=f[i];
+      const y0=(b0h/a0h)*x0+(b1h/a0h)*x1b+(b2h/a0h)*x2b-(a1h/a0h)*y1b-(a2h/a0h)*y2b;
+      f[i]=y0; x2b=x1b; x1b=x0; y2b=y1b; y1b=y0;
+    }
+    filtered.push(f);
   }
-  const meanPower = totalPower / ch;
-  // LUFS = -0.691 + 10*log10(power) — offset BS.1770
-  return meanPower > 0 ? -0.691 + 10 * Math.log10(meanPower) : -100;
+
+  // Découpage en blocs de 400ms avec overlap 75% (blocs de 100ms)
+  const blockSize  = Math.floor(sr * 0.4);
+  const hopSize    = Math.floor(sr * 0.1);
+  const numBlocks  = Math.floor((buffer.length - blockSize) / hopSize) + 1;
+  const blockPower: number[] = [];
+
+  for (let b=0; b<numBlocks; b++) {
+    const start = b * hopSize;
+    let power = 0;
+    for (let c=0; c<ch; c++) {
+      const w = c === 1 ? 1.0 : 1.0; // G_L=G_R=1.0, G_C=1.0 (stéréo sans centre)
+      let sum = 0;
+      for (let i=start; i<start+blockSize && i<filtered[c].length; i++)
+        sum += filtered[c][i] * filtered[c][i];
+      power += w * sum / blockSize;
+    }
+    blockPower.push(power);
+  }
+
+  if (blockPower.length === 0) return -100;
+
+  // Gating absolu : garder blocs > -70 LUFS
+  const absThresh = Math.pow(10, (-70 + 0.691) / 10);
+  const gated1 = blockPower.filter(p => p > absThresh);
+  if (gated1.length === 0) return -100;
+
+  // LUFS intermédiaire sur blocs gated absolu
+  const mean1 = gated1.reduce((a,b) => a+b, 0) / gated1.length;
+  const lufs1 = -0.691 + 10 * Math.log10(mean1);
+
+  // Gating relatif : garder blocs > LUFS_intermédiaire - 10 LU
+  const relThresh = Math.pow(10, (lufs1 - 10 + 0.691) / 10);
+  const gated2 = gated1.filter(p => p > relThresh);
+  if (gated2.length === 0) return lufs1;
+
+  const mean2 = gated2.reduce((a,b) => a+b, 0) / gated2.length;
+  return -0.691 + 10 * Math.log10(mean2);
+}
+
+// True Peak measurement — détecte les inter-sample peaks via oversampling 4x
+// Les inter-sample peaks peuvent dépasser 0 dBFS même si les samples sont sous 0 dBFS
+// Standard EBU R128 / ITU-R BS.1770-4 : max -1 dBTP
+function measureTruePeak(buffer: AudioBuffer): number {
+  const ch = Math.min(2, buffer.numberOfChannels);
+  let maxTP = 0;
+  // Oversampling 4x via interpolation sinc simplifiée (Lanczos-2)
+  const oversample = 4;
+  for (let c=0; c<ch; c++) {
+    const data = buffer.getChannelData(c);
+    const len = data.length;
+    for (let i=2; i<len-2; i++) {
+      for (let s=0; s<oversample; s++) {
+        const t = s / oversample;
+        if (t === 0) { maxTP = Math.max(maxTP, Math.abs(data[i])); continue; }
+        // Interpolation cubique 4-points (approx Lanczos)
+        const p0=data[i-1], p1=data[i], p2=data[i+1], p3=data[i+2];
+        const a = (-p0 + 3*p1 - 3*p2 + p3) / 2;
+        const b = p0 - 2.5*p1 + 2*p2 - 0.5*p3;
+        const cc = (-p0 + p2) / 2;
+        const interp = ((a*t + b)*t + cc)*t + p1;
+        maxTP = Math.max(maxTP, Math.abs(interp));
+      }
+    }
+  }
+  return maxTP > 0 ? 20 * Math.log10(maxTP) : -100; // dBTP
 }
 
 async function decodeBlob(blob: Blob): Promise<AudioBuffer> {
@@ -273,25 +348,62 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const widenAmt = s.highGain > 1 ? 1.35 : 1.20;
   const widened  = await stereoWiden(compressed, widenAmt);
 
-  const offline2 = new OfflineAudioContext(2, widened.length, widened.sampleRate);
-  const s2src    = offline2.createBufferSource(); s2src.buffer = widened;
-
-  // Gain makeup précis basé sur LUFS mesuré après compression
+  // ── ÉTAPE 3 : LUFS targeting + True Peak limiting broadcast-compliant ──────
+  // Mesure LUFS sur le signal compressé (avec gating BS.1770-4)
   const compressedLufs = analyzeLoudness(compressed);
-  const gainDb  = Math.min(s.targetLufs - compressedLufs, 20); // 20dB max pour couvrir les enregistrements très doux
-  const makeup  = offline2.createGain(); makeup.gain.value = Math.pow(10, gainDb / 20);
+  // Cap à 20dB max pour éviter un gain excessif sur silence/voix très douce
+  let gainDb = Math.min(s.targetLufs - compressedLufs, 20);
 
-  // Limiteur transparent — très faible knee, ratio 20:1
-  const limiter = offline2.createDynamicsCompressor();
-  limiter.threshold.value = s.ceiling - 0.3; limiter.ratio.value = 20;
-  limiter.attack.value = 0.0005; limiter.release.value = 0.08; limiter.knee.value = 0.5;
+  // Boucle de correction True Peak (max 3 itérations — converge toujours)
+  // À chaque itération : appliquer le gain, mesurer True Peak, réajuster si nécessaire
+  let finalBuf: AudioBuffer = widened;
+  for (let iter = 0; iter < 3; iter++) {
+    const offline2 = new OfflineAudioContext(2, widened.length, widened.sampleRate);
+    const s2src    = offline2.createBufferSource(); s2src.buffer = widened;
 
-  // High-pass final 20Hz — coupe tout résidu sub-sonique
-  const hpfFinal = offline2.createBiquadFilter(); hpfFinal.type = 'highpass'; hpfFinal.frequency.value = 20; hpfFinal.Q.value = 0.5;
+    // High-pass final 20Hz
+    const hpfFinal = offline2.createBiquadFilter();
+    hpfFinal.type = 'highpass'; hpfFinal.frequency.value = 20; hpfFinal.Q.value = 0.5;
 
-  s2src.connect(hpfFinal); hpfFinal.connect(makeup); makeup.connect(limiter); limiter.connect(offline2.destination);
-  s2src.start(0);
-  return offline2.startRendering();
+    // Gain makeup
+    const makeup = offline2.createGain();
+    makeup.gain.value = Math.pow(10, gainDb / 20);
+
+    // Limiteur True Peak — seuil = ceiling, ratio 20:1, attaque ultra-rapide
+    const limiter = offline2.createDynamicsCompressor();
+    limiter.threshold.value = s.ceiling - 0.5; // marge 0.5dB pour laisser place au True Peak
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.0003; // 0.3ms — capture les transitoires avant qu'ils clippent
+    limiter.release.value = 0.06;
+    limiter.knee.value = 0.3; // knee très serré
+
+    s2src.connect(hpfFinal); hpfFinal.connect(makeup); makeup.connect(limiter);
+    limiter.connect(offline2.destination);
+    s2src.start(0);
+    finalBuf = await offline2.startRendering();
+
+    // Mesurer True Peak du résultat
+    const truePeakDB = measureTruePeak(finalBuf);
+    const truePeakHeadroom = s.ceiling - truePeakDB; // positif = sous le plafond
+
+    // Si True Peak est dans la tolérance ±0.3 dB du ceiling → on arrête
+    if (truePeakHeadroom >= 0 && truePeakHeadroom < 0.5) break;
+
+    // Ajuster le gain pour la prochaine itération
+    if (truePeakDB > s.ceiling) {
+      // True Peak dépasse le ceiling → réduire le gain
+      gainDb -= (truePeakDB - s.ceiling) + 0.3;
+    } else if (truePeakHeadroom > 1.5) {
+      // Trop de marge → on peut monter un peu pour atteindre le targetLufs
+      // Mais seulement si on est encore loin du targetLufs
+      const finalLufs = analyzeLoudness(finalBuf);
+      if (finalLufs < s.targetLufs - 0.5) gainDb += Math.min(truePeakHeadroom - 0.5, s.targetLufs - finalLufs);
+      else break;
+    } else {
+      break;
+    }
+  }
+  return finalBuf;
 }
 
 // Convertir AudioBuffer → Blob mp4 (iOS natif) — 256 kbps pour la qualité

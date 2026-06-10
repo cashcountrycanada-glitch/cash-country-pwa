@@ -1,11 +1,21 @@
-/**
- * studio.types.ts — Types, constantes et utilitaires du Studio Mobile v2
- *
- * NOUVEAUTÉS :
- * - FxPreset : preset d'effets par piste (EQ, compresseur, saturation, reverb)
- * - FX_PRESETS : banque de presets inspirés BandLab
- */
-import { ReverbType } from '../../services/StudioService';
+export interface FxSettings {
+  hpf?:          number; // Hz — High-Pass Filter (coupe sous cette fréquence, 0=off)
+  lowGain:       number; // -12..+12 dB shelving graves 200Hz
+  lowMidGain?:   number; // -12..+12 dB peak 300Hz (coupe boue)
+  midGain:       number; // -12..+12 dB peak présence 3kHz
+  highGain:      number; // -12..+12 dB shelving aigus 8kHz
+  airGain?:      number; // -12..+12 dB peak air 12kHz
+  compThreshold: number; // -40..0 dB
+  compRatio:     number; // 1..20
+  compAttack:    number; // ms
+  compRelease:   number; // ms
+  compKnee:      number; // dB
+  saturation:    number; // 0..1
+  reverb:        'none' | 'room' | 'hall' | 'plate';
+  reverbMix:     number; // 0..1
+  autotune?:     number;
+  autotuneSpeed?: 'slow' | 'medium' | 'fast';
+} from '../../services/StudioService';
 
 export type Screen = 'songs' | 'record' | 'mixer' | 'recordings' | 'comp' | 'master';
 
@@ -54,99 +64,133 @@ export const FX_PRESETS: FxPreset[] = [
     emoji: '🎙',
     description: 'Signal propre sans traitement',
     color: '#71717a',
-    lowGain: 0, midGain: 0, highGain: 0,
+    hpf: 0, lowGain: 0, lowMidGain: 0, midGain: 0, highGain: 0, airGain: 0,
     compThreshold: 0, compRatio: 1, compAttack: 10, compRelease: 150, compKnee: 6,
     saturation: 0, reverb: 'none', reverbMix: 0,
   },
   {
+    // Preset phare — voix country pro pour voix principale
+    // HPF 90Hz : coupe le bruit de fond et la boue basse
+    // lowMidGain -2dB à 300Hz : élimine le son "boîte en carton"
+    // midGain +3dB à 3kHz : présence et intelligibilité (zone critique voix)
+    // airGain +2dB à 12kHz : brillance naturelle de studio
+    // Compression douce 3:1 avec knee large : contrôle sans pompage
+    // Reverb room 8% : légère ambiance sans noyer la voix
     id: 'studio_vocal',
     label: 'Studio Vocal',
     emoji: '🎤',
-    description: 'Voix chaude et présente, compression douce',
+    description: 'Voix présente et claire — son radio country pro',
     color: '#ef4444',
-    lowGain: 1.0, midGain: 2.5, highGain: 1.5,
-    compThreshold: -18, compRatio: 3, compAttack: 10, compRelease: 150, compKnee: 8,
-    saturation: 0.05, reverb: 'room', reverbMix: 0.18,
+    hpf: 90,
+    lowGain: -1.0, lowMidGain: -2.0, midGain: 3.0, highGain: 1.5, airGain: 2.0,
+    compThreshold: -18, compRatio: 3, compAttack: 12, compRelease: 180, compKnee: 8,
+    saturation: 0.12, reverb: 'room', reverbMix: 0.08,
   },
   {
+    // Country Warm : chaleur sans boue — voix principale country
+    // HPF 80Hz pour conserver le corps grave naturel
+    // lowGain +1.5dB à 200Hz : chaleur bas-médium, pas de boue
+    // lowMidGain -3dB à 300Hz : coupe le son "nasillard"
+    // midGain +2.5dB à 3kHz : présence country
+    // Saturation 0.15 : chaleur analogique tape/tube
     id: 'country_warm',
     label: 'Country Warm',
     emoji: '🤠',
-    description: 'Son country chaleureux, graves riches',
+    description: 'Chaleur country — corps et présence sans boue',
     color: '#f97316',
-    lowGain: 3.0, midGain: -0.5, highGain: 1.0,
+    hpf: 80,
+    lowGain: 1.5, lowMidGain: -3.0, midGain: 2.5, highGain: 0.5, airGain: 1.5,
     compThreshold: -20, compRatio: 3.5, compAttack: 15, compRelease: 200, compKnee: 10,
-    saturation: 0.08, reverb: 'hall', reverbMix: 0.22,
+    saturation: 0.15, reverb: 'hall', reverbMix: 0.10,
   },
   {
+    // Punchy : attaque forte pour voix qui coupe dans le mix
+    // Attack 3ms pour laisser passer les transitoires
+    // midGain fort à 3kHz + highGain pour définition
     id: 'punchy',
     label: 'Punchy',
     emoji: '💥',
-    description: 'Attaque forte, présence dans le mix',
+    description: 'Attaque forte — voix qui coupe dans le mix',
     color: '#eab308',
-    lowGain: 0.5, midGain: 3.5, highGain: 2.0,
+    hpf: 100,
+    lowGain: -0.5, lowMidGain: -2.5, midGain: 4.0, highGain: 2.0, airGain: 1.5,
     compThreshold: -15, compRatio: 5, compAttack: 3, compRelease: 80, compKnee: 4,
-    saturation: 0.12, reverb: 'room', reverbMix: 0.12,
+    saturation: 0.12, reverb: 'room', reverbMix: 0.08,
   },
   {
+    // Airy & Bright : voix légère et aérienne
+    // Hauts coupés en bas, brillance en haut
     id: 'airy',
     label: 'Airy & Bright',
     emoji: '✨',
-    description: 'Voix légère et aérienne, aigus brillants',
+    description: 'Voix légère et aérienne — aigus brillants',
     color: '#22c55e',
-    lowGain: -1.0, midGain: 0.5, highGain: 4.0,
+    hpf: 120,
+    lowGain: -2.0, lowMidGain: -1.5, midGain: 1.5, highGain: 3.5, airGain: 4.0,
     compThreshold: -20, compRatio: 2.5, compAttack: 20, compRelease: 200, compKnee: 12,
-    saturation: 0.03, reverb: 'plate', reverbMix: 0.25,
+    saturation: 0.06, reverb: 'plate', reverbMix: 0.14,
   },
   {
+    // Harmony : pour les pistes d'harmonies générées
+    // Moins de présence que la voix principale pour rester en arrière-plan
+    // Plus de reverb pour "placer dans l'espace"
     id: 'harmony',
     label: 'Harmony',
     emoji: '🎶',
-    description: 'Idéal pour harmonies et layers vocaux',
+    description: 'Idéal pour harmonies — s'intègre derrière la voix',
     color: '#a855f7',
-    lowGain: -2.0, midGain: 1.0, highGain: 2.5,
+    hpf: 110,
+    lowGain: -2.5, lowMidGain: -2.0, midGain: 1.5, highGain: 2.0, airGain: 1.0,
     compThreshold: -22, compRatio: 4, compAttack: 8, compRelease: 120, compKnee: 8,
-    saturation: 0.04, reverb: 'hall', reverbMix: 0.30,
+    saturation: 0.08, reverb: 'hall', reverbMix: 0.22,
   },
   {
+    // Double Epic : double tracking épais et large
     id: 'double_epic',
     label: 'Double Epic',
     emoji: '🎵',
-    description: 'Double tracking épais et large',
+    description: 'Double tracking épais et large — effet chœur',
     color: '#3b82f6',
-    lowGain: 1.5, midGain: -1.0, highGain: 1.5,
+    hpf: 100,
+    lowGain: 1.0, lowMidGain: -1.5, midGain: 1.0, highGain: 1.5, airGain: 1.0,
     compThreshold: -16, compRatio: 4, compAttack: 5, compRelease: 100, compKnee: 6,
-    saturation: 0.10, reverb: 'hall', reverbMix: 0.28,
+    saturation: 0.10, reverb: 'hall', reverbMix: 0.18,
   },
   {
+    // Octave Deep : graves profonds pour octave basse
     id: 'octave_deep',
     label: 'Octave Deep',
     emoji: '🔉',
     description: 'Octave grave profonde et puissante',
     color: '#06b6d4',
-    lowGain: 5.0, midGain: -2.0, highGain: -1.0,
+    hpf: 60,
+    lowGain: 4.0, lowMidGain: 0, midGain: -1.5, highGain: -1.5, airGain: 0,
     compThreshold: -20, compRatio: 5, compAttack: 10, compRelease: 200, compKnee: 10,
-    saturation: 0.15, reverb: 'room', reverbMix: 0.15,
+    saturation: 0.18, reverb: 'room', reverbMix: 0.12,
   },
   {
+    // Digi Comp : compression agressive
     id: 'digi_comp',
     label: 'Digi Comp',
     emoji: '⚡',
-    description: 'Compression agressive style trap/hip-hop',
+    description: 'Compression agressive — voix très contrôlée',
     color: '#f43f5e',
-    lowGain: 2.0, midGain: 1.5, highGain: 3.0,
+    hpf: 100,
+    lowGain: 1.5, lowMidGain: -2.0, midGain: 2.0, highGain: 2.5, airGain: 2.0,
     compThreshold: -25, compRatio: 6, compAttack: 1, compRelease: 69, compKnee: 6,
     saturation: 0.15, reverb: 'none', reverbMix: 0,
   },
   {
+    // Velvet : soul/R&B doux
     id: 'velvet',
     label: 'Velvet',
     emoji: '🎼',
-    description: 'Son doux et velouté, voix soul/R&B',
+    description: 'Son doux et velouté — soul et R&B',
     color: '#d946ef',
-    lowGain: 2.5, midGain: -0.5, highGain: -1.0,
+    hpf: 85,
+    lowGain: 2.0, lowMidGain: -1.0, midGain: 0.5, highGain: -0.5, airGain: 0.5,
     compThreshold: -22, compRatio: 3, compAttack: 15, compRelease: 250, compKnee: 15,
-    saturation: 0.06, reverb: 'plate', reverbMix: 0.20,
+    saturation: 0.10, reverb: 'plate', reverbMix: 0.16,
   },
   {
     id: 'autotune_transparent',
@@ -154,9 +198,10 @@ export const FX_PRESETS: FxPreset[] = [
     emoji: '🎯',
     description: 'Correction transparente — intonation naturelle',
     color: '#10b981',
-    lowGain: 0.5, midGain: 1.5, highGain: 1.0,
+    hpf: 90,
+    lowGain: 0, lowMidGain: -1.5, midGain: 2.0, highGain: 1.0, airGain: 1.5,
     compThreshold: -18, compRatio: 2.5, compAttack: 12, compRelease: 160, compKnee: 8,
-    saturation: 0.03, reverb: 'room', reverbMix: 0.12,
+    saturation: 0.08, reverb: 'room', reverbMix: 0.10,
     autotune: 0.35, autotuneSpeed: 'slow',
   },
   {
@@ -165,13 +210,13 @@ export const FX_PRESETS: FxPreset[] = [
     emoji: '🤠🎯',
     description: 'Auto-Tune country — chaleureux et contrôlé',
     color: '#f59e0b',
-    lowGain: 2.5, midGain: 1.0, highGain: 0.5,
+    hpf: 85,
+    lowGain: 1.5, lowMidGain: -2.5, midGain: 2.5, highGain: 0.5, airGain: 1.0,
     compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 200, compKnee: 10,
-    saturation: 0.07, reverb: 'hall', reverbMix: 0.18,
+    saturation: 0.12, reverb: 'hall', reverbMix: 0.10,
     autotune: 0.45, autotuneSpeed: 'medium',
   },
 ];
-
 export const FX_PRESET_DEFAULT = FX_PRESETS[0]; // Clean
 
 export const TRACK_PRESETS: TrackPreset[] = [

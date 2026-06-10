@@ -984,19 +984,27 @@ export default function MixerScreen({
               <span className="text-[10px] text-zinc-500 font-black uppercase whitespace-nowrap">⏱ Sync</span>
               <button onClick={() => onInstOffset(-200)}
                 className="flex-1 py-1 rounded-lg bg-zinc-800 text-zinc-300 text-[10px] font-black active:bg-zinc-700">
-                ◀◀ -200ms
+                ◀◀ -200
               </button>
               <button onClick={() => onInstOffset(-50)}
                 className="flex-1 py-1 rounded-lg bg-zinc-800 text-zinc-300 text-[10px] font-black active:bg-zinc-700">
-                ◀ -50ms
+                ◀ -50
+              </button>
+              <button onClick={() => onInstOffset(-10)}
+                className="flex-1 py-1 rounded-lg bg-zinc-700 text-zinc-200 text-[10px] font-black active:bg-zinc-600">
+                ◀ -10
+              </button>
+              <button onClick={() => onInstOffset(10)}
+                className="flex-1 py-1 rounded-lg bg-zinc-700 text-zinc-200 text-[10px] font-black active:bg-zinc-600">
+                +10 ▶
               </button>
               <button onClick={() => onInstOffset(50)}
                 className="flex-1 py-1 rounded-lg bg-zinc-800 text-zinc-300 text-[10px] font-black active:bg-zinc-700">
-                +50ms ▶
+                +50 ▶
               </button>
               <button onClick={() => onInstOffset(200)}
                 className="flex-1 py-1 rounded-lg bg-zinc-800 text-zinc-300 text-[10px] font-black active:bg-zinc-700">
-                +200ms ▶▶
+                +200 ▶▶
               </button>
             </div>
           </div>
