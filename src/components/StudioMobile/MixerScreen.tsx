@@ -1017,17 +1017,17 @@ export default function MixerScreen({
                 🎤 Pistes enregistrées
               </p>
             )}
-            {tracks.filter(t => !(t as any).isGenerated).map(track => {
-              // Le slot actif = voix principale, les autres = prises alternatives
-              const isActiveSlot = track.takeSlot === takeSlot || (track.trackIndex === 0 && track.takeSlot === undefined);
-              const displayTrack = isActiveSlot ? track : { ...track, trackLabel: `Prise ${track.takeSlot || 'alt'} — ${track.songTitle || ''}` };
-              return (
-                <TrackCard key={track.id} track={displayTrack} playingId={playingId}
-                  allTracks={tracks}
-                  onPlay={onPlay} onMute={onMute} onSolo={onSolo} onVolume={onVolume} onPan={onPan} onDelete={onDelete}
-                  onTrackUpdate={handleTrackUpdate}/>
-              );
-            })}
+            {tracks.filter(t => !(t as any).isGenerated).filter(t => {
+              // FIX : n'afficher que le slot actif pour les voix principales (trackIndex 0)
+              // Les autres slots restent dans le projet mais ne sont pas affichés ni mixés
+              if (t.trackIndex === 0 && t.takeSlot) return t.takeSlot === takeSlot;
+              return true;
+            }).map(track => (
+              <TrackCard key={track.id} track={track} playingId={playingId}
+                allTracks={tracks}
+                onPlay={onPlay} onMute={onMute} onSolo={onSolo} onVolume={onVolume} onPan={onPan} onDelete={onDelete}
+                onTrackUpdate={handleTrackUpdate}/>
+            ))}
 
             {tracks.filter(t => (t as any).isGenerated).length > 0 && (
               <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest px-1 pt-2">

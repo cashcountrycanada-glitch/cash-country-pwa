@@ -128,11 +128,15 @@ function compress(data, threshold, ratio, attackMs, releaseMs, sr, kneeDb) {
     }
     out[i]=data[i]*Math.pow(10,gDB/20);
   }
-  // Makeup gain automatique — compense la réduction de volume
+  // Makeup gain automatique avec plafonnement anti-clip
+  // Facteur 0.35 (conservateur) + normalisation si peak > 0.92
   if (threshold < 0 && ratio > 1) {
-    const makeupDB  = (-threshold) * (1 - 1/ratio) * 0.5;
+    const makeupDB  = (-threshold) * (1 - 1/ratio) * 0.35;
     const makeupLin = Math.pow(10, makeupDB/20);
     for (let i=0;i<out.length;i++) out[i] *= makeupLin;
+    let peak = 0;
+    for (let i=0;i<out.length;i++) { const a=Math.abs(out[i]); if(a>peak) peak=a; }
+    if (peak > 0.92) { const n=0.92/peak; for(let i=0;i<out.length;i++) out[i]*=n; }
   }
   return out;
 }
