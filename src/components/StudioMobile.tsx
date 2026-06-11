@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.192';
+const BUILD_VERSION = 'v7.6.193';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -404,7 +404,27 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     if (!selected) return;
     const proj = studioService.getOrCreateProject(selected.id, selected.title);
     if (selected.key && !(proj as any).suggestedKey) (proj as any).suggestedKey = selected.key;
-    setProject(proj);
+
+    // Nettoyer les doublons de voix principale au chargement
+    // Garder seulement la prise la plus récente par slot (ou par id unique si slot absent)
+    const seen = new Map<string, any>();
+    const cleanedTracks = proj.tracks.filter((t: any) => {
+      if (t.trackIndex === 0 && !t.isGenerated) {
+        const slotKey = t.takeSlot ?? 'A';
+        const existing = seen.get(slotKey);
+        if (!existing || (t.recordedAt ?? 0) >= (existing.recordedAt ?? 0)) {
+          seen.set(slotKey, t);
+          return true;
+        }
+        return false; // doublon plus ancien — supprimer
+      }
+      return true;
+    });
+    const cleanedProj = { ...proj, tracks: cleanedTracks };
+    if (cleanedTracks.length !== proj.tracks.length) {
+      studioService.saveProject(cleanedProj); // persister le nettoyage
+    }
+    setProject(cleanedProj);
     setMixDone(!!proj.mixedDataUrl);
 
     // Restaurer le slot actif depuis IDB (survit aux redémarrages iOS)
