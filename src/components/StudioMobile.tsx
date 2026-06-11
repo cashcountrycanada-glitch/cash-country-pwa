@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.193';
+const BUILD_VERSION = 'v7.6.194';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -406,23 +406,25 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     if (selected.key && !(proj as any).suggestedKey) (proj as any).suggestedKey = selected.key;
 
     // Nettoyer les doublons de voix principale au chargement
-    // Garder seulement la prise la plus récente par slot (ou par id unique si slot absent)
-    const seen = new Map<string, any>();
+    // Stratégie : garder UNE SEULE piste par slot — la première trouvée suffit
+    // (même id, même date = même prise dupliquée en localStorage)
+    const seenSlots = new Set<string>();
+    const seenIds   = new Set<string>();
     const cleanedTracks = proj.tracks.filter((t: any) => {
+      // Dédupliquer par id d'abord (cas id identique)
+      if (t.id && seenIds.has(t.id)) return false;
+      if (t.id) seenIds.add(t.id);
+      // Pour les voix principales : une seule par slot
       if (t.trackIndex === 0 && !t.isGenerated) {
         const slotKey = t.takeSlot ?? 'A';
-        const existing = seen.get(slotKey);
-        if (!existing || (t.recordedAt ?? 0) >= (existing.recordedAt ?? 0)) {
-          seen.set(slotKey, t);
-          return true;
-        }
-        return false; // doublon plus ancien — supprimer
+        if (seenSlots.has(slotKey)) return false;
+        seenSlots.add(slotKey);
       }
       return true;
     });
     const cleanedProj = { ...proj, tracks: cleanedTracks };
     if (cleanedTracks.length !== proj.tracks.length) {
-      studioService.saveProject(cleanedProj); // persister le nettoyage
+      studioService.saveProject(cleanedProj); // persister le nettoyage en localStorage
     }
     setProject(cleanedProj);
     setMixDone(!!proj.mixedDataUrl);
