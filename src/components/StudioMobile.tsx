@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.189';
+const BUILD_VERSION = 'v7.6.190';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -705,8 +705,16 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     if (!project || project.tracks.length === 0) return;
     setIsMixing(true); setMixProgress(5); setMixLabel('Préparation des pistes…');
     try {
+      // FIX : filtrer les pistes voix principale pour ne garder que le takeSlot actif
+      // Sans ce filtre, les slots A et B jouent tous les deux en même temps
+      const filteredTracks = project.tracks.filter(t => {
+        if (t.trackIndex === 0 && !t.isGenerated && t.takeSlot) {
+          return t.takeSlot === takeSlot; // garder seulement le slot actif
+        }
+        return true; // harmonies et autres pistes : toujours incluses
+      });
       // Construire un projet temporaire incluant les slots layerisés
-      let mixProject = { ...project };
+      let mixProject = { ...project, tracks: filteredTracks };
       if (layerIds.length > 0) {
         // Les slots layerisés sont déjà dans project.tracks — on les réintroduit
         // avec un pan/gain différent SANS les dupliquer (on garde l'original muted=false)
