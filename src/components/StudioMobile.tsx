@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.191';
+const BUILD_VERSION = 'v7.6.192';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -708,8 +708,10 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       // FIX : filtrer les pistes voix principale pour ne garder que le takeSlot actif
       // Sans ce filtre, les slots A et B jouent tous les deux en même temps
       const filteredTracks = project.tracks.filter(t => {
-        if (t.trackIndex === 0 && !t.isGenerated && t.takeSlot) {
-          return t.takeSlot === takeSlot; // garder seulement le slot actif
+        if (t.trackIndex === 0 && !(t as any).isGenerated) {
+          const slot = t.takeSlot ?? 'A';
+          const active = takeSlot ?? 'A';
+          return slot === active; // garder seulement le slot actif (fallback A)
         }
         return true; // harmonies et autres pistes : toujours incluses
       });

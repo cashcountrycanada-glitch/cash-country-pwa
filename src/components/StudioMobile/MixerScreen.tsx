@@ -1018,9 +1018,13 @@ export default function MixerScreen({
               </p>
             )}
             {tracks.filter(t => !(t as any).isGenerated).filter(t => {
-              // FIX : n'afficher que le slot actif pour les voix principales (trackIndex 0)
-              // Les autres slots restent dans le projet mais ne sont pas affichés ni mixés
-              if (t.trackIndex === 0 && t.takeSlot) return t.takeSlot === takeSlot;
+              // N'afficher que le slot actif pour les voix principales
+              // Fallback : si takeSlot undefined, traiter comme slot 'A'
+              if (t.trackIndex === 0) {
+                const slot = t.takeSlot ?? 'A';
+                const active = takeSlot ?? 'A';
+                return slot === active;
+              }
               return true;
             }).map(track => (
               <TrackCard key={track.id} track={track} playingId={playingId}

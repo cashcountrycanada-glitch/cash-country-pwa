@@ -1091,10 +1091,17 @@ export const studioService = {
     if (!project) return null;
     // Stocker seulement les métadonnées dans localStorage (dataUrl est dans IndexedDB)
     const trackMeta = { ...track, dataUrl: undefined, blob: undefined };
-    if (track.takeSlot && track.trackIndex === 0) {
-      project.tracks = project.tracks.filter(t =>
-        !(t.trackIndex === 0 && !t.isGenerated && t.takeSlot === track.takeSlot)
-      );
+    if (track.trackIndex === 0 && !(track as any).isGenerated) {
+      // Voix principale : supprimer toutes les prises du même slot
+      // Si takeSlot undefined sur les deux → supprimer toutes les voix principales non-générées
+      const incomingSlot = track.takeSlot ?? 'A';
+      project.tracks = project.tracks.filter(t => {
+        if (t.trackIndex === 0 && !(t as any).isGenerated) {
+          const existingSlot = t.takeSlot ?? 'A';
+          return existingSlot !== incomingSlot; // garder seulement les autres slots
+        }
+        return true;
+      });
     } else {
       project.tracks = project.tracks.filter(t => t.trackIndex !== track.trackIndex);
     }
