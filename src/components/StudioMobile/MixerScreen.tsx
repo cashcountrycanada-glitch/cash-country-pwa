@@ -324,14 +324,24 @@ export default function MixerScreen({
       // Récupérer uniquement la couche demandée
       const wanted = generated.find(r => r.trackIndex === harmonyDef.trackIndex);
       if (wanted) {
+        // FIX stale project : relire le projet frais depuis localStorage avant d'ajouter
+        // Après chaque generateOne, localStorage a été mis à jour mais le closure React
+        // garde l'ancien project en mémoire — addTrackToProject lirait le bon projet
+        // mais onProjectUpdate doit recevoir le projet le plus récent
+        const freshProj = studioService.getOrCreateProject(project.id, project.title ?? '');
         const u = studioService.addTrackToProject(project.id, wanted);
         if (u) {
-          // Réinjecter la voix principale avec son dataUrl
+          // Réinjecter les dataUrls de toutes les pistes qui en ont une en mémoire
           const uFixed = {
             ...u,
-            tracks: u.tracks.map(t =>
-              t.id === mainVoice.id ? { ...t, dataUrl: mainVoice.dataUrl } : t
-            ),
+            tracks: u.tracks.map(t => {
+              if (t.id === mainVoice.id) return { ...t, dataUrl: mainVoice.dataUrl };
+              // Récupérer les dataUrls des harmonies déjà générées depuis __harmonyBlobs
+              const harmKey = `harmony_${mainVoice.id}_t${t.trackIndex}`;
+              const harmBlob = (window as any).__harmonyBlobs?.[harmKey];
+              if (!t.dataUrl && harmBlob && t.isGenerated) return { ...t, dataUrl: `opfs:${harmKey}` };
+              return t;
+            }),
           };
           onProjectUpdate(uFixed);
         }

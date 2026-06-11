@@ -84,7 +84,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   const [instUrl, setInstUrl] = useState<string | null>(null);
   const [vocalGuideUrl, setVocalGuideUrl] = useState<string | null>(null);
   const [vocalGuideVol, setVocalGuideVol] = useState(0.4);
-  const [previewInstVol, setPreviewInstVolRaw] = useState(0.1);
+  const [previewInstVol, setPreviewInstVolRaw] = useState(0.25);
   const setPreviewInstVol = useCallback((v: number) => {
     setPreviewInstVolRaw(v);
     try { if (previewInstRef.current) previewInstRef.current.volume = Math.max(0, Math.min(1, v)); } catch {}
@@ -468,14 +468,28 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       await waitVoice(playRef.current);
 
       if (useInst && pInst) {
+        // Boost voix +4dB via WebAudio GainNode quand la musique joue en même temps
+        // L'HTML audio est limité à volume=1.0 — le GainNode permet de dépasser
+        try {
+          const previewCtx = new AudioContext();
+          const src2 = previewCtx.createMediaElementSource(playRef.current);
+          const voiceBoost = previewCtx.createGain();
+          voiceBoost.gain.value = 1.58; // +4dB = Math.pow(10, 4/20)
+          src2.connect(voiceBoost);
+          voiceBoost.connect(previewCtx.destination);
+          (playRef.current as any).__previewCtx = previewCtx;
+        } catch {
+          // Si WebAudio échoue (déjà connecté iOS), fallback volume normal
+        }
         pInst.volume = previewInstVol;
         pInst.currentTime = 0;
-        playRef.current.volume = 1.0; // voix toujours au maximum
+        playRef.current.volume = 1.0;
         // Demarrer les deux ensemble
         const p1 = playRef.current.play();
         pInst.play().catch(() => {});
         await p1;
       } else {
+        playRef.current.volume = 1.0;
         await playRef.current.play();
       }
     } catch(e: any) {
@@ -488,6 +502,9 @@ export function useStudioAudio(selected: Song | null): AudioResult {
 
     setPlayingId(rec.id);
     playRef.current.onended = () => {
+      // Fermer le WebAudio context du preview voix
+      const pCtx = (playRef.current as any).__previewCtx as AudioContext | undefined;
+      if (pCtx) { try { pCtx.close(); } catch {} (playRef.current as any).__previewCtx = undefined; }
       setPlayingId(null);
       URL.revokeObjectURL(src);
       if (playRef.current) (playRef.current as any).__blobUrl = undefined;
