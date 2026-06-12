@@ -74,6 +74,8 @@ interface AudioResult {
   previewInstVol:   number;
   setPreviewInstVol: (v: number) => void;
   adjustInstOffset: (ms: number) => void;
+  instOffsetMs: number;
+  autoDetectOffset: (voiceDataUrl: string) => Promise<number | null>;
   playRecording:    (rec: MobileRecording) => Promise<void>;
   stopPlayback:     () => void;
   playMix:          (dataUrl: string) => void;
@@ -91,12 +93,105 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   }, []);
 
   // Décaler la position de l'inst pendant l'écoute (+ms = avancer, -ms = reculer)
+  const [instOffsetMs, setInstOffsetMs] = useState<number>(0);
   const adjustInstOffset = useCallback((ms: number) => {
+    setInstOffsetMs(prev => prev + ms);
     const pInst = previewInstRef.current;
     if (!pInst || pInst.paused) return;
     const newTime = Math.max(0, pInst.currentTime + ms / 1000);
     pInst.currentTime = newTime;
   }, []);
+  // Auto-détection du décalage voix/stem — corrélation croisée à deux passes
+  // Passe 1 (grossière) : blocs 50ms, ±5s → trouve la zone
+  // Passe 2 (fine)      : blocs 5ms,  ±300ms autour du résultat → précision ±5ms
+  const autoDetectOffset = useCallback(async (voiceDataUrl: string): Promise<number | null> => {
+    const vocalUrl = vocalGuideUrl;
+    if (!vocalUrl) return null;
+    try {
+      // Résoudre les blobs correctement (supporte data:, opfs:, blob:, http:)
+      let voiceBlob: Blob;
+      if (voiceDataUrl.startsWith('data:') || voiceDataUrl.startsWith('opfs:') || voiceDataUrl.startsWith('blob:')) {
+        voiceBlob = await studioService.resolveBlobAsync(voiceDataUrl);
+      } else {
+        voiceBlob = await fetch(voiceDataUrl).then(r => r.blob());
+      }
+      const stemBlob = await fetch(vocalUrl).then(r => r.blob());
+
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const [voiceAb, stemAb] = await Promise.all([
+        voiceBlob.arrayBuffer(),
+        stemBlob.arrayBuffer(),
+      ]);
+      const [voiceBuf, stemBuf] = await Promise.all([
+        ctx.decodeAudioData(voiceAb),
+        ctx.decodeAudioData(stemAb),
+      ]);
+      ctx.close();
+
+      const sr = voiceBuf.sampleRate;
+
+      // Extraction enveloppe RMS avec résolution variable
+      const extractEnv = (buf: AudioBuffer, blockMs: number): Float32Array => {
+        const blockSize = Math.floor(buf.sampleRate * blockMs / 1000);
+        const ch = buf.getChannelData(0);
+        const numBlocks = Math.floor(ch.length / blockSize);
+        const env = new Float32Array(numBlocks);
+        for (let b = 0; b < numBlocks; b++) {
+          let sum = 0;
+          for (let i = 0; i < blockSize; i++) { const s = ch[b*blockSize+i]||0; sum += s*s; }
+          env[b] = Math.sqrt(sum / blockSize);
+        }
+        return env;
+      };
+
+      // Corrélation normalisée
+      const crossCorr = (envA: Float32Array, envB: Float32Array, minLag: number, maxLag: number): number => {
+        let bestLag = minLag, bestCorr = -Infinity;
+        // Normalisation des enveloppes
+        const meanA = envA.reduce((a,b)=>a+b,0)/envA.length;
+        const meanB = envB.reduce((a,b)=>a+b,0)/envB.length;
+        const stdA  = Math.sqrt(envA.reduce((a,b)=>a+(b-meanA)**2,0)/envA.length) || 1;
+        const stdB  = Math.sqrt(envB.reduce((a,b)=>a+(b-meanB)**2,0)/envB.length) || 1;
+        for (let lag = minLag; lag <= maxLag; lag++) {
+          let corr = 0, n = 0;
+          for (let i = 0; i < envA.length; i++) {
+            const j = i - lag;
+            if (j >= 0 && j < envB.length) {
+              corr += ((envA[i]-meanA)/stdA) * ((envB[j]-meanB)/stdB);
+              n++;
+            }
+          }
+          if (n > 0) corr /= n;
+          if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
+        }
+        return bestLag;
+      };
+
+      // PASSE 1 : grossière — blocs 50ms, ±5s
+      const env50_voice = extractEnv(voiceBuf, 50);
+      const env50_stem  = extractEnv(stemBuf,  50);
+      const maxLag50    = Math.min(100, Math.floor(Math.min(env50_voice.length, env50_stem.length) / 2));
+      const bestLag50   = crossCorr(env50_voice, env50_stem, -maxLag50, maxLag50);
+      const coarseMs    = bestLag50 * 50; // ms
+
+      // PASSE 2 : fine — blocs 5ms, ±300ms autour du résultat grossier
+      const env5_voice  = extractEnv(voiceBuf, 5);
+      const env5_stem   = extractEnv(stemBuf,  5);
+      const fineCenter  = Math.round(coarseMs / 5); // en blocs 5ms
+      const fineRange   = 60; // ±300ms en blocs 5ms
+      const minLag5     = Math.max(-env5_voice.length>>1, fineCenter - fineRange);
+      const maxLag5     = Math.min( env5_voice.length>>1, fineCenter + fineRange);
+      const bestLag5    = crossCorr(env5_voice, env5_stem, minLag5, maxLag5);
+      const fineMs      = bestLag5 * 5; // ms
+
+      console.log('[autoDetectOffset] grossier:', coarseMs, 'ms → fin:', fineMs, 'ms');
+      return fineMs;
+    } catch (e) {
+      console.warn('[autoDetectOffset]', e);
+      return null;
+    }
+  }, [vocalGuideUrl]);
+
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [instLoading, setInstLoading] = useState(false);
   const [vocalLoading, setVocalLoading] = useState(false);
@@ -519,7 +614,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     instCached, vocalCached,
     instRef, vocalGuideRef, playRef, vocalVolRef,
     setVocalGuideVol: updateVocalVol,
-    previewInstVol, setPreviewInstVol, adjustInstOffset,
+    previewInstVol, setPreviewInstVol, adjustInstOffset, instOffsetMs, autoDetectOffset,
     playRecording, stopPlayback, playMix,
     getInstPlaybackTime,
   };

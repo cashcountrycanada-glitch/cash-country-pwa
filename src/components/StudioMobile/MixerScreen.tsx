@@ -54,6 +54,10 @@ interface Props {
   previewInstVol:   number;
   onPreviewInstVol: (v: number) => void;
   onInstOffset:     (ms: number) => void;
+  onAutoSync?:      () => void;
+  autoSyncing?:     boolean;
+  onAutoSync?:      () => void;
+  autoSyncing?:     boolean;
 }
 
 // Définition des harmonies avec info musicale
@@ -70,7 +74,7 @@ export default function MixerScreen({
   uploading, uploadDone, playRef,
   onBack, onGoSongs, onAddTrack, onPlay, onMute, onSolo, onVolume, onPan,
   onDelete, onMix, onPlayMix, onMasterize, onUploadMix, onGoComp,
-  onProjectUpdate, instBlob, takeSlot, previewInstVol, onPreviewInstVol, onInstOffset,
+  onProjectUpdate, instBlob, takeSlot, previewInstVol, onPreviewInstVol, onInstOffset, onAutoSync, autoSyncing,
 }: Props) {
   const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
   const [backupDone, setBackupDone]           = useState(false);
@@ -1002,7 +1006,15 @@ export default function MixerScreen({
               </span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] text-zinc-500 font-black uppercase whitespace-nowrap">⏱ Sync</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] text-zinc-500 font-black uppercase whitespace-nowrap">⏱ Sync</span>
+                {onAutoSync && (
+                  <button onClick={onAutoSync} disabled={autoSyncing}
+                    className="px-2 py-0.5 rounded-md bg-cyan-900 text-cyan-300 text-[9px] font-black active:bg-cyan-700 disabled:opacity-50">
+                    {autoSyncing ? '⏳ Analyse...' : '🎯 Auto'}
+                  </button>
+                )}
+              </div>
               <button onClick={() => onInstOffset(-200)}
                 className="flex-1 py-1 rounded-lg bg-zinc-800 text-zinc-300 text-[10px] font-black active:bg-zinc-700">
                 ◀◀ -200

@@ -1142,7 +1142,8 @@ export const studioService = {
   },
   async mixProject(
     project: TrackProject,
-    onProgress?: (label: string, pct: number) => void
+    onProgress?: (label: string, pct: number) => void,
+    instOffsetMs: number = 0
   ): Promise<Blob> {
     const yield_ = () => new Promise<void>(r => setTimeout(r, 40));
     const activeTracks = project.tracks.filter(t => !t.muted && t.dataUrl);
@@ -1220,7 +1221,19 @@ export const studioService = {
       const src = offline.createBufferSource(); src.buffer = buffer;
       const gainNode = offline.createGain(); gainNode.gain.value = track.gain ?? 1.0;
       const panner = offline.createStereoPanner(); panner.pan.value = track.pan ?? 0;
-      src.connect(gainNode); gainNode.connect(panner); panner.connect(offline.destination); src.start(0);
+      src.connect(gainNode); gainNode.connect(panner); panner.connect(offline.destination);
+      // Appliquer l'offset inst : décalage positif = inst démarre plus tard, négatif = plus tôt
+      const isInstTrack = (track as any).isInstrumental || (track as any).trackIndex === -1;
+      if (isInstTrack && instOffsetMs !== 0) {
+        const offsetSec = instOffsetMs / 1000;
+        if (offsetSec >= 0) {
+          src.start(offsetSec); // inst démarre après la voix
+        } else {
+          src.start(0, -offsetSec); // inst démarre à un point plus avancé
+        }
+      } else {
+        src.start(0);
+      }
     }
 
     // Animer la barre pendant le rendu OfflineAudioContext (durée inconnue, ~10-60s)

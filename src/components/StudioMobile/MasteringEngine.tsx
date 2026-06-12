@@ -223,7 +223,47 @@ async function mixVocalWithInst(
   iSrc.connect(iGain); iGain.connect(offline.destination);
   iSrc.start(0);
 
-  return offline.startRendering();
+  const mixed = await offline.startRendering();
+
+  // Side-chain ducking : l'instrumental baisse quand la voix est forte
+  // Technique standard radio/country — la voix ressort toujours clairement
+  const L = mixed.getChannelData(0);
+  const R = mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : mixed.getChannelData(0);
+  const vL = vocalBuf.getChannelData(0);
+  const vR = vocalBuf.numberOfChannels > 1 ? vocalBuf.getChannelData(1) : vocalBuf.getChannelData(0);
+
+  // Calculer l'enveloppe de la voix par blocs de 10ms
+  const blockSz = Math.floor(sr * 0.010);
+  const duckThresh = 0.08;   // seuil vocal pour activer le ducking
+  const duckAmount = 0.30;    // réduction max de l'inst (-4dB) quand voix forte
+  const duckRelease = Math.floor(sr * 0.15); // release 150ms — naturel
+  let duckEnv = 1.0;
+  let duckRelCount = 0;
+
+  for (let i = 0; i < L.length; i++) {
+    // Énergie vocale instantanée
+    const vi = i < vL.length ? Math.abs(vL[i]*0.5 + vR[i]*0.5) : 0;
+    if (vi > duckThresh) {
+      duckEnv = 1.0 - duckAmount; // inst baisse quand voix forte
+      duckRelCount = duckRelease;
+    } else if (duckRelCount > 0) {
+      duckRelCount--;
+      duckEnv = (1.0 - duckAmount) + duckAmount * (1 - duckRelCount / duckRelease);
+    } else {
+      duckEnv = 1.0;
+    }
+    // Appliquer le ducking uniquement sur la partie instrumentale
+    // Approximation : le signal mixed - voix ≈ instrumental
+    // On applique sur L et R directement avec atténuation proportionnelle
+    L[i] *= duckEnv;
+    R[i] *= duckEnv;
+    // Réinjecter la voix à plein volume (annule la réduction sur la voix)
+    if (i < vL.length) {
+      L[i] += vL[i] * (1.0 - duckEnv);
+      R[i] += (vR.length > 0 ? vR[i] : vL[i]) * (1.0 - duckEnv);
+    }
+  }
+  return mixed;
 }
 
 // Tape saturation douce — signature chaleur analogique
@@ -242,18 +282,44 @@ function applySaturation(data: Float32Array, drive: number = 0.3): Float32Array 
 
 // Noise gate — coupe le bruit de fond entre les phrases vocales
 // Seuil en amplitude linéaire, release doux pour éviter les clics
-function applyNoiseGate(data: Float32Array, thresholdDb: number = -60, releaseMs: number = 50, sr: number = 44100): Float32Array {
-  const threshold = Math.pow(10, thresholdDb / 20);
+function applyNoiseGate(data: Float32Array, thresholdDb: number = -65, releaseMs: number = 150, sr: number = 44100): Float32Array {
+  // Seuil adaptatif : calculer le plancher de bruit du signal
+  // Utiliser le 10e percentile de l'énergie comme référence pour le bruit de fond
+  const blockSize = Math.floor(sr * 0.01); // blocs 10ms
+  const numBlocks = Math.floor(data.length / blockSize);
+  const blockEnergies: number[] = [];
+  for (let b = 0; b < numBlocks; b++) {
+    let e = 0;
+    for (let i = b*blockSize; i < (b+1)*blockSize; i++) e += data[i]*data[i];
+    blockEnergies.push(Math.sqrt(e/blockSize));
+  }
+  blockEnergies.sort((a,b) => a-b);
+  // Plancher = médiane des 15% plus silencieux + 6dB de marge
+  const noiseFloor = blockEnergies[Math.floor(numBlocks * 0.15)] * 2.0;
+  // Seuil = max(noiseFloor * 3, seuil demandé)
+  const requestedThresh = Math.pow(10, thresholdDb / 20);
+  const threshold = Math.max(requestedThresh, noiseFloor * 3);
+
   const releaseSamp = Math.floor((releaseMs / 1000) * sr);
+  const holdSamp    = Math.floor(0.12 * sr); // hold 120ms — préserve les fins de phrases
   const out = new Float32Array(data.length);
   let gateOpen = false;
   let holdCount = 0;
+  let releaseCount = 0;
   for (let i = 0; i < data.length; i++) {
     const amp = Math.abs(data[i]);
-    if (amp > threshold) { gateOpen = true; holdCount = releaseSamp; }
-    else if (holdCount > 0) { holdCount--; }
-    else { gateOpen = false; }
-    const gain = gateOpen ? 1.0 : Math.max(0, holdCount / releaseSamp);
+    if (amp > threshold) {
+      gateOpen = true; holdCount = holdSamp; releaseCount = releaseSamp;
+    } else if (holdCount > 0) {
+      holdCount--;
+    } else if (releaseCount > 0) {
+      releaseCount--;
+      gateOpen = releaseCount > 0;
+    } else {
+      gateOpen = false;
+    }
+    // Fermeture douce avec envelope — évite les clics
+    const gain = gateOpen ? 1.0 : Math.max(0, releaseCount / releaseSamp);
     out[i] = data[i] * gain;
   }
   return out;
@@ -276,6 +342,24 @@ async function stereoWiden(buf: AudioBuffer, widthGain: number = 1.3): Promise<A
     const side = (L[i] - R[i]) * 0.5 * widthGain;
     outL[i] = mid + side;
     outR[i] = mid - side;
+  }
+  // Vérification compatibilité mono : le sum L+R ne doit pas annuler la voix
+  // (phase cancellation si trop de widening sur signal déjà stéréo)
+  let monoIssue = false;
+  for (let i = 0; i < Math.min(len, 1000); i++) {
+    const mono = outL[i] + outR[i];
+    const original = L[i] + R[i];
+    if (original !== 0 && Math.abs(mono/original) < 0.3) { monoIssue = true; break; }
+  }
+  // Si problème mono détecté, réduire le widening automatiquement
+  if (monoIssue) {
+    const safeWidth = (widthGain - 1) * 0.5 + 1; // diminuer de 50%
+    for (let i = 0; i < len; i++) {
+      const mid  = (L[i] + R[i]) * 0.5;
+      const side = (L[i] - R[i]) * 0.5 * safeWidth;
+      outL[i] = mid + side;
+      outR[i] = mid - side;
+    }
   }
   // Limiter léger post-widening pour éviter les clips
   let peak = 0;
@@ -304,7 +388,7 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   for (let c = 0; c < ch; c++) {
     let data = new Float32Array(buf.getChannelData(c));
     // Noise gate : coupe le bruit sous -58dB
-    data = applyNoiseGate(data, -58, 80, sr);
+    data = applyNoiseGate(data, -65, 150, sr); // seuil adaptatif + hold 120ms
     // Saturation douce : drive très léger pour la chaleur analogique
     const driveAmt = 0.12 + Math.abs(s.lowGain) * 0.01;
     data = applySaturation(data, driveAmt);
