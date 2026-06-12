@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.202';
+const BUILD_VERSION = 'v7.6.203';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -730,14 +730,24 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     try {
       // FIX : filtrer les pistes voix principale pour ne garder que le takeSlot actif
       // Sans ce filtre, les slots A et B jouent tous les deux en même temps
-      const filteredTracks = project.tracks.filter(t => {
-        if (t.trackIndex === 0 && !(t as any).isGenerated) {
+      // Filtrer les voix dupliquées — garder seulement le slot actif
+      const activeSlot = takeSlot ?? 'A';
+      const seenVoiceInMix = new Set<string>();
+      const filteredTracks = project.tracks.filter((t: any) => {
+        if (t.trackIndex === 0 && !t.isGenerated) {
           const slot = t.takeSlot ?? 'A';
-          const active = takeSlot ?? 'A';
-          return slot === active; // garder seulement le slot actif (fallback A)
+          if (seenVoiceInMix.has(slot)) return false;
+          seenVoiceInMix.add(slot);
+          return slot === activeSlot;
         }
-        return true; // harmonies et autres pistes : toujours incluses
+        return true;
       });
+      // Fallback : si aucune voix principale trouvée, prendre la première dispo
+      const hasMainVoice = filteredTracks.some((t: any) => t.trackIndex === 0 && !t.isGenerated);
+      if (!hasMainVoice) {
+        const fallback = project.tracks.find((t: any) => t.trackIndex === 0 && !t.isGenerated);
+        if (fallback) filteredTracks.unshift(fallback);
+      }
       // Construire un projet temporaire incluant les slots layerisés
       let mixProject = { ...project, tracks: filteredTracks };
       if (layerIds.length > 0) {

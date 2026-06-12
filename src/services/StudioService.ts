@@ -1091,14 +1091,27 @@ export const studioService = {
     if (!project) return null;
     // Stocker seulement les métadonnées dans localStorage (dataUrl est dans IndexedDB)
     const trackMeta = { ...track, dataUrl: undefined, blob: undefined };
+
+    // DEDUP COMPLET avant ajout — nettoyer tous les doublons existants d'abord
+    // (même id ou même slot pour voix principale)
+    const seenIds = new Set<string>();
+    const seenVoiceSlots = new Set<string>();
+    project.tracks = project.tracks.filter((t: any) => {
+      if (t.id && seenIds.has(t.id)) return false;
+      if (t.id) seenIds.add(t.id);
+      if (t.trackIndex === 0 && !t.isGenerated) {
+        const slot = t.takeSlot ?? 'A';
+        if (seenVoiceSlots.has(slot)) return false;
+        seenVoiceSlots.add(slot);
+      }
+      return true;
+    });
+
     if (track.trackIndex === 0 && !(track as any).isGenerated) {
-      // Voix principale : supprimer toutes les prises du même slot
-      // Si takeSlot undefined sur les deux → supprimer toutes les voix principales non-générées
       const incomingSlot = track.takeSlot ?? 'A';
-      project.tracks = project.tracks.filter(t => {
-        if (t.trackIndex === 0 && !(t as any).isGenerated) {
-          const existingSlot = t.takeSlot ?? 'A';
-          return existingSlot !== incomingSlot; // garder seulement les autres slots
+      project.tracks = project.tracks.filter((t: any) => {
+        if (t.trackIndex === 0 && !t.isGenerated) {
+          return (t.takeSlot ?? 'A') !== incomingSlot;
         }
         return true;
       });
@@ -1219,7 +1232,10 @@ export const studioService = {
     const offline = new OfflineAudioContext(2, Math.ceil(maxDuration * sampleRate) + 4096, sampleRate);
     for (const { track, buffer } of shifted) {
       const src = offline.createBufferSource(); src.buffer = buffer;
-      const gainNode = offline.createGain(); gainNode.gain.value = track.gain ?? 1.0;
+      const gainNode = offline.createGain();
+      // Plafonner le gain à 1.0 dans le mix — évite le clipping
+      // Le CLIP indicator est informatif mais le mix ne doit pas distordre
+      gainNode.gain.value = Math.min(1.0, track.gain ?? 1.0);
       const panner = offline.createStereoPanner(); panner.pan.value = track.pan ?? 0;
       src.connect(gainNode); gainNode.connect(panner); panner.connect(offline.destination);
       // Appliquer l'offset inst : décalage positif = inst démarre plus tard, négatif = plus tôt

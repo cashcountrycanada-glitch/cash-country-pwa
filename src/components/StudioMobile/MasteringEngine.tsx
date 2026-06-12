@@ -258,7 +258,7 @@ async function mixVocalWithInst(
   const vSrc = offline.createBufferSource();
   vSrc.buffer = vocalBuf;
   const vGain = offline.createGain();
-  vGain.gain.value = 1.0;
+  vGain.gain.value = 1.26; // +2dB — voix ressort clairement au-dessus de l inst
   vSrc.connect(vGain); vGain.connect(offline.destination);
   vSrc.start(0);
 
