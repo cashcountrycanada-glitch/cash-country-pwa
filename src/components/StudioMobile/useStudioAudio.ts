@@ -82,6 +82,32 @@ interface AudioResult {
   getInstPlaybackTime: () => number; // temps de lecture actuel du stem inst (sec)
 }
 
+// Convertir AudioBuffer en WAV pour l'élément <audio>
+function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
+  const numCh = buffer.numberOfChannels;
+  const sr    = buffer.sampleRate;
+  const len   = buffer.length;
+  const wavLen = 44 + len * numCh * 2;
+  const buf   = new ArrayBuffer(wavLen);
+  const view  = new DataView(buf);
+  const ws = (o: number, s: string) => { for (let i=0;i<s.length;i++) view.setUint8(o+i, s.charCodeAt(i)); };
+  ws(0,'RIFF'); view.setUint32(4,36+len*numCh*2,true); ws(8,'WAVE'); ws(12,'fmt ');
+  view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,numCh,true);
+  view.setUint32(24,sr,true); view.setUint32(28,sr*numCh*2,true);
+  view.setUint16(32,numCh*2,true); view.setUint16(34,16,true);
+  ws(36,'data'); view.setUint32(40,len*numCh*2,true);
+  let off = 44;
+  const ch0 = buffer.getChannelData(0);
+  const ch1 = numCh > 1 ? buffer.getChannelData(1) : ch0;
+  for (let i=0;i<len;i++) {
+    const sL = Math.max(-1,Math.min(1,ch0[i]));
+    const sR = Math.max(-1,Math.min(1,ch1[i]));
+    view.setInt16(off, sL<0?sL*0x8000:sL*0x7FFF, true); off+=2;
+    if (numCh > 1) { view.setInt16(off, sR<0?sR*0x8000:sR*0x7FFF, true); off+=2; }
+  }
+  return buf;
+}
+
 export function useStudioAudio(selected: Song | null): AudioResult {
   const [instUrl, setInstUrl] = useState<string | null>(null);
   const [vocalGuideUrl, setVocalGuideUrl] = useState<string | null>(null);
@@ -563,9 +589,46 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       await waitVoice(playRef.current);
 
       if (useInst && pInst) {
-        // Équilibre voix/inst : voix à 1.0, inst réduit à previewInstVol * 0.5
-        // createMediaElementSource() est évité — dangereux sur iOS (contexte permanent)
-        pInst.volume = previewInstVol * 0.5; // inst plus bas pour laisser la voix dominer
+        // Normaliser le blob voix avant preview pour qu'elle soit à même niveau que le stem
+        // On mesure le peak et on booste jusqu'à -1dBFS via OfflineAudioContext
+        let normalizedSrc = src;
+        try {
+          const normCtx = new OfflineAudioContext(1, 1, 44100); // juste pour décoder
+          const ab = await fixedBlob.arrayBuffer();
+          const actx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const decoded = await actx.decodeAudioData(ab);
+          actx.close();
+          // Trouver le peak
+          let peak = 0;
+          for (let c = 0; c < decoded.numberOfChannels; c++) {
+            const ch = decoded.getChannelData(c);
+            for (let i = 0; i < ch.length; i++) { const a = Math.abs(ch[i]); if (a > peak) peak = a; }
+          }
+          // Si la voix est plus de 6dB sous le maximum → booster
+          if (peak > 0.001 && peak < 0.5) {
+            const targetGain = 0.89 / peak; // -1dBFS target
+            const offCtx = new OfflineAudioContext(
+              decoded.numberOfChannels, decoded.length, decoded.sampleRate
+            );
+            const src2 = offCtx.createBufferSource(); src2.buffer = decoded;
+            const gainN = offCtx.createGain(); gainN.gain.value = targetGain;
+            src2.connect(gainN); gainN.connect(offCtx.destination); src2.start(0);
+            const normBuf = await offCtx.startRendering();
+            // Convertir en Blob WAV pour l'élément audio
+            const wavData = audioBufferToWav(normBuf);
+            const normBlob = new Blob([wavData], { type: 'audio/wav' });
+            const prevNorm = (playRef.current as any).__normUrl as string | undefined;
+            if (prevNorm) URL.revokeObjectURL(prevNorm);
+            normalizedSrc = URL.createObjectURL(normBlob);
+            (playRef.current as any).__normUrl = normalizedSrc;
+            playRef.current.src = normalizedSrc;
+            playRef.current.load();
+            await waitVoice(playRef.current);
+          }
+        } catch (e) {
+          console.warn('[Preview] Normalisation échouée, lecture directe', e);
+        }
+        pInst.volume = previewInstVol * 0.4;
         pInst.currentTime = 0;
         playRef.current.volume = 1.0;
         const p1 = playRef.current.play();

@@ -221,12 +221,12 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
         {/* VOL */}
         <div className="flex items-center gap-2">
           <span className="text-[9px] text-zinc-700 font-black uppercase w-7 shrink-0">VOL</span>
-          <input type="range" min="0" max="2" step="0.05" value={gain}
+          <input type="range" min="0" max="1" step="0.02" value={Math.min(gain, 1)}
             onChange={e => onVolume(track.trackIndex!, parseFloat(e.target.value))}
             className="flex-1 h-1 rounded-full appearance-none cursor-pointer"
             style={{
               accentColor: isClipping ? '#ef4444' : preset.color,
-              background: `linear-gradient(to right, ${isClipping ? '#ef4444' : preset.color} ${(gain/2)*100}%, #1e1e1e ${(gain/2)*100}%)`,
+              background: `linear-gradient(to right, ${isClipping ? '#ef4444' : preset.color} ${Math.min(gain,1)*100}%, #1e1e1e ${Math.min(gain,1)*100}%)`,
             }}/>
           <div className="flex items-center gap-1 w-12 justify-end">
             {isClipping && <span className="text-[7px] font-black text-red-500 uppercase animate-pulse">CLIP</span>}

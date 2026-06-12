@@ -238,8 +238,8 @@ async function decodeBlob(blob: Blob): Promise<AudioBuffer> {
   }
 }
 
-// Mixer deux AudioBuffers (vocal + instrumental) dans un OfflineAudioContext
-// instGainDb : niveau instrumental en dB relatif à la voix (ex: -3 = instrumental 3dB sous la voix)
+// Mixer vocal + instrumental avec balance pro
+// Approche : normaliser les deux séparément, puis mixer avec ratio fixe voix/inst
 async function mixVocalWithInst(
   vocalBuf: AudioBuffer,
   instBuf:  AudioBuffer,
@@ -247,66 +247,85 @@ async function mixVocalWithInst(
 ): Promise<AudioBuffer> {
   const sr       = Math.max(vocalBuf.sampleRate, instBuf.sampleRate);
   const duration = Math.max(vocalBuf.duration, instBuf.duration);
-  const offline  = new OfflineAudioContext(2, Math.ceil(duration * sr), sr);
 
-  // Normaliser l'instrumental par rapport à la voix pour un niveau cohérent
-  const vocalLufs = analyzeLoudness(vocalBuf);
-  const instLufs  = analyzeLoudness(instBuf);
-  const normDb    = vocalLufs - instLufs;
-  const instLinear = Math.pow(10, (normDb + instGainDb) / 20);
+  // Mesurer les peaks des deux signaux
+  const peakOf = (buf: AudioBuffer): number => {
+    let pk = 0;
+    for (let c = 0; c < buf.numberOfChannels; c++) {
+      const ch = buf.getChannelData(c);
+      for (let i = 0; i < ch.length; i++) { const a = Math.abs(ch[i]); if (a > pk) pk = a; }
+    }
+    return pk;
+  };
+  const vocalPeak = peakOf(vocalBuf);
+  const instPeak  = peakOf(instBuf);
 
+  // Normaliser chaque signal à -1dBFS séparément
+  // Puis appliquer le ratio voix/inst souhaité
+  const targetPeak = 0.891; // -1dBFS
+  const vocalGain  = vocalPeak > 0.001 ? targetPeak / vocalPeak : 1.0;
+  // inst à -3dB sous la voix par défaut (ratio 0.708)
+  const instRatio  = Math.pow(10, instGainDb / 20); // ex: -3dB → 0.708
+  const instGain   = instPeak  > 0.001 ? (targetPeak / instPeak) * instRatio : instRatio;
+
+  const offline = new OfflineAudioContext(2, Math.ceil(duration * sr), sr);
+
+  // Voix — canal L et R séparés pour stéréo propre
   const vSrc = offline.createBufferSource();
   vSrc.buffer = vocalBuf;
   const vGain = offline.createGain();
-  vGain.gain.value = 1.26; // +2dB — voix ressort clairement au-dessus de l inst
+  vGain.gain.value = vocalGain;
   vSrc.connect(vGain); vGain.connect(offline.destination);
   vSrc.start(0);
 
+  // Instrumental
   const iSrc = offline.createBufferSource();
   iSrc.buffer = instBuf;
   const iGain = offline.createGain();
-  iGain.gain.value = Math.max(0.1, Math.min(2.0, instLinear));
+  iGain.gain.value = instGain;
   iSrc.connect(iGain); iGain.connect(offline.destination);
   iSrc.start(0);
 
   const mixed = await offline.startRendering();
 
-  // Side-chain ducking : l'instrumental baisse quand la voix est forte
-  // Technique standard radio/country — la voix ressort toujours clairement
-  const L = mixed.getChannelData(0);
-  const R = mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : mixed.getChannelData(0);
+  // Side-chain ducking propre — travaille sur des buffers séparés, pas le mix
+  // Calcul de l'enveloppe vocale
   const vL = vocalBuf.getChannelData(0);
   const vR = vocalBuf.numberOfChannels > 1 ? vocalBuf.getChannelData(1) : vocalBuf.getChannelData(0);
+  const L  = mixed.getChannelData(0);
+  const R  = mixed.numberOfChannels > 1 ? mixed.getChannelData(1) : mixed.getChannelData(0);
 
-  // Calculer l'enveloppe de la voix par blocs de 10ms
-  const blockSz = Math.floor(sr * 0.010);
-  const duckThresh = 0.08;   // seuil vocal pour activer le ducking
-  const duckAmount = 0.30;    // réduction max de l'inst (-4dB) quand voix forte
-  const duckRelease = Math.floor(sr * 0.15); // release 150ms — naturel
-  let duckEnv = 1.0;
-  let duckRelCount = 0;
+  const duckThresh  = 0.15;  // seuil sur voix normalisée
+  const duckAmount  = 0.20;  // inst baisse de 20% (-2dB) quand voix forte
+  const attackSamp  = Math.floor(sr * 0.005);  // attack 5ms
+  const releaseSamp = Math.floor(sr * 0.150);  // release 150ms
+  let env = 1.0;
+  let holdCount = 0;
+  const holdSamp = Math.floor(sr * 0.050); // hold 50ms
 
   for (let i = 0; i < L.length; i++) {
-    // Énergie vocale instantanée
-    const vi = i < vL.length ? Math.abs(vL[i]*0.5 + vR[i]*0.5) : 0;
-    if (vi > duckThresh) {
-      duckEnv = 1.0 - duckAmount; // inst baisse quand voix forte
-      duckRelCount = duckRelease;
-    } else if (duckRelCount > 0) {
-      duckRelCount--;
-      duckEnv = (1.0 - duckAmount) + duckAmount * (1 - duckRelCount / duckRelease);
-    } else {
-      duckEnv = 1.0;
-    }
-    // Appliquer le ducking uniquement sur la partie instrumentale
-    // Approximation : le signal mixed - voix ≈ instrumental
-    // On applique sur L et R directement avec atténuation proportionnelle
-    L[i] *= duckEnv;
-    R[i] *= duckEnv;
-    // Réinjecter la voix à plein volume (annule la réduction sur la voix)
+    const vi = i < vL.length
+      ? Math.abs(vL[i] * vocalGain * 0.5 + vR[i] * vocalGain * 0.5)
+      : 0;
+    const targetEnv = vi > duckThresh ? (1.0 - duckAmount) : 1.0;
+    if (vi > duckThresh) { holdCount = holdSamp; }
+    else if (holdCount > 0) { holdCount--; }
+
+    // Envelope follower smooth
+    const coeff = targetEnv < env ? (1 - Math.exp(-1/attackSamp)) : (1 - Math.exp(-1/releaseSamp));
+    if (holdCount === 0) env += (targetEnv - env) * coeff;
+
+    // Appliquer le ducking sur le mix complet, puis rebooter la voix
+    const vocalComponent = i < vL.length
+      ? (vL[i] * vocalGain * 0.5 + vR[i] * vocalGain * 0.5)
+      : 0;
+    // Atténuer le mix
+    L[i] *= env;
+    R[i] *= env;
+    // Compenser la réduction sur la voix (la voix reste pleine)
     if (i < vL.length) {
-      L[i] += vL[i] * (1.0 - duckEnv);
-      R[i] += (vR.length > 0 ? vR[i] : vL[i]) * (1.0 - duckEnv);
+      L[i] += vL[i] * vocalGain * (1.0 - env);
+      R[i] += vR[i] * vocalGain * (1.0 - env);
     }
   }
   return mixed;

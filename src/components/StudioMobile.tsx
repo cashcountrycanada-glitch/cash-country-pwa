@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.203';
+const BUILD_VERSION = 'v7.6.206';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -422,10 +422,14 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       }
       return true;
     });
-    const cleanedProj = { ...proj, tracks: cleanedTracks };
-    if (cleanedTracks.length !== proj.tracks.length) {
-      studioService.saveProject(cleanedProj); // persister le nettoyage en localStorage
-    }
+    // Normaliser les gains trop élevés (> 1.0 = CLIP)
+    const normalizedTracks = cleanedTracks.map((t: any) => ({
+      ...t,
+      gain: t.gain && t.gain > 1.0 ? 1.0 : t.gain,
+    }));
+    const cleanedProj = { ...proj, tracks: normalizedTracks };
+    // Toujours sauvegarder pour purger localStorage des doublons
+    studioService.saveProject(cleanedProj);
     setProject(cleanedProj);
     setMixDone(!!proj.mixedDataUrl);
 
