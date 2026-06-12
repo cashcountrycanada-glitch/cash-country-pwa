@@ -206,16 +206,19 @@ function autotune(data, strength, speedMs, sr) {
   const hopSize=Math.max(32,Math.floor(sr*speedMs/1000/4));
   const out=new Float32Array(data.length);
   let pitchRatio=1.0;
+  let cachedF0=0, frameIdx=0;
   const smoothK=Math.exp(-hopSize/(sr*speedMs/1000));
   for (let pos=0;pos<data.length;pos+=hopSize) {
     const end=Math.min(pos+hopSize,data.length);
-    if (pos+frameSize<data.length) {
+    // YIN throttlé toutes les 40 frames (~930ms) — économie CPU ×40
+    if (frameIdx % 40 === 0 && pos+frameSize<data.length) {
       const frame=data.slice(pos,pos+frameSize);
-      const f0=detectF0_YIN(frame,sr);
-      if (f0>60&&f0<1200) {
-        const target=findNearest(f0);
-        pitchRatio=pitchRatio*smoothK+(target/f0)*(1-smoothK);
-      }
+      cachedF0=detectF0_YIN(frame,sr);
+    }
+    frameIdx++;
+    if (cachedF0>60&&cachedF0<1200) {
+      const target=findNearest(cachedF0);
+      pitchRatio=pitchRatio*smoothK+(target/cachedF0)*(1-smoothK);
     }
     const applied=1+(pitchRatio-1)*strength;
     for (let i=pos;i<end;i++) {

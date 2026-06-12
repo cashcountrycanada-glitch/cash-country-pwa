@@ -181,6 +181,52 @@ function measureTruePeak(buffer: AudioBuffer): number {
   return maxTP > 0 ? 20 * Math.log10(maxTP) : -100; // dBTP
 }
 
+// Rendu OfflineAudioContext segmenté pour iOS
+// Évite le freeze/écran noir sur les longues chansons (> 2 minutes)
+// Découpe en segments de 60s, rendu séquentiel avec yield entre chaque
+async function renderOfflineSegmented(
+  buildGraph: (ctx: OfflineAudioContext) => void,
+  totalSamples: number,
+  sampleRate: number,
+  onProgress?: (pct: number) => void
+): Promise<AudioBuffer> {
+  const segmentSamples = sampleRate * 55; // segments 55s — marge pour iOS
+  const numSegments = Math.ceil(totalSamples / segmentSamples);
+
+  // Si court (<55s) → rendu direct sans segmentation
+  if (numSegments <= 1) {
+    const ctx = new OfflineAudioContext(2, totalSamples, sampleRate);
+    buildGraph(ctx);
+    return ctx.startRendering();
+  }
+
+  // Rendu segmenté avec pause entre chaque pour libérer le thread iOS
+  const allChannelData: Float32Array[][] = [[], []];
+  for (let seg = 0; seg < numSegments; seg++) {
+    const start  = seg * segmentSamples;
+    const length = Math.min(segmentSamples, totalSamples - start);
+    // Yield pour laisser respirer le thread iOS entre segments
+    await new Promise<void>(r => setTimeout(r, 20));
+    onProgress?.(Math.round((seg / numSegments) * 80));
+    const ctx = new OfflineAudioContext(2, length, sampleRate);
+    buildGraph(ctx);
+    const rendered = await ctx.startRendering();
+    allChannelData[0].push(new Float32Array(rendered.getChannelData(0)));
+    allChannelData[1].push(new Float32Array(rendered.getChannelData(1)));
+  }
+
+  // Concaténer tous les segments
+  const finalCtx = new OfflineAudioContext(2, totalSamples, sampleRate);
+  const finalBuf = finalCtx.createBuffer(2, totalSamples, sampleRate);
+  for (let c = 0; c < 2; c++) {
+    const ch = finalBuf.getChannelData(c);
+    let offset = 0;
+    for (const seg of allChannelData[c]) { ch.set(seg, offset); offset += seg.length; }
+  }
+  onProgress?.(85);
+  return finalBuf;
+}
+
 async function decodeBlob(blob: Blob): Promise<AudioBuffer> {
   const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
   try {
@@ -367,6 +413,8 @@ async function stereoWiden(buf: AudioBuffer, widthGain: number = 1.3): Promise<A
   if (peak > 0.98) { const g = 0.95 / peak; for (let i = 0; i < len; i++) { outL[i] *= g; outR[i] *= g; } }
   const src = offline.createBufferSource(); src.buffer = outBuf;
   src.connect(offline.destination); src.start(0);
+  // Yield pour iOS avant render
+  await new Promise<void>(r => setTimeout(r, 20));
   return offline.startRendering();
 }
 
@@ -387,14 +435,14 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const step1Buf = offline1.createBuffer(ch, len, sr);
   for (let c = 0; c < ch; c++) {
     let data = new Float32Array(buf.getChannelData(c));
-    // Noise gate : coupe le bruit sous -58dB
-    data = applyNoiseGate(data, -65, 150, sr); // seuil adaptatif + hold 120ms
-    // Saturation douce : drive très léger pour la chaleur analogique
+    data = applyNoiseGate(data, -65, 150, sr);
     const driveAmt = 0.12 + Math.abs(s.lowGain) * 0.01;
     data = applySaturation(data, driveAmt);
     step1Buf.getChannelData(c).set(data);
   }
   const s1src = offline1.createBufferSource(); s1src.buffer = step1Buf;
+  // Yield avant le render pour libérer le thread iOS
+  await new Promise<void>(r => setTimeout(r, 30));
 
   // High-pass 30Hz — sub-bass inutile
   const hpf = offline1.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 30; hpf.Q.value = 0.6;
