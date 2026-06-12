@@ -781,18 +781,29 @@ export default function MixerScreen({
                           </div>
                           <p className="text-[10px] text-zinc-500">{h.desc}</p>
 
-                          {/* Waveform si générée */}
-                          {hasTrack && existingTrack?.dataUrl && (
+                          {/* Waveform si générée — vérifier que le blob est disponible */}
+                          {hasTrack && existingTrack?.dataUrl && !existingTrack.dataUrl.startsWith('opfs:') && (
                             <div className="mt-2">
                               <WaveformBar
                                 dataUrl={existingTrack.dataUrl}
                                 color={h.color}
                                 height={20}
                                 points={50}
-                                playbackPct={playingId === existingTrack.id ? undefined : undefined}
                               />
                             </div>
                           )}
+                          {hasTrack && existingTrack?.dataUrl?.startsWith('opfs:') && (() => {
+                            // Blob opfs: — vérifier s'il est en mémoire avant d'afficher la waveform
+                            const harmKey = existingTrack.dataUrl.replace('opfs:', '');
+                            const inMem = !!(window as any).__harmonyBlobs?.[harmKey];
+                            return inMem ? (
+                              <div className="mt-2">
+                                <WaveformBar dataUrl={existingTrack.dataUrl} color={h.color} height={20} points={50}/>
+                              </div>
+                            ) : (
+                              <div className="mt-2 h-5 rounded bg-zinc-800 opacity-40"/>
+                            );
+                          })()}
 
                           {/* Progression génération */}
                           {isGen && (

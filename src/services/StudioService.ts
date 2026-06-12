@@ -1455,7 +1455,7 @@ export const studioService = {
       const safeTitle = (mainVoice.songTitle || 'song').replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
       const fileName = `${safeTitle}_T${layer.trackIndex}_GEN_${Date.now()}.wav`;
       const rec: MobileRecording = {
-        id: `GEN-${layer.trackIndex}-${Date.now()}`, songId: mainVoice.songId, songTitle: mainVoice.songTitle, artist: mainVoice.artist,
+        id: `GEN-${layer.trackIndex}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, songId: mainVoice.songId, songTitle: mainVoice.songTitle, artist: mainVoice.artist,
         duration: mainVoice.duration, recordedAt: Date.now(), dataUrl, transferred: false, fileName,
         trackIndex: layer.trackIndex, trackLabel: layer.trackLabel, pitchShift: layer.isDouble ? 0 : layer.pitch,
         gain: layer.gain, pan: layer.pan, projectId: project.id, isGenerated: true, fxPresetId: layer.suggestedFxId
