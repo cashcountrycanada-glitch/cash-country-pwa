@@ -1255,13 +1255,12 @@ export const studioService = {
       project.tracks = project.tracks.filter(t => t.trackIndex !== track.trackIndex);
     }
     project.tracks.push(trackMeta as MobileRecording); this.saveProject(project);
-    // Sauvegarder backup_voice si la piste a un dataUrl en memoire
+    // Sauvegarder backup_voice en arriere-plan (fire-and-forget — pas de await)
     if (track.trackIndex === 0 && !(track as any).isGenerated && track.dataUrl && !track.dataUrl.startsWith('opfs:')) {
-      try {
-        const db2 = getOfflineDB();
-        const b2 = await this.resolveBlobAsync(track.dataUrl);
-        if (b2 && b2.size > 1000) await db2.saveAudio(`backup_voice_${track.id}`, b2, { type: 'backup_voice', savedAt: Date.now() });
-      } catch {}
+      const db2 = getOfflineDB();
+      this.resolveBlobAsync(track.dataUrl).then(b2 => {
+        if (b2 && b2.size > 1000) db2.saveAudio(`backup_voice_${track.id}`, b2, { type: 'backup_voice', savedAt: Date.now() }).catch(() => {});
+      }).catch(() => {});
     }
     // Retourner le projet avec le vrai track (dataUrl inclus) pour le state React en mémoire
     const projectWithData = { ...project, tracks: [...project.tracks.filter(t => t.id !== track.id), track] };
