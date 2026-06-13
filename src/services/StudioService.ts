@@ -649,6 +649,17 @@ export const studioService = {
             type: 'recording',
             savedAt: Date.now(),
           });
+          // backup_voice : copie redondante sous clé différente
+          // Survive si rec_ est corrompu ou si l id change après un dedup
+          try {
+            await db.saveAudio(`backup_voice_${rec.id}`, blob, {
+              songId: rec.songId,
+              type: 'backup_voice',
+              savedAt: Date.now(),
+            });
+          } catch (bkErr) {
+            console.warn('[saveRec] backup_voice non sauvegarde:', bkErr);
+          }
         }
 
         // Sauvegarder aussi les métadonnées
@@ -1059,18 +1070,68 @@ export const studioService = {
     const cachedId = (window as any).__lastRecDecodedId as string | undefined;
     if (cached && cachedId === voice.id) return true;
 
+    const db = getOfflineDB();
     // Charger le blob depuis toutes les sources disponibles
     let blob: Blob | null = await this.resolveBlobAsync(voice.dataUrl || '');
+
+    // Essai 1 : clé directe rec_id
     if (!blob || blob.size < 1000) {
-      const db = getOfflineDB();
       try { blob = await db.getAudio(`rec_${voice.id}`); } catch {}
     }
+    // Essai 2 : backup_voice
+    if (!blob || blob.size < 1000) {
+      try { blob = await db.getAudio(`backup_voice_${voice.id}`); } catch {}
+    }
+    // Essai 3 : scan de tous les fichiers OPFS — trouve la prise même si l'id a changé
+    // On cherche un fichier audio récent dont la taille correspond (~durée × bitrate)
     if (!blob || blob.size < 1000) {
       try {
-        const db = getOfflineDB();
-        blob = await db.getAudio(`backup_voice_${voice.id}`);
-      } catch {}
+        const opfsRoot = await (navigator as any).storage?.getDirectory?.();
+        if (opfsRoot) {
+          const candidates: { name: string; size: number; blob: Blob }[] = [];
+          for await (const [name, handle] of (opfsRoot as any).entries()) {
+            if (!name.match(/\.(mp4|wav|webm|m4a)$/i)) continue;
+            try {
+              const file = await (handle as any).getFile();
+              if (file.size > 50000) { // min 50KB = vrai enregistrement
+                candidates.push({ name, size: file.size, blob: new Blob([await file.arrayBuffer()], { type: file.type || 'audio/mp4' }) });
+              }
+            } catch {}
+          }
+          // Trier par taille décroissante (la plus grosse = probablement la voix principale)
+          candidates.sort((a, b) => b.size - a.size);
+          if (candidates.length > 0) {
+            blob = candidates[0].blob;
+            console.warn('[warmAudioCache] Trouvé via scan OPFS:', candidates[0].name, candidates[0].size, 'bytes');
+            // Resauvegarder sous la bonne clé pour les prochaines fois
+            try { await db.saveAudio(`rec_${voice.id}`, blob); } catch {}
+          }
+        }
+      } catch (scanErr) {
+        console.warn('[warmAudioCache] Scan OPFS échoué:', scanErr);
+      }
     }
+    // Essai 4 : chercher dans IDB tous les enregistrements récents
+    if (!blob || blob.size < 1000) {
+      try {
+        await db.init();
+        const store = await db.tx('audio', 'readonly');
+        const req = store.getAll();
+        const all: any[] = await db.idbOp(req);
+        // Prendre le buffer le plus récent et le plus gros (voix principale)
+        const recEntries = all.filter(r => r.key?.startsWith('rec_') && r.buffer?.byteLength > 50000);
+        recEntries.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+        if (recEntries.length > 0) {
+          const entry = recEntries[0];
+          blob = new Blob([entry.buffer], { type: entry.type || 'audio/mp4' });
+          console.warn('[warmAudioCache] Trouvé via scan IDB:', entry.key, entry.buffer.byteLength, 'bytes');
+          try { await db.saveAudio(`rec_${voice.id}`, blob); } catch {}
+        }
+      } catch (idbScanErr) {
+        console.warn('[warmAudioCache] Scan IDB échoué:', idbScanErr);
+      }
+    }
+
     if (!blob || blob.size < 1000) {
       console.warn('[warmAudioCache] Impossible de charger le blob pour', voice.id);
       return false;
@@ -1194,6 +1255,14 @@ export const studioService = {
       project.tracks = project.tracks.filter(t => t.trackIndex !== track.trackIndex);
     }
     project.tracks.push(trackMeta as MobileRecording); this.saveProject(project);
+    // Sauvegarder backup_voice si la piste a un dataUrl en memoire
+    if (track.trackIndex === 0 && !(track as any).isGenerated && track.dataUrl && !track.dataUrl.startsWith('opfs:')) {
+      try {
+        const db2 = getOfflineDB();
+        const b2 = await this.resolveBlobAsync(track.dataUrl);
+        if (b2 && b2.size > 1000) await db2.saveAudio(`backup_voice_${track.id}`, b2, { type: 'backup_voice', savedAt: Date.now() });
+      } catch {}
+    }
     // Retourner le projet avec le vrai track (dataUrl inclus) pour le state React en mémoire
     const projectWithData = { ...project, tracks: [...project.tracks.filter(t => t.id !== track.id), track] };
     return projectWithData;
