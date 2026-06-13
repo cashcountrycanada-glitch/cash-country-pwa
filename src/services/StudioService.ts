@@ -844,10 +844,85 @@ export const studioService = {
     source.connect(inputGain);
     inputGain.connect(analyser);
 
-    // MonitorGain — connecté à inputGain pour que l'écoute soit aussi amplifiée
+    // ── Chaîne de monitoring temps réel avec effets ──────────────────────────
+    // inputGain → HPF → Comp léger → Reverb → monitorGain → destination
+    // iOS WebAudio natif — zéro latence ajoutée, sûr sur Lightning adapter
+
+    // HPF 80Hz — coupe le bruit de fond et les basses parasites du micro
+    const monitorHPF = audioContext.createBiquadFilter();
+    monitorHPF.type = 'highpass';
+    monitorHPF.frequency.value = 80;
+    monitorHPF.Q.value = 0.707;
+    inputGain.connect(monitorHPF);
+
+    // Compresseur léger — évite les crêtes qui saturent dans les écouteurs
+    const monitorComp = audioContext.createDynamicsCompressor();
+    monitorComp.threshold.value = -18;
+    monitorComp.ratio.value = 3;
+    monitorComp.attack.value = 0.003;
+    monitorComp.release.value = 0.15;
+    monitorComp.knee.value = 6;
+    monitorHPF.connect(monitorComp);
+
+    // Reverb temps réel — ConvolverNode avec IR synthétique (Schroeder simplifié)
+    // Générer une IR (Impulse Response) courte selon le type de reverb choisi
+    const reverbType = config.reverb ?? 'room';
     const monitorGain = audioContext.createGain();
     monitorGain.gain.value = 0;
-    inputGain.connect(monitorGain);
+
+    if (reverbType !== 'none' && reverbType !== 'sec') {
+      try {
+        // Créer une IR synthétique — exponential decay + early reflections
+        const irParams: Record<string, { duration: number; decay: number; preDelay: number }> = {
+          room:  { duration: 0.8,  decay: 2.5, preDelay: 0.008 },
+          hall:  { duration: 1.8,  decay: 3.5, preDelay: 0.018 },
+          plate: { duration: 1.2,  decay: 3.0, preDelay: 0.005 },
+        };
+        const p = irParams[reverbType] || irParams.room;
+        const irSr   = audioContext.sampleRate;
+        const irLen  = Math.floor(irSr * p.duration);
+        const irBuf  = audioContext.createBuffer(2, irLen, irSr);
+        const preDelayS = Math.floor(irSr * p.preDelay);
+
+        for (let c = 0; c < 2; c++) {
+          const ch = irBuf.getChannelData(c);
+          for (let i = 0; i < irLen; i++) {
+            if (i < preDelayS) { ch[i] = 0; continue; }
+            // Decay exponentiel + bruit blanc (simule les réflexions diffuses)
+            const t = (i - preDelayS) / irSr;
+            ch[i] = (Math.random() * 2 - 1) * Math.exp(-p.decay * t);
+            // Early reflections (quelques pics dans les 80ms)
+            if (i === preDelayS + Math.floor(irSr * 0.020)) ch[i] += 0.5 * (c === 0 ? 1 : 0.7);
+            if (i === preDelayS + Math.floor(irSr * 0.035)) ch[i] += 0.35 * (c === 0 ? 0.8 : 1);
+            if (i === preDelayS + Math.floor(irSr * 0.055)) ch[i] += 0.25;
+          }
+          // Normaliser l'IR
+          let peak = 0;
+          for (let i = 0; i < irLen; i++) { const a = Math.abs(ch[i]); if (a > peak) peak = a; }
+          if (peak > 0) for (let i = 0; i < irLen; i++) ch[i] /= peak;
+        }
+
+        const convolver = audioContext.createConvolver();
+        convolver.buffer = irBuf;
+
+        // Mix dry/wet : 70% sec + 30% reverb pour un son naturel
+        const dryGain = audioContext.createGain(); dryGain.gain.value = 0.70;
+        const wetGain = audioContext.createGain(); wetGain.gain.value = 0.30;
+
+        monitorComp.connect(dryGain);
+        monitorComp.connect(convolver);
+        convolver.connect(wetGain);
+        dryGain.connect(monitorGain);
+        wetGain.connect(monitorGain);
+      } catch (e) {
+        // Fallback si ConvolverNode échoue sur iOS — chaîne sèche
+        console.warn('[Monitor] ConvolverNode non disponible, monitoring sec:', e);
+        monitorComp.connect(monitorGain);
+      }
+    } else {
+      // Pas de reverb — signal sec direct
+      monitorComp.connect(monitorGain);
+    }
     // (monitorGain → destination est géré par toggleMonitoring)
 
     // gainedDest créé plus bas si fallback nécessaire (évite noeud inutile si worklet disponible)

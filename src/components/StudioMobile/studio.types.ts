@@ -85,7 +85,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 90,
     lowGain: -1.0, lowMidGain: -2.0, midGain: 3.0, highGain: 1.5, airGain: 2.0,
     compThreshold: -18, compRatio: 3, compAttack: 12, compRelease: 180, compKnee: 8,
-    saturation: 0.12, reverb: 'room', reverbMix: 0.08,
+    saturation: 0.12, reverb: 'room', reverbMix: 0.22,
   },
   {
     // Country Warm : chaleur sans boue — voix principale country
@@ -102,7 +102,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 80,
     lowGain: 1.5, lowMidGain: -3.0, midGain: 2.5, highGain: 0.5, airGain: 1.5,
     compThreshold: -20, compRatio: 3.5, compAttack: 15, compRelease: 200, compKnee: 10,
-    saturation: 0.15, reverb: 'hall', reverbMix: 0.10,
+    saturation: 0.15, reverb: 'hall', reverbMix: 0.28,
   },
   {
     // Punchy : attaque forte pour voix qui coupe dans le mix
@@ -116,7 +116,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 100,
     lowGain: -0.5, lowMidGain: -2.5, midGain: 4.0, highGain: 2.0, airGain: 1.5,
     compThreshold: -15, compRatio: 5, compAttack: 3, compRelease: 80, compKnee: 4,
-    saturation: 0.12, reverb: 'room', reverbMix: 0.08,
+    saturation: 0.12, reverb: 'room', reverbMix: 0.18,
   },
   {
     // Airy & Bright : voix légère et aérienne
@@ -129,7 +129,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 120,
     lowGain: -2.0, lowMidGain: -1.5, midGain: 1.5, highGain: 3.5, airGain: 4.0,
     compThreshold: -20, compRatio: 2.5, compAttack: 20, compRelease: 200, compKnee: 12,
-    saturation: 0.06, reverb: 'plate', reverbMix: 0.14,
+    saturation: 0.06, reverb: 'plate', reverbMix: 0.30,
   },
   {
     // Harmony : pour les pistes d'harmonies générées
@@ -143,7 +143,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 110,
     lowGain: -2.5, lowMidGain: -2.0, midGain: 1.5, highGain: 2.0, airGain: 1.0,
     compThreshold: -22, compRatio: 4, compAttack: 8, compRelease: 120, compKnee: 8,
-    saturation: 0.08, reverb: 'hall', reverbMix: 0.22,
+    saturation: 0.08, reverb: 'hall', reverbMix: 0.35,
   },
   {
     // Double Epic : double tracking épais et large
@@ -155,7 +155,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 100,
     lowGain: 1.0, lowMidGain: -1.5, midGain: 1.0, highGain: 1.5, airGain: 1.0,
     compThreshold: -16, compRatio: 4, compAttack: 5, compRelease: 100, compKnee: 6,
-    saturation: 0.10, reverb: 'hall', reverbMix: 0.18,
+    saturation: 0.10, reverb: 'hall', reverbMix: 0.28,
   },
   {
     // Octave Deep : graves profonds pour octave basse
@@ -167,7 +167,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 60,
     lowGain: 4.0, lowMidGain: 0, midGain: -1.5, highGain: -1.5, airGain: 0,
     compThreshold: -20, compRatio: 5, compAttack: 10, compRelease: 200, compKnee: 10,
-    saturation: 0.18, reverb: 'room', reverbMix: 0.12,
+    saturation: 0.18, reverb: 'room', reverbMix: 0.22,
   },
   {
     // Digi Comp : compression agressive
@@ -191,7 +191,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 85,
     lowGain: 2.0, lowMidGain: -1.0, midGain: 0.5, highGain: -0.5, airGain: 0.5,
     compThreshold: -22, compRatio: 3, compAttack: 15, compRelease: 250, compKnee: 15,
-    saturation: 0.10, reverb: 'plate', reverbMix: 0.16,
+    saturation: 0.10, reverb: 'plate', reverbMix: 0.30,
   },
   {
     id: 'autotune_transparent',
@@ -202,7 +202,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 90,
     lowGain: 0, lowMidGain: -1.5, midGain: 2.0, highGain: 1.0, airGain: 1.5,
     compThreshold: -18, compRatio: 2.5, compAttack: 12, compRelease: 160, compKnee: 8,
-    saturation: 0.08, reverb: 'room', reverbMix: 0.10,
+    saturation: 0.08, reverb: 'room', reverbMix: 0.22,
     autotune: 0.35, autotuneSpeed: 'slow',
   },
   {
@@ -214,7 +214,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 85,
     lowGain: 1.5, lowMidGain: -2.5, midGain: 2.5, highGain: 0.5, airGain: 1.0,
     compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 200, compKnee: 10,
-    saturation: 0.12, reverb: 'hall', reverbMix: 0.10,
+    saturation: 0.12, reverb: 'hall', reverbMix: 0.25,
     autotune: 0.45, autotuneSpeed: 'medium',
   },
 ];
