@@ -1351,7 +1351,7 @@ export const studioService = {
               else if (e.data.type === 'error') { clearTimeout(timeout); worker.terminate(); reject(new Error(e.data.message)); }
             };
             worker.onerror = (e) => { clearTimeout(timeout); worker.terminate(); reject(new Error(e.message)); };
-            worker.postMessage({ id, op: 'pitch', channelL: chL, channelR: chR, semitones, gain: 1.0, pan: track.pan ?? 0, sampleRate: buffer.sampleRate }, [chL.buffer, chR.buffer]);
+            worker.postMessage({ id, op: 'pitch', channelL: chL, channelR: chR, semitones, gain: 1.0, pan: track.pan ?? 0, sampleRate: buffer.sampleRate, trackIndex: track.trackIndex ?? 2 }, [chL.buffer, chR.buffer]);
           });
           const tmpCtx2 = new (window.AudioContext || (window as any).webkitAudioContext)();
           try {

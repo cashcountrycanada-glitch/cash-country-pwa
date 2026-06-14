@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.212';
+const BUILD_VERSION = 'v7.6.214';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -782,11 +782,8 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       (window as any).__mixUrl = mixUrl;
       updateProject(p => ({ ...p, mixedDataUrl: mixUrl }));
       setMixDone(true);
-      // Navigation automatique vers masterisation après le mix
-      setTimeout(async () => {
-        const ib = await getInstBlob();
-        handleMasterize(mixBlob, ib);
-      }, 400);
+      // Pas de navigation automatique — l'utilisateur appuie sur Masteriser quand prêt
+      // (évite l'écran noir iOS causé par OfflineAudioContext lancé trop tôt)
       // Persister le mix en IDB pour survive aux redémarrages (masterisation différée)
       if (project) {
         studioOfflineDB.saveAudio(`mix_${project.id}`, mixBlob, {

@@ -581,13 +581,89 @@ function audioToWav(chL, chR, sr) {
   return buf;
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────
+// ── Main v9 — Layering Pro ───────────────────────────────────────────────
+// Profils par trackIndex — chaque harmonie a sa personnalité unique
+const LAYER_PROFILES = {
+  2: { pitchVar:3,  timingMs:15, timbreHz:2800, timbreDb:+1.5, panDrift:0.05 }, // Tierce +3
+  3: { pitchVar:5,  timingMs:28, timbreHz:3500, timbreDb:-1.0, panDrift:0.08 }, // Quinte +7
+  4: { pitchVar:2,  timingMs:8,  timbreHz:200,  timbreDb:+2.0, panDrift:0.03 }, // Octave -12
+  5: { pitchVar:4,  timingMs:22, timbreHz:1800, timbreDb:+0.5, panDrift:0.06 }, // Quarte +5
+};
+
+// Variation de pitch par phrase (±pitchVar cents aléatoires par phrase)
+function applyPhraseVariation(signal, sr, pitchVarCents, seed) {
+  const rand=()=>{ seed=(seed*1664525+1013904223)|0; return (seed>>>0)/0xFFFFFFFF; };
+  const minPhraseSamp=Math.floor(sr*0.3);
+  const result=new Float32Array(signal.length);
+  let pos=0;
+  while (pos<signal.length) {
+    const phraseLen=Math.floor(minPhraseSamp+rand()*sr*0.9);
+    const varCents=(rand()*2-1)*pitchVarCents;
+    const ratio=Math.pow(2,varCents/1200);
+    const end=Math.min(pos+phraseLen,signal.length);
+    const fadeLen=Math.min(Math.floor(sr*0.020),phraseLen>>1);
+    for (let i=pos;i<end;i++) {
+      const srcPos=pos+(i-pos)*ratio;
+      const s0=Math.min(Math.floor(srcPos),signal.length-2);
+      const frac=srcPos-Math.floor(srcPos);
+      let val=(signal[s0]||0)*(1-frac)+(signal[Math.min(s0+1,signal.length-1)]||0)*frac;
+      const fromStart=i-pos, toEnd=end-i;
+      if (fromStart<fadeLen) val*=fromStart/fadeLen;
+      if (toEnd<fadeLen) val*=toEnd/fadeLen;
+      result[i]+=val;
+    }
+    pos=end;
+  }
+  return result;
+}
+
+// Timing offset — les attaques arrivent à des moments légèrement différents
+function applyTimingOffset(signal, offsetMs, sr) {
+  if (offsetMs<=0) return signal;
+  const offsetSamp=Math.floor(offsetMs*sr/1000);
+  const result=new Float32Array(signal.length+offsetSamp);
+  for (let i=0;i<signal.length;i++) result[i+offsetSamp]=signal[i];
+  return result.slice(0,signal.length);
+}
+
+// Coloration timbrale — chaque voix a son espace frequentiel propre
+function applyTimbreColor(signal, fcHz, gainDB, Q, sr) {
+  if (Math.abs(gainDB)<0.3) return signal;
+  const A=Math.pow(10,gainDB/40), w0=2*Math.PI*fcHz/sr;
+  const cosW=Math.cos(w0), sinW=Math.sin(w0), alpha=sinW/(2*Q);
+  const b0=1+alpha*A, b1=-2*cosW, b2=1-alpha*A;
+  const a0=1+alpha/A, a1=-2*cosW, a2=1-alpha/A;
+  const out=new Float32Array(signal.length);
+  let x1=0,x2=0,y1=0,y2=0;
+  for (let i=0;i<signal.length;i++) {
+    const x0=signal[i], y0=(b0*x0+b1*x1+b2*x2-a1*y1-a2*y2)/a0;
+    out[i]=y0; x2=x1; x1=x0; y2=y1; y1=y0;
+  }
+  return out;
+}
+
+// Pan automation — leger mouvement dans l espace stereo (LFO 0.03Hz)
+function applyPanAutomation(outL, outR, len, basePan, driftAmt, sr) {
+  const lfoInc=2*Math.PI*0.03/sr;
+  let lfoPhase=0;
+  for (let i=0;i<len;i++) {
+    const pan=Math.max(-1,Math.min(1,basePan+Math.sin(lfoPhase)*driftAmt));
+    const pr=(pan+1)*Math.PI/4;
+    const mid=(outL[i]+outR[i])*0.5;
+    outL[i]=mid*Math.cos(pr); outR[i]=mid*Math.sin(pr);
+    lfoPhase+=lfoInc;
+  }
+}
+
 self.onmessage = function(e) {
-  const { id, op, channelL, channelR, semitones, gain, pan, sampleRate } = e.data;
+  const { id, op, channelL, channelR, semitones, gain, pan, sampleRate, trackIndex } = e.data;
   try {
     const len=channelL.length;
     const mono=new Float32Array(len);
     for (let i=0;i<len;i++) mono[i]=((channelL[i]||0)+(channelR[i]||0))*0.5;
+
+    let seed=(trackIndex||2)*7919;
+    for (let i=0;i<Math.min(64,len);i++) seed=(seed*31+Math.round(mono[i]*10000))|0;
 
     let outL, outR, outLen;
 
@@ -597,27 +673,31 @@ self.onmessage = function(e) {
       outL=res.outL; outR=res.outR; outLen=res.outLen;
 
     } else {
-      // 1. Phase vocoder avec hop adaptatif + phase locking F0
+      const profile=LAYER_PROFILES[trackIndex]||LAYER_PROFILES[2];
+
       self.postMessage({id,type:'progress',label:`Phase vocoder ${semitones>0?'+':''}${semitones} ST...`});
       let shifted=phaseVocoderShift(mono,semitones,sampleRate);
 
-      // 2. Correction formants par voyelle détectée
       if (Math.abs(semitones)>=3) {
         self.postMessage({id,type:'progress',label:'Correction formants...'});
         shifted=applyFormantShift(shifted,semitones,sampleRate);
       }
-
-      // 3. Saturation harmonique douce (chaleur analogique sur les aigus)
       if (semitones>=5) {
         const drive=0.04+(semitones-5)/7*0.03;
         shifted=applySoftSaturation(shifted,drive);
       }
 
-      // 4. Jitter organique continu (pitch drift + vibrato + flutter)
+      self.postMessage({id,type:'progress',label:'Variation de phrase...'});
+      shifted=applyPhraseVariation(shifted,sampleRate,profile.pitchVar,seed);
+
       self.postMessage({id,type:'progress',label:'Humanisation...'});
       shifted=applyOrganicJitter(shifted,sampleRate);
 
-      // 5. Reverb de salle courte (18% wet — place dans l'espace)
+      shifted=applyTimbreColor(shifted,profile.timbreHz,profile.timbreDb,1.2,sampleRate);
+
+      self.postMessage({id,type:'progress',label:'Timing...'});
+      shifted=applyTimingOffset(shifted,profile.timingMs,sampleRate);
+
       self.postMessage({id,type:'progress',label:'Reverb salle...'});
       shifted=applyRoomReverb(shifted,sampleRate,0.18);
 
@@ -625,6 +705,12 @@ self.onmessage = function(e) {
     }
 
     const gp=applyGainPan(outL,outR,outLen,gain,pan,op==='double');
+
+    if (op!=='double') {
+      const profile=LAYER_PROFILES[trackIndex]||LAYER_PROFILES[2];
+      applyPanAutomation(gp.outL,gp.outR,outLen,pan,profile.panDrift,sampleRate);
+    }
+
     self.postMessage({id,type:'progress',label:'Encodage WAV...'});
     const wavBuf=audioToWav(gp.outL,gp.outR,sampleRate);
     self.postMessage({id,type:'done',wavBuf},[wavBuf]);
