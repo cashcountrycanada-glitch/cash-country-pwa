@@ -1050,6 +1050,7 @@ export const studioService = {
       const harmBlobs = (window as any).__harmonyBlobs || {};
       if (harmBlobs[key]) return harmBlobs[key] as Blob;
       if ((window as any).__lastFxKey === key && (window as any).__lastFxBlob) return (window as any).__lastFxBlob as Blob;
+      const fxRB = (window as any).__fxResultBlobs; if (fxRB && fxRB[key]) return fxRB[key] as Blob;
       // Blob non en mémoire — l'appelant doit utiliser resolveBlobAsync()
       return null;
     }
@@ -1655,8 +1656,10 @@ export const studioService = {
         const fxBlob    = (window as any).__lastFxBlob as Blob | undefined;
         const fxKey     = (window as any).__lastFxKey  as string | undefined;
         const harmBlobs = (window as any).__harmonyBlobs as Record<string,Blob> | undefined;
+        const fxResultBlobs = (window as any).__fxResultBlobs as Record<string,Blob> | undefined;
         if (fxBlob && fxKey === key) srcBlob = fxBlob;
         else if (harmBlobs && harmBlobs[key]) srcBlob = harmBlobs[key];
+        else if (fxResultBlobs && fxResultBlobs[key]) srcBlob = fxResultBlobs[key];
         else {
           // Mémoire vidée (navigation) → recharger depuis OPFS/IDB
           const db = getOfflineDB();
@@ -1704,10 +1707,18 @@ export const studioService = {
             const resultBlob = new Blob([msg.wavBuf], { type: 'audio/wav' });
             const fxKey = `fx_${Date.now()}`;
 
-            // Garder le blob en mémoire — pas de sauvegarde OPFS (évite quota exceeded)
-            // Le FX est temporaire pour la session, le blob original est préservé dans OPFS
+            // Garder le blob FX en mémoire dans TOUS les caches
+            // __lastFxBlob : pour applyFxToTrack
+            // __harmonyBlobs : pour resolveBlobAsync (opfs: sentinel)
+            // __trackBlob_id : pour le preview dans le mixer
             (window as any).__lastFxKey  = fxKey;
             (window as any).__lastFxBlob = resultBlob;
+            if (!(window as any).__harmonyBlobs) (window as any).__harmonyBlobs = {};
+            (window as any).__harmonyBlobs[fxKey] = resultBlob;
+            // Stocker aussi sous l'id de la piste pour le preview
+            // (on ne connaît pas l'id ici mais on peut stocker sous la clé fx)
+            (window as any).__fxResultBlobs = (window as any).__fxResultBlobs || {};
+            (window as any).__fxResultBlobs[fxKey] = resultBlob;
 
             // Retourner dataUrl seulement si < 5MB, sinon sentinelle opfs:
             // Si blobToDataUrl échoue par quota iOS, fallback automatique vers sentinelle mémoire
