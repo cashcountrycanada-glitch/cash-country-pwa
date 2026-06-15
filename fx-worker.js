@@ -195,6 +195,29 @@ function saturate(data, amount) {
 function reverb(dL, dR, type, mix, sr) {
   if (type==='none'||type==='sec'||mix<=0) return {L:dL,R:dR};
   const len=dL.length;
+  // Traitement par blocs de 30s pour éviter le crash mémoire iOS (~128MB limit)
+  // Les buffers de signal pour 3min+ dépassent la limite du Web Worker
+  const chunkSamples = sr * 30; // blocs 30s
+  if (len > chunkSamples) {
+    const outL = new Float32Array(len), outR = new Float32Array(len);
+    // Traiter chunk par chunk en réutilisant l'état des buffers entre les blocs
+    let pos = 0;
+    while (pos < len) {
+      const end = Math.min(pos + chunkSamples, len);
+      const chunkL = dL.slice(pos, end);
+      const chunkR = dR.slice(pos, end);
+      const res = reverbCore(chunkL, chunkR, type, mix, sr);
+      outL.set(res.L, pos);
+      outR.set(res.R, pos);
+      pos = end;
+    }
+    return {L:outL, R:outR};
+  }
+  return reverbCore(dL, dR, type, mix, sr);
+}
+
+function reverbCore(dL, dR, type, mix, sr) {
+  const len=dL.length;
 
   // Paramètres par type de salle
   const cfgs = {
@@ -379,11 +402,12 @@ function reverb(dL, dR, type, mix, sr) {
   // Mix final : dry + early reflections + wet tank
   const erAmt=c.erMix;
   const outL=new Float32Array(len), outR=new Float32Array(len);
+  const outFinal=new Float32Array(len), outFinalR=new Float32Array(len);
   for (let i=0;i<len;i++) {
-    outL[i]=dL[i]*(1-mix) + (wetL[i]*(1-erAmt)+erL[i]*erAmt)*mix;
-    outR[i]=dR[i]*(1-mix) + (wetR[i]*(1-erAmt)+erR[i]*erAmt)*mix;
+    outFinal[i]=dL[i]*(1-mix) + (wetL[i]*(1-erAmt)+erL[i]*erAmt)*mix;
+    outFinalR[i]=dR[i]*(1-mix) + (wetR[i]*(1-erAmt)+erR[i]*erAmt)*mix;
   }
-  return {L:outL,R:outR};
+  return {L:outFinal,R:outFinalR};
 }
 
 // ── WAV ───────────────────────────────────────────────────────────────────
