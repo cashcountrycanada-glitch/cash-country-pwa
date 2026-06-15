@@ -206,7 +206,7 @@ async function renderOfflineSegmented(
     const start  = seg * segmentSamples;
     const length = Math.min(segmentSamples, totalSamples - start);
     // Yield pour laisser respirer le thread iOS entre segments
-    await new Promise<void>(r => setTimeout(r, 20));
+    await new Promise<void>(r => setTimeout(r, 80)); // yield entre segments
     onProgress?.(Math.round((seg / numSegments) * 80));
     const ctx = new OfflineAudioContext(2, length, sampleRate);
     buildGraph(ctx);
@@ -433,7 +433,7 @@ async function stereoWiden(buf: AudioBuffer, widthGain: number = 1.3): Promise<A
   const src = offline.createBufferSource(); src.buffer = outBuf;
   src.connect(offline.destination); src.start(0);
   // Yield pour iOS avant render
-  await new Promise<void>(r => setTimeout(r, 20));
+  await new Promise<void>(r => setTimeout(r, 120)); // yield avant render
   return offline.startRendering();
 }
 
@@ -461,7 +461,7 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   }
   const s1src = offline1.createBufferSource(); s1src.buffer = step1Buf;
   // Yield avant le render pour libérer le thread iOS
-  await new Promise<void>(r => setTimeout(r, 30));
+  await new Promise<void>(r => setTimeout(r, 120)); // yield 120ms — laisse iOS respirer
 
   // High-pass 30Hz — sub-bass inutile
   const hpf = offline1.createBiquadFilter(); hpf.type = 'highpass'; hpf.frequency.value = 30; hpf.Q.value = 0.6;

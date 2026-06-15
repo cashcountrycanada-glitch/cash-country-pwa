@@ -41,6 +41,7 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
   const activeFxId = (track as any).fxPresetId as string | undefined;
   const activeFx   = FX_PRESETS.find(f => f.id === activeFxId) ?? null;
   const [showFxPanel, setShowFxPanel]   = useState(false);
+  const [reverbOverrides, setReverbOverrides] = useState<Record<string, number>>({});
   const [applyingFx, setApplyingFx]     = useState(false);
   const [applyPct, setApplyPct]         = useState(0);
   const [applyDone, setApplyDone]       = useState(false);
@@ -321,18 +322,34 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
                         { label: 'Graves', value: `${fx.lowGain > 0 ? '+' : ''}${fx.lowGain} dB` },
                         { label: 'Mids', value: `${fx.midGain > 0 ? '+' : ''}${fx.midGain} dB` },
                         { label: 'Aigus', value: `${fx.highGain > 0 ? '+' : ''}${fx.highGain} dB` },
-                        { label: 'Threshold', value: `${fx.compThreshold} dB` },
-                        { label: 'Ratio', value: `${fx.compRatio}:1` },
-                        { label: 'Attack', value: `${fx.compAttack} ms` },
-                        { label: 'Release', value: `${fx.compRelease} ms` },
-                        { label: 'Knee', value: `${fx.compKnee} dB` },
-                        { label: 'Reverb', value: fx.reverb === 'none' ? 'Sec' : `${fx.reverb} ${Math.round(fx.reverbMix * 100)}%` },
+                        { label: 'Compresseur', value: `${fx.compThreshold}dB ${fx.compRatio}:1` },
                       ].map(({ label, value }) => (
                         <div key={label} className="flex justify-between">
                           <span className="text-[9px] text-zinc-600 font-black uppercase">{label}</span>
                           <span className="text-[9px] font-black" style={{ color: fx.color }}>{value}</span>
                         </div>
                       ))}
+                      {/* Slider Reverb ajustable */}
+                      {fx.reverb !== 'none' && (
+                        <div className="pt-1">
+                          <div className="flex justify-between mb-1">
+                            <span className="text-[9px] text-zinc-600 font-black uppercase">Reverb ({fx.reverb})</span>
+                            <span className="text-[9px] font-black" style={{ color: fx.color }}>{Math.round((reverbOverrides[fx.id] ?? fx.reverbMix) * 100)}%</span>
+                          </div>
+                          <input type="range" min="0" max="0.6" step="0.02"
+                            value={reverbOverrides[fx.id] ?? fx.reverbMix}
+                            onChange={e => setReverbOverrides(prev => ({ ...prev, [fx.id]: parseFloat(e.target.value) }))}
+                            className="w-full h-1 rounded-full appearance-none cursor-pointer"
+                            style={{ accentColor: fx.color }}/>
+                          {(reverbOverrides[fx.id] !== undefined && reverbOverrides[fx.id] !== fx.reverbMix) && (
+                            <button onClick={() => handleApplyFx({ ...fx, reverbMix: reverbOverrides[fx.id] ?? fx.reverbMix })}
+                              className="mt-1.5 w-full py-1 rounded-lg text-[9px] font-black uppercase"
+                              style={{ background: fx.color + '20', color: fx.color }}>
+                              Appliquer avec cette reverb
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
