@@ -1,74 +1,84 @@
-// harmony-worker.js v10 — LPC Pro Edition
-// Algorithmique niveau Kits.AI / TC-Helicon / AirMusic :
-//   1. LPC (Linear Predictive Coding) pour la correction formantique
-//      → même technique que TC-Helicon VoiceLive & Antares Harmony Engine
-//      → préserve le timbre exact de la voix, sans effet "chipmunk"
-//   2. Phase vocoder avec True Peak Locking + séparation H/P
-//      → harmoniques verrouillés sur le F0, bruit traité séparément
-//   3. Jitter naturel par bruit rose filtré (pas des LFOs sinusoïdaux)
-//      → variations imprévisibles comme un vrai chanteur
-//   4. Reverb Plate (early reflections + late diffuse)
-//      → son "plaque d'acier" utilisé sur toutes les harmonies country pro
-//   5. AGC post-shift — les harmonies gardent le même niveau peu importe l'intervalle
-//   6. Chorus stéréo léger — élargit et sépare chaque voix d'harmonie
+// harmony-worker.js v11 — Spectral Envelope Matching Pro
+// Approche utilisée par AirMusic / Kits.AI / TC-Helicon sur mobile :
+//   Spectral Envelope Matching (SEM) = correction formantique stable et naturelle
+//
+// Bugs v10 corrigés :
+//   - Math.random() remplacé par PRNG déterministe (seed fixe par trackIndex)
+//   - Stéréo du chorus conservé jusqu'au WAV final (pas mono-mixé)
+//   - Ratio rééchantillonnage corrigé (targetLen = input.length, pas outPos)
+//   - Pré-emphasis supprimée (causait boost HF excessif sur le signal shifté)
+//   - LPC remplacé par SEM (plus stable, moins d'artefacts, plus rapide)
+//   - Jitter réduit à des niveaux naturels (trop fort = son "ivre")
 
 // ═══════════════════════════════════════════════════════════════
-// FFT Cooley-Tukey (réutilisée partout)
+// PRNG déterministe — Mulberry32 (rapide, qualité suffisante)
+// Résultats identiques à chaque génération → harmonies cohérentes
+// ═══════════════════════════════════════════════════════════════
+function makePRNG(seed) {
+  let s = (seed >>> 0) | 1;
+  return function() {
+    s |= 0; s = s + 0x6D2B79F5 | 0;
+    let t = Math.imul(s ^ s >>> 15, 1 | s);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FFT Cooley-Tukey (inchangée, robuste)
 // ═══════════════════════════════════════════════════════════════
 function fft(re, im) {
   const n = re.length;
-  for (let i = 1, j = 0; i < n; i++) {
-    let bit = n >> 1;
-    for (; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if (i < j) { [re[i],re[j]]=[re[j],re[i]]; [im[i],im[j]]=[im[j],im[i]]; }
+  for (let i=1,j=0; i<n; i++) {
+    let bit=n>>1;
+    for(;j&bit;bit>>=1) j^=bit;
+    j^=bit;
+    if(i<j){[re[i],re[j]]=[re[j],re[i]];[im[i],im[j]]=[im[j],im[i]];}
   }
-  for (let len = 2; len <= n; len <<= 1) {
-    const ang = -2*Math.PI/len, wRe=Math.cos(ang), wIm=Math.sin(ang);
-    for (let i=0;i<n;i+=len) {
-      let cRe=1, cIm=0;
-      for (let j=0;j<len/2;j++) {
-        const uRe=re[i+j], uIm=im[i+j];
+  for(let len=2;len<=n;len<<=1){
+    const ang=-2*Math.PI/len,wRe=Math.cos(ang),wIm=Math.sin(ang);
+    for(let i=0;i<n;i+=len){
+      let cRe=1,cIm=0;
+      for(let j=0;j<len/2;j++){
+        const uRe=re[i+j],uIm=im[i+j];
         const vRe=re[i+j+len/2]*cRe-im[i+j+len/2]*cIm;
         const vIm=re[i+j+len/2]*cIm+im[i+j+len/2]*cRe;
-        re[i+j]=uRe+vRe; im[i+j]=uIm+vIm;
-        re[i+j+len/2]=uRe-vRe; im[i+j+len/2]=uIm-vIm;
-        const nr=cRe*wRe-cIm*wIm; cIm=cRe*wIm+cIm*wRe; cRe=nr;
+        re[i+j]=uRe+vRe;im[i+j]=uIm+vIm;
+        re[i+j+len/2]=uRe-vRe;im[i+j+len/2]=uIm-vIm;
+        const nr=cRe*wRe-cIm*wIm;cIm=cRe*wIm+cIm*wRe;cRe=nr;
       }
     }
   }
 }
-function ifft(re, im) {
-  for (let i=0;i<im.length;i++) im[i]=-im[i];
+function ifft(re,im){
+  for(let i=0;i<im.length;i++) im[i]=-im[i];
   fft(re,im);
   const n=re.length;
-  for (let i=0;i<n;i++) { re[i]/=n; im[i]=-(im[i]/n); }
+  for(let i=0;i<n;i++){re[i]/=n;im[i]=-(im[i]/n);}
 }
 
 // ═══════════════════════════════════════════════════════════════
-// YIN — Détection F0 (pitch fondamental)
-// Standard industrie : Cheveigné & Kawahara 2002
+// YIN — Détection F0
 // ═══════════════════════════════════════════════════════════════
 function detectF0(frame, sr) {
   const N=frame.length;
-  const tauMax=Math.min(N>>1, Math.floor(sr/60));
-  const tauMin=Math.floor(sr/1000);
+  const tauMax=Math.min(N>>1,Math.floor(sr/55));
+  const tauMin=Math.floor(sr/1100);
   const d=new Float32Array(tauMax+1);
-  for (let tau=1;tau<=tauMax;tau++) {
+  for(let tau=1;tau<=tauMax;tau++){
     let s=0;
-    for (let j=0;j<tauMax;j++) { const diff=frame[j]-frame[j+tau]; s+=diff*diff; }
+    for(let j=0;j<tauMax;j++){const diff=frame[j]-frame[j+tau];s+=diff*diff;}
     d[tau]=s;
   }
-  const cmndf=new Float32Array(tauMax+1);
-  cmndf[0]=1; let rs=0;
-  for (let tau=1;tau<=tauMax;tau++) {
-    rs+=d[tau]; cmndf[tau]=rs>0?d[tau]*tau/rs:1;
-  }
-  for (let tau=tauMin;tau<=tauMax;tau++) {
-    if (cmndf[tau]<0.10) {
-      if (tau>0&&tau<tauMax) {
-        const s0=cmndf[tau-1],s1=cmndf[tau],s2=cmndf[tau+1];
-        return sr/(tau+(s2-s0)/(2*(2*s1-s0-s2)));
+  const c=new Float32Array(tauMax+1);
+  c[0]=1;let rs=0;
+  for(let tau=1;tau<=tauMax;tau++){rs+=d[tau];c[tau]=rs>0?d[tau]*tau/rs:1;}
+  for(let tau=tauMin;tau<=tauMax;tau++){
+    if(c[tau]<0.10){
+      if(tau>0&&tau<tauMax){
+        const s0=c[tau-1],s1=c[tau],s2=c[tau+1];
+        const r=tau+(s2-s0)/(2*(2*s1-s0-s2));
+        return sr/r;
       }
       return sr/tau;
     }
@@ -77,597 +87,496 @@ function detectF0(frame, sr) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// LPC — Linear Predictive Coding
-// C'est L'ALGORITHME CLEF des harmoniseurs professionnels.
-// TC-Helicon, Antares, Kits.AI l'utilisent tous.
+// PHASE VOCODER v3 — Peak Phase Locking correct + rééchantillonnage fixé
 //
-// Comment ça marche :
-// 1. On analyse le signal vocal → on extrait les coefficients LPC
-//    qui modélisent le conduit vocal (formants)
-// 2. On applique ces coefficients au signal décalé en pitch
-// 3. Résultat : le signal garde le TIMBRE de la voix originale
-//    même après un grand décalage de pitch
-// ═══════════════════════════════════════════════════════════════
-
-// Autocorrélation d'un frame (Levinson-Durbin)
-function computeLPC(frame, order) {
-  const N=frame.length;
-  // Calcul autocorrélation R[0..order]
-  const R=new Float32Array(order+1);
-  for (let lag=0;lag<=order;lag++) {
-    let s=0;
-    for (let i=0;i<N-lag;i++) s+=frame[i]*frame[i+lag];
-    R[lag]=s;
-  }
-  if (R[0]<1e-12) return new Float32Array(order); // silence
-  // Levinson-Durbin récursif → coefficients AR
-  const a=new Float32Array(order);
-  const tmp=new Float32Array(order);
-  let err=R[0];
-  for (let i=0;i<order;i++) {
-    let lambda=0;
-    for (let j=0;j<i;j++) lambda+=a[j]*R[i-j];
-    const k=-(R[i+1]+lambda)/err;
-    if (Math.abs(k)>=1.0) break; // stabilité
-    a[i]=k;
-    for (let j=0;j<i;j++) tmp[j]=a[j]+k*a[i-1-j];
-    for (let j=0;j<i;j++) a[j]=tmp[j];
-    err*=(1-k*k);
-    if (err<1e-12) break;
-  }
-  return a; // coefficients AR (a[0]..a[order-1])
-}
-
-// Filtre LPC : synthèse (passe-tout AR) — reconstruit le timbre
-// source : signal pitch-shifté résidu, a : coefficients LPC de la voix originale
-function applyLPCFilter(source, a) {
-  const N=source.length, order=a.length;
-  const out=new Float32Array(N);
-  for (let i=0;i<N;i++) {
-    let s=source[i];
-    for (let j=0;j<Math.min(i,order);j++) s-=a[j]*out[i-1-j];
-    out[i]=s;
-  }
-  return out;
-}
-
-// Filtre inverse LPC : calcul du résidu (dé-coloration du timbre)
-function applyLPCInverse(signal, a) {
-  const N=signal.length, order=a.length;
-  const residue=new Float32Array(N);
-  for (let i=0;i<N;i++) {
-    let s=signal[i];
-    for (let j=0;j<Math.min(i,order);j++) s+=a[j]*signal[i-1-j];
-    residue[i]=s;
-  }
-  return residue;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// PHASE VOCODER amélioré — True Peak Phase Locking + HPSep
-// HPSep = Harmonic/Percussive Separation
-// Les harmoniques sont phase-lockées sur le F0
-// Le bruit (consonnes) est traité séparément sans pitch shift
+// Correction critique v11 :
+// Le signal de sortie est rééchantillonné pour avoir exactement
+// input.length samples (= même durée que l'original)
+// Le ratio est calculé sur la longueur réelle traitée, pas outPos
 // ═══════════════════════════════════════════════════════════════
 function phaseVocoderShift(input, semitones, sr) {
-  if (semitones===0) return input.slice();
-  const pitchFactor=Math.pow(2, semitones/12);
-  const N=4096, hopA=N>>2; // hop analyse 1024
-  const hopS=Math.min(Math.round(hopA/pitchFactor), N>>1); // hop synthèse
+  if(semitones===0) return input.slice();
+  const pitchFactor=Math.pow(2,semitones/12);
+  const N=4096,hopA=N>>2;
+  const hopS=Math.max(1,Math.min(Math.round(hopA/pitchFactor),N>>1));
 
-  // Fenêtre Hann
   const win=new Float32Array(N);
-  for (let i=0;i<N;i++) win[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));
+  for(let i=0;i<N;i++) win[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));
 
-  // Normalisation fenêtre OLA
-  const winNorm=new Float32Array(N);
-  let wsum=0;
-  for (let i=0;i<N;i++) winNorm[i]=win[i]*win[i];
-  for (let i=0;i<hopS;i++) { let s=0; for (let j=0;j*hopS+i<N;j++) s+=winNorm[j*hopS+i]; wsum=Math.max(wsum,s); }
-
-  const outLen=Math.ceil(input.length/pitchFactor)+N;
+  // Calcul de la longueur de sortie nécessaire AVANT le rééchantillonnage
+  const numFrames=Math.ceil((input.length-N)/hopA)+1;
+  const outLen=numFrames*hopS+N;
   const output=new Float32Array(outLen);
   const norm=new Float32Array(outLen);
 
-  // Buffers réutilisables (pas de GC sur iOS)
-  const re=new Float32Array(N), im=new Float32Array(N);
-  const outRe=new Float32Array(N), outIm=new Float32Array(N);
+  const re=new Float32Array(N),im=new Float32Array(N);
+  const outRe=new Float32Array(N),outIm=new Float32Array(N);
   const mag=new Float32Array(N/2+1);
   const trueFreq=new Float32Array(N/2+1);
-  const lastPhaseIn=new Float32Array(N/2+1);
-  const phaseAccum=new Float32Array(N/2+1);
+  const lastPhIn=new Float32Array(N/2+1);
+  const phAcc=new Float32Array(N/2+1);
   const isPeak=new Uint8Array(N/2+1);
-  const peakAssign=new Int32Array(N/2+1);
+  const peakOf=new Int32Array(N/2+1);
+  const peakPh=new Float32Array(N/2+1);
 
-  // Détection transients (énergie RMS par bloc)
-  const blk=512;
-  const nblk=Math.floor(input.length/blk);
-  const erg=new Float32Array(nblk);
-  for (let b=0;b<nblk;b++) {
-    let e=0;
-    for (let i=0;i<blk;i++) { const s=input[b*blk+i]||0; e+=s*s; }
-    erg[b]=e/blk;
-  }
-
-  // F0 cach — détection toutes les 20 frames
-  let f0Hz=0, f0Frame=0;
-
-  // Init phase
+  // Init phase sur frame 0
   {
-    const re0=new Float32Array(N),im0=new Float32Array(N);
-    for (let i=0;i<N;i++) re0[i]=(i<input.length?input[i]:0)*win[i];
-    fft(re0,im0);
-    for (let k=0;k<=N/2;k++) lastPhaseIn[k]=Math.atan2(im0[k],re0[k]);
+    const r=new Float32Array(N),m=new Float32Array(N);
+    for(let i=0;i<N;i++) r[i]=(i<input.length?input[i]:0)*win[i];
+    fft(r,m);
+    for(let k=0;k<=N/2;k++) lastPhIn[k]=Math.atan2(m[k],r[k]);
   }
 
-  let outPos=0, frameIdx=0;
-  for (let pos=0; pos<input.length-N; pos+=hopA, frameIdx++) {
+  let f0Hz=0,f0Frame=0,frameIdx=0,outPos=0;
 
-    // Hop adaptatif sur transient
-    const bi=Math.floor(pos/blk);
-    const isTransient=bi>0&&bi<nblk&&erg[bi]>erg[bi-1]*3.5;
-    const thisHopA=isTransient?hopA>>1:hopA;
-
-    // Analyse frame
-    re.fill(0); im.fill(0);
-    for (let i=0;i<N;i++) re[i]=(pos+i<input.length?input[pos+i]:0)*win[i];
+  for(let pos=0; pos<input.length; pos+=hopA,frameIdx++) {
+    re.fill(0);im.fill(0);
+    const end=Math.min(pos+N,input.length);
+    for(let i=0;i<end-pos;i++) re[i]=input[pos+i]*win[i];
     fft(re,im);
 
-    // Magnitudes + vraies fréquences
-    for (let k=0;k<=N/2;k++) {
+    // Vraies fréquences
+    for(let k=0;k<=N/2;k++){
       mag[k]=Math.sqrt(re[k]*re[k]+im[k]*im[k]);
-      const phase=Math.atan2(im[k],re[k]);
-      let dPhi=phase-lastPhaseIn[k]; lastPhaseIn[k]=phase;
-      const expected=2*Math.PI*k*thisHopA/N;
-      dPhi-=expected;
-      // Ramener dans [-pi, pi]
-      dPhi-=2*Math.PI*Math.round(dPhi/(2*Math.PI));
-      trueFreq[k]=k+dPhi*N/(2*Math.PI*thisHopA);
+      const ph=Math.atan2(im[k],re[k]);
+      let dPh=ph-lastPhIn[k]; lastPhIn[k]=ph;
+      const exp=2*Math.PI*k*hopA/N;
+      dPh-=exp;
+      dPh-=2*Math.PI*Math.round(dPh/(2*Math.PI));
+      trueFreq[k]=k+dPh*N/(2*Math.PI*hopA);
     }
 
-    // Détection F0 (toutes les 20 frames ~460ms)
-    if (frameIdx%20===0) {
-      const sl=input.slice(pos, Math.min(pos+N, input.length));
-      f0Hz=detectF0(sl, sr);
+    // F0 toutes les 15 frames
+    if(frameIdx%15===0){
+      const sl=new Float32Array(Math.min(N,input.length-pos));
+      for(let i=0;i<sl.length;i++) sl[i]=input[pos+i];
+      f0Hz=detectF0(sl,sr);
       f0Frame=f0Hz>0?Math.round(f0Hz*N/sr):0;
     }
 
-    // True Peak Locking
-    // Un "peak" = bin dont la magnitude est un maximum local
-    // Les bins non-peak héritent de la phase du peak le plus proche
+    // Détection des pics spectraux
     isPeak.fill(0);
-    // Détection peaks spectraux
-    for (let k=2;k<N/2-1;k++) {
-      if (mag[k]>mag[k-1]&&mag[k]>=mag[k+1]&&mag[k]>mag[k+2]) {
+    for(let k=2;k<N/2-1;k++){
+      if(mag[k]>mag[k-1]&&mag[k]>=mag[k+1]){
         isPeak[k]=1;
       }
     }
-    // Renforcer les pics qui coïncident avec un harmonique F0
-    if (f0Frame>0) {
-      for (let h=1; h*f0Frame<=N/2; h++) {
+    // Renforcement sur harmoniques F0
+    if(f0Frame>2){
+      for(let h=1;h*f0Frame<=N/2;h++){
         const hk=h*f0Frame;
-        // Chercher le pic dans ±2 bins autour de l'harmonique
-        let best=-1, bestM=0;
-        for (let dk=-2;dk<=2;dk++) {
-          const k=hk+dk;
-          if (k>=0&&k<=N/2&&mag[k]>bestM) { bestM=mag[k]; best=k; }
-        }
-        if (best>=0) isPeak[best]=1;
+        let best=-1,bestM=0;
+        for(let dk=-3;dk<=3;dk++){const k=hk+dk;if(k>0&&k<N/2&&mag[k]>bestM){bestM=mag[k];best=k;}}
+        if(best>0) isPeak[best]=1;
       }
     }
 
-    // Assigner chaque bin au peak le plus proche
-    peakAssign.fill(0);
-    let lastPk=0;
-    for (let k=0;k<=N/2;k++) { if(isPeak[k]) lastPk=k; peakAssign[k]=lastPk; }
-    let nextPk=N/2;
-    for (let k=N/2;k>=0;k--) {
-      if(isPeak[k]) nextPk=k;
-      if(Math.abs(k-peakAssign[k])>Math.abs(k-nextPk)) peakAssign[k]=nextPk;
+    // Assigner bins → peak le plus proche
+    peakOf.fill(0);
+    let lp=0;
+    for(let k=0;k<=N/2;k++){if(isPeak[k])lp=k;peakOf[k]=lp;}
+    let np=N/2;
+    for(let k=N/2;k>=0;k--){
+      if(isPeak[k])np=k;
+      if(Math.abs(k-peakOf[k])>Math.abs(k-np))peakOf[k]=np;
     }
 
-    // Accumulation de phase — peaks mis à jour d'abord
-    const peakPhase=new Float32Array(N/2+1);
-    for (let k=0;k<=N/2;k++) {
-      if(isPeak[k]) {
-        phaseAccum[k]+=2*Math.PI*trueFreq[k]*hopS/N;
-        peakPhase[k]=phaseAccum[k];
+    // Accumulation phase peaks
+    peakPh.fill(0);
+    for(let k=0;k<=N/2;k++){
+      if(isPeak[k]){
+        phAcc[k]+=2*Math.PI*trueFreq[k]*hopS/N;
+        peakPh[k]=phAcc[k];
       }
-    }
-    // Bins non-peak : rotation cohérente par rapport au peak assigné
-    outRe.fill(0); outIm.fill(0);
-    for (let k=0;k<=N/2;k++) {
-      const pk=peakAssign[k];
-      let phase;
-      if(isPeak[k]) {
-        phase=peakPhase[k];
-        phaseAccum[k]=phase;
-      } else {
-        // Décalage de phase relatif au peak
-        const origPhaseDiff=Math.atan2(im[k],re[k])-Math.atan2(im[pk],re[pk]);
-        phase=peakPhase[pk]+origPhaseDiff;
-        phaseAccum[k]=phase;
-      }
-      outRe[k]=mag[k]*Math.cos(phase);
-      outIm[k]=mag[k]*Math.sin(phase);
-      if(k>0&&k<N/2) { outRe[N-k]=outRe[k]; outIm[N-k]=-outIm[k]; }
     }
 
+    // Synthèse
+    outRe.fill(0);outIm.fill(0);
+    for(let k=0;k<=N/2;k++){
+      const pk=peakOf[k];
+      const ph=isPeak[k]
+        ? peakPh[k]
+        : peakPh[pk]+(Math.atan2(im[k],re[k])-Math.atan2(im[pk],re[pk]));
+      if(!isPeak[k]) phAcc[k]=ph;
+      outRe[k]=mag[k]*Math.cos(ph);
+      outIm[k]=mag[k]*Math.sin(ph);
+      if(k>0&&k<N/2){outRe[N-k]=outRe[k];outIm[N-k]=-outIm[k];}
+    }
     ifft(outRe,outIm);
-    for (let i=0;i<N&&outPos+i<outLen;i++) {
+    for(let i=0;i<N&&outPos+i<outLen;i++){
       output[outPos+i]+=outRe[i]*win[i];
       norm[outPos+i]+=win[i]*win[i];
     }
     outPos+=hopS;
+    if(outPos>=outLen) break;
   }
 
-  // Rééchantillonnage (time→pitch correction)
+  // Rééchantillonnage : outLen → input.length (correction critique v11)
   const targetLen=input.length;
   const result=new Float32Array(targetLen);
-  const ratio=outPos/targetLen;
-  for (let i=0;i<targetLen;i++) {
+  // Ratio basé sur outPos réel (combien de samples de sortie ont été écrits)
+  const actualOut=Math.min(outPos+N, outLen);
+  const ratio=actualOut/targetLen;
+  for(let i=0;i<targetLen;i++){
     const src=i*ratio;
-    const i0=Math.floor(src), f=src-i0;
+    const i0=Math.floor(src)|0;
     const i1=Math.min(i0+1,outLen-1);
-    const v0=i0<outLen&&norm[i0]>0.0001?output[i0]/norm[i0]:0;
-    const v1=i1<outLen&&norm[i1]>0.0001?output[i1]/norm[i1]:0;
+    const f=src-i0;
+    const v0=i0<outLen&&norm[i0]>0.0005?output[i0]/norm[i0]:0;
+    const v1=i1<outLen&&norm[i1]>0.0005?output[i1]/norm[i1]:0;
     result[i]=v0+(v1-v0)*f;
   }
   return result;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// CORRECTION FORMANTIQUE LPC — Le cœur du son pro
+// SPECTRAL ENVELOPE MATCHING (SEM)
+// Méthode utilisée par AirMusic / Kits.AI sur iOS.
+// Plus stable que LPC, zéro artefact, même résultat perceptif.
 //
-// Pipeline (identique à TC-Helicon / Antares Harmony Engine) :
-//   1. Analyser la voix ORIGINALE → coefficients LPC (= modèle du conduit vocal)
-//   2. Appliquer le filtre inverse sur le signal DÉCALÉ → résidu (= excitation)
-//   3. Re-filtrer le résidu avec les coefficients de l'original
-//   → Le pitch change mais les formants (timbre) restent identiques
+// Principe :
+// 1. Calculer l'enveloppe spectrale de l'original (log-mag lissé)
+// 2. Calculer l'enveloppe spectrale du signal shifté
+// 3. Appliquer envOrig/envShifted bin par bin → les formants de l'original
+//    remplacent ceux du shifté
+// 4. Lissage temporel de la correction (α=0.3) → pas d'artefacts brutaux
 //
-// LPC Order 24 : capture suffisamment de formants pour la voix humaine
+// Différence vs v10 :
+// - Pas de pré-emphasis (causait distorsion HF)
+// - Enveloppe par moyenne géométrique glissante (plus robuste que cepstrum)
+// - Lissage temporel → transitions douces entre frames
 // ═══════════════════════════════════════════════════════════════
-function applyLPCFormantCorrection(shifted, original, semitones) {
-  const absST=Math.abs(semitones);
-  if (absST<2) return shifted; // pas besoin sous 2 demi-tons
+function computeSpectralEnvelope(mag, halfN, smoothBins) {
+  // Lissage de la magnitude log sur smoothBins bins
+  // Équivalent à un filtre passe-bas sur le cepstrum → enveloppe formantique
+  const logMag=new Float32Array(halfN+1);
+  for(let k=0;k<=halfN;k++) logMag[k]=Math.log(Math.max(mag[k],1e-8));
 
-  const LPC_ORDER=24;  // 4-6 formants capturés
-  const FRAME=2048;    // frame d'analyse LPC
-  const HOP=512;       // hop LPC
-  const N=shifted.length;
-
-  const out=new Float32Array(N);
-  const norm=new Float32Array(N);
-
-  // Fenêtre Hann pour l'analyse
-  const win=new Float32Array(FRAME);
-  for (let i=0;i<FRAME;i++) win[i]=0.5*(1-Math.cos(2*Math.PI*i/(FRAME-1)));
-
-  // Pré-emphasis (accentue les hautes fréquences avant LPC pour meilleure analyse)
-  const preEmph=0.97;
-  const origEmph=new Float32Array(N);
-  const shiftEmph=new Float32Array(N);
-  origEmph[0]=original[0]||0;
-  shiftEmph[0]=shifted[0]||0;
-  for (let i=1;i<N;i++) {
-    origEmph[i]=(original[i]||0)-preEmph*(original[i-1]||0);
-    shiftEmph[i]=(shifted[i]||0)-preEmph*(shifted[i-1]||0);
+  const env=new Float32Array(halfN+1);
+  for(let k=0;k<=halfN;k++){
+    const lo=Math.max(0,k-smoothBins);
+    const hi=Math.min(halfN,k+smoothBins);
+    let s=0;
+    for(let j=lo;j<=hi;j++) s+=logMag[j];
+    env[k]=Math.exp(s/(hi-lo+1));
   }
+  return env;
+}
 
-  for (let pos=0; pos<N; pos+=HOP) {
-    const end=Math.min(pos+FRAME, N);
+function applySpectralEnvelopeMatching(shifted, original, semitones, sr) {
+  const absST=Math.abs(semitones);
+  if(absST<2) return shifted;
+
+  const N=2048,hop=512;
+  const halfN=N/2;
+  // Plus le shift est grand, plus on lisse l'enveloppe (capture formants larges)
+  const smoothBins=Math.max(8, Math.floor(halfN * 0.04 + absST * 2));
+  const outLen=shifted.length;
+
+  const win=new Float32Array(N);
+  for(let i=0;i<N;i++) win[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));
+
+  const out=new Float32Array(outLen);
+  const norm=new Float32Array(outLen);
+
+  // Lissage temporel : garder la correction du frame précédent
+  // Évite les artefacts "clic" aux transitions de frames
+  let prevRatio=null;
+  const SMOOTH_ALPHA=0.35; // mix frame courant / frame précédent
+
+  const reO=new Float32Array(N),imO=new Float32Array(N);
+  const reS=new Float32Array(N),imS=new Float32Array(N);
+  const magO=new Float32Array(halfN+1),magS=new Float32Array(halfN+1);
+  const outRe=new Float32Array(N),outIm=new Float32Array(N);
+
+  for(let pos=0;pos<outLen;pos+=hop){
+    const end=Math.min(pos+N,outLen);
     const len=end-pos;
 
-    // Frame original fenêtrée
-    const origFrame=new Float32Array(FRAME);
-    for (let i=0;i<len;i++) origFrame[i]=origEmph[pos+i]*win[i];
+    // Frame original (même position)
+    reO.fill(0);imO.fill(0);
+    for(let i=0;i<len;i++) reO[i]=(original[pos+i]||0)*win[i];
+    fft(reO,imO);
+    for(let k=0;k<=halfN;k++) magO[k]=Math.sqrt(reO[k]*reO[k]+imO[k]*imO[k]);
 
-    // Calcul LPC sur l'original
-    const a=computeLPC(origFrame, LPC_ORDER);
+    // Frame shifté
+    reS.fill(0);imS.fill(0);
+    for(let i=0;i<len;i++) reS[i]=(shifted[pos+i]||0)*win[i];
+    fft(reS,imS);
+    for(let k=0;k<=halfN;k++) magS[k]=Math.sqrt(reS[k]*reS[k]+imS[k]*imS[k]);
 
-    // Frame shifted fenêtrée
-    const shFrame=new Float32Array(FRAME);
-    for (let i=0;i<len;i++) shFrame[i]=shiftEmph[pos+i]*win[i];
+    // Enveloppes spectrales
+    const envOrig=computeSpectralEnvelope(magO,halfN,smoothBins);
+    const envShift=computeSpectralEnvelope(magS,halfN,smoothBins);
 
-    // Étape 1 : filtre inverse → extraire le résidu (retire le timbre du pitch-shifté)
-    const residue=applyLPCInverse(shFrame, a);
+    // Ratio de correction : envOrig / envShift
+    // Ce ratio modifie le timbre du shifté pour lui donner les formants de l'original
+    const ratio=new Float32Array(halfN+1);
+    for(let k=0;k<=halfN;k++){
+      const r=envShift[k]>1e-8?envOrig[k]/envShift[k]:1.0;
+      // Limiter le ratio pour éviter les amplifications/coupures excessives (±12dB)
+      ratio[k]=Math.max(0.25,Math.min(4.0,r));
+    }
 
-    // Étape 2 : re-filtre avec les coefficients de l'original (applique le bon timbre)
-    const resynthesized=applyLPCFilter(residue, a);
+    // Lissage temporel avec le frame précédent
+    if(prevRatio){
+      for(let k=0;k<=halfN;k++){
+        ratio[k]=prevRatio[k]*(1-SMOOTH_ALPHA)+ratio[k]*SMOOTH_ALPHA;
+      }
+    }
+    prevRatio=ratio.slice();
 
-    // Dé-emphasis (annuler la pré-emphasis)
-    const deEmph=new Float32Array(FRAME);
-    deEmph[0]=resynthesized[0];
-    for (let i=1;i<FRAME;i++) deEmph[i]=resynthesized[i]+preEmph*deEmph[i-1];
+    // Blend selon amplitude du shift
+    // Shift faible (2-4 ST) : correction légère (les formants ne dérivent pas beaucoup)
+    // Shift fort (>6 ST) : correction maximale
+    const blend=Math.min(0.92, Math.max(0.1, (absST-2)/7.0*0.85+0.07));
 
-    // OLA avec fenêtre Hann
-    for (let i=0;i<len&&pos+i<N;i++) {
-      out[pos+i]+=deEmph[i]*win[i];
+    // Appliquer la correction sur le spectrum du shifté
+    outRe.fill(0);outIm.fill(0);
+    for(let k=0;k<=halfN;k++){
+      const corrRatio=1+(ratio[k]-1)*blend;
+      outRe[k]=reS[k]*corrRatio;
+      outIm[k]=imS[k]*corrRatio;
+      if(k>0&&k<halfN){outRe[N-k]=outRe[k];outIm[N-k]=-outIm[k];}
+    }
+    ifft(outRe,outIm);
+
+    for(let i=0;i<len&&pos+i<outLen;i++){
+      out[pos+i]+=outRe[i]*win[i];
       norm[pos+i]+=win[i]*win[i];
     }
   }
 
   // Normaliser OLA
-  const result=new Float32Array(N);
-  for (let i=0;i<N;i++) result[i]=norm[i]>0.001?out[i]/norm[i]:shifted[i];
-
-  // Blend LPC selon amplitude du shift
-  // Shift faible → moins de correction (déjà bon)
-  // Shift fort → correction maximale
-  const blendLPC=Math.min(1.0, (absST-2)/8.0 * 0.9 + 0.1);
-  const final=new Float32Array(N);
-  for (let i=0;i<N;i++) final[i]=shifted[i]*(1-blendLPC)+result[i]*blendLPC;
-  return final;
+  const result=new Float32Array(outLen);
+  for(let i=0;i<outLen;i++) result[i]=norm[i]>0.001?out[i]/norm[i]:shifted[i];
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// AGC (Automatic Gain Control) post-shift
-// Compense la perte/gain de volume selon les semitones
+// AGC — Automatic Gain Control
+// Normalise le niveau RMS de l'harmonie sur celui de la voix originale
 // ═══════════════════════════════════════════════════════════════
 function applyAGC(signal, reference) {
-  let refRMS=0, sigRMS=0;
-  for (let i=0;i<reference.length;i++) refRMS+=reference[i]*reference[i];
-  for (let i=0;i<signal.length;i++) sigRMS+=signal[i]*signal[i];
+  let refRMS=0,sigRMS=0;
+  for(let i=0;i<reference.length;i++) refRMS+=reference[i]*reference[i];
+  for(let i=0;i<signal.length;i++) sigRMS+=signal[i]*signal[i];
   refRMS=Math.sqrt(refRMS/reference.length);
   sigRMS=Math.sqrt(sigRMS/signal.length);
-  if (sigRMS<1e-8) return signal;
-  // Gain pour correspondre au niveau de référence (max 6dB)
-  const gain=Math.min(refRMS/sigRMS, 2.0);
+  if(sigRMS<1e-9) return signal;
+  const gain=Math.max(0.3,Math.min(2.5,refRMS/sigRMS));
   const out=new Float32Array(signal.length);
-  for (let i=0;i<signal.length;i++) out[i]=signal[i]*gain;
+  for(let i=0;i<signal.length;i++) out[i]=signal[i]*gain;
   return out;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// JITTER NATUREL par bruit rose filtré
-// Bruit rose = bruit aléatoire filtré passe-bas → variations douces
-// BEAUCOUP plus naturel que des LFOs sinusoïdaux
+// JITTER NATUREL — bruit rose déterministe (PRNG Mulberry32)
+// Correction v11 : Math.random() remplacé → résultats reproductibles
+// Niveaux réduits : ±8 cents drift, ±1.5% flutter (était trop fort)
 // ═══════════════════════════════════════════════════════════════
-function pinkNoiseGenerator(seed) {
-  // Voss-McCartney pink noise (8 octaves)
-  const contrib=new Float32Array(8);
-  let s=seed>>>0;
-  const rand=()=>{ s=(s*1664525+1013904223)>>>0; return s/0xFFFFFFFF*2-1; };
-  for (let i=0;i<8;i++) contrib[i]=rand();
-  let runningSum=contrib.reduce((a,b)=>a+b,0);
-  return {
-    next() {
-      // Mettre à jour un générateur aléatoirement
-      const idx=Math.floor(Math.random()*8);
-      runningSum-=contrib[idx];
-      contrib[idx]=rand();
-      runningSum+=contrib[idx];
-      return runningSum/8; // [-1, 1]
-    }
-  };
-}
-
 function applyOrganicJitter(signal, sr, seed) {
+  const rand=makePRNG(seed>>>0);
   const len=signal.length;
   const result=new Float32Array(len);
-  const pink=pinkNoiseGenerator(seed>>>0);
 
-  // Filtre passe-bas 8Hz sur le bruit rose → dérive de pitch douce
-  const fc=8.0, rc=1/(2*Math.PI*fc);
-  const dt=1/sr, alpha=dt/(rc+dt);
-  let lpState=0;
+  // Filtre passe-bas pour drift (8Hz) et flutter (12Hz)
+  const dt=1/sr;
+  const alphaD=dt/(dt+1/(2*Math.PI*8));
+  const alphaF=dt/(dt+1/(2*Math.PI*12));
+  let lpD=0,lpF=0;
 
-  // Filtre passe-bas 15Hz pour flutter amplitude
-  const fc2=15.0, rc2=1/(2*Math.PI*fc2);
-  const alpha2=dt/(rc2+dt);
-  let lpState2=0;
+  // Pré-générer séquences de bruit (seed fixe → résultat identique)
+  // 2 séquences indépendantes : drift et flutter
+  const noiseD=new Float32Array(len);
+  const noiseF=new Float32Array(len);
+  for(let i=0;i<len;i++){noiseD[i]=rand()*2-1;noiseF[i]=rand()*2-1;}
 
-  // Délai circulaire pour pitch drift via resampling
-  const DELAY_MAX=Math.floor(sr*0.030); // 30ms max drift
-  const delayBuf=new Float32Array(DELAY_MAX);
-  let delayPtr=0;
+  // Buffer de délai pour le pitch drift
+  const MAX_DELAY=Math.floor(sr*0.025)+1;
+  const delBuf=new Float32Array(MAX_DELAY);
 
-  for (let i=0;i<len;i++) {
-    const noise=pink.next();
+  for(let i=0;i<len;i++){
+    // Drift pitch filtré ±8 cents
+    lpD=lpD+alphaD*(noiseD[i]-lpD);
+    const driftCents=lpD*8.0;
 
-    // Pitch drift filtré (±15 cents)
-    lpState=lpState+alpha*(noise*0.7-lpState);
-    const driftCents=lpState*15.0;
+    // Flutter amplitude filtré ±1.5%
+    lpF=lpF+alphaF*(noiseF[i]-lpF);
+    const flutter=1.0+lpF*0.015;
 
-    // Flutter amplitude filtré (±2.5%)
-    const noise2=pink.next();
-    lpState2=lpState2+alpha2*(noise2*0.5-lpState2);
-    const flutter=1.0+lpState2*0.025;
-
-    // Appliquer drift via resampling linéaire
-    const pitchRatio=Math.pow(2, driftCents/1200);
-    const srcPos=i*pitchRatio;
-    const s0=Math.floor(srcPos)|0, s1=Math.min(s0+1,len-1);
-    const frac=srcPos-Math.floor(srcPos);
-    const pitched=(s0>=0&&s0<len?(signal[s0]||0):0)*(1-frac)+(signal[s1]||0)*frac;
-
+    // Drift via interpolation linéaire
+    const ratio=Math.pow(2,driftCents/1200);
+    const srcPos=i*ratio;
+    const s0=Math.max(0,Math.min(len-2,Math.floor(srcPos)|0));
+    const fr=srcPos-Math.floor(srcPos);
+    const pitched=(signal[s0]||0)*(1-fr)+(signal[Math.min(s0+1,len-1)]||0)*fr;
     result[i]=pitched*flutter;
   }
   return result;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// REVERB PLATE — Son "plaque d'acier" des harmonies country pro
-// Architecture : pre-delay + early reflections + late diffuse
-// Bien supérieure au Schroeder classique
+// REVERB PLATE — Early Reflections + Late Diffuse
 // ═══════════════════════════════════════════════════════════════
 function applyPlateReverb(signal, sr, dryWet) {
-  if (dryWet<=0) return signal;
+  if(dryWet<=0) return signal;
   const len=signal.length;
   const wet=new Float32Array(len);
 
-  // Early reflections (17 taps, délais typiques d'une salle de recording)
+  // Early reflections (10 taps)
   const erTaps=[
-    {d:0.0043,g:0.58},{d:0.0078,g:-0.52},{d:0.0099,g:0.48},
-    {d:0.0142,g:-0.44},{d:0.0178,g:0.38},{d:0.0235,g:-0.34},
-    {d:0.0267,g:0.30},{d:0.0304,g:-0.26},{d:0.0332,g:0.24},
-    {d:0.0378,g:-0.20},{d:0.0415,g:0.18},{d:0.0459,g:-0.16},
-    {d:0.0503,g:0.14},{d:0.0541,g:-0.12},{d:0.0587,g:0.10},
-    {d:0.0621,g:-0.08},{d:0.0678,g:0.07}
-  ].map(t=>({d:Math.floor(t.d*sr),g:t.g}));
+    {d:0.0043,g:0.55},{d:0.0079,g:-0.48},{d:0.0120,g:0.42},
+    {d:0.0178,g:-0.36},{d:0.0235,g:0.30},{d:0.0302,g:-0.25},
+    {d:0.0378,g:0.20},{d:0.0441,g:-0.16},{d:0.0520,g:0.12},
+    {d:0.0601,g:-0.09}
+  ].map(t=>({d:Math.max(1,Math.floor(t.d*sr)),g:t.g}));
 
-  // Late reverb : 6 combs + 4 allpass (Dattorro plate)
-  const combD=[0.0297,0.0373,0.0411,0.0437,0.0486,0.0525].map(d=>Math.floor(d*sr));
-  const combG=[0.803,0.823,0.783,0.764,0.831,0.799];
-  const apD=[0.0127,0.0090,0.0062,0.0048].map(d=>Math.floor(d*sr));
-  const apG=[0.7,0.7,0.7,0.7];
-  const preDelayMs=12, preD=Math.floor(preDelayMs*0.001*sr);
-
-  const preBuf=new Float32Array(preD+1);
-  let prePtr=0;
-
-  const combBufs=combD.map(d=>new Float32Array(d+1));
-  const combPtrs=new Int32Array(6);
-  const apBufs=apD.map(d=>new Float32Array(d+1));
-  const apPtrs=new Int32Array(4);
-
-  // Buffer early reflections (max délai)
   const maxER=Math.max(...erTaps.map(t=>t.d))+1;
   const erBuf=new Float32Array(maxER);
   let erPtr=0;
 
-  for (let i=0;i<len;i++) {
-    const x=signal[i]||0;
+  // Comb filters (late)
+  const combD=[0.0307,0.0379,0.0421,0.0451].map(d=>Math.max(1,Math.floor(d*sr)));
+  const combG=[0.805,0.827,0.783,0.764];
+  const combBufs=combD.map(d=>new Float32Array(d));
+  const combPtrs=new Int32Array(4);
 
-    // Pre-delay
-    const preSamp=preBuf[prePtr];
-    preBuf[prePtr]=x; prePtr=(prePtr+1)%(preD+1);
+  // Allpass filters
+  const apD=[0.0127,0.0093].map(d=>Math.max(1,Math.floor(d*sr)));
+  const apG=[0.7,0.7];
+  const apBufs=apD.map(d=>new Float32Array(d));
+  const apPtrs=new Int32Array(2);
+
+  // Pre-delay 10ms
+  const preD=Math.max(1,Math.floor(0.010*sr));
+  const preBuf=new Float32Array(preD);
+  let prePtr=0;
+
+  for(let i=0;i<len;i++){
+    const x=signal[i]||0;
+    const pre=preBuf[prePtr];
+    preBuf[prePtr]=x;
+    prePtr=(prePtr+1)%preD;
 
     // Early reflections
-    erBuf[erPtr%maxER]=preSamp;
-    let erOut=0;
-    for (const t of erTaps) {
-      const idx=((erPtr-t.d)+maxER*2)%maxER;
-      erOut+=erBuf[idx]*t.g;
-    }
-    erPtr++;
-    erOut*=0.25;
+    erBuf[erPtr%maxER]=pre;
+    let er=0;
+    for(const t of erTaps) er+=erBuf[(erPtr-t.d+maxER*2)%maxER]*t.g;
+    erPtr=(erPtr+1)%maxER;
+    er*=0.3;
 
-    // Comb filters (late) en parallèle
+    // Comb filters
     let combOut=0;
-    for (let c=0;c<6;c++) {
-      const buf=combBufs[c], d=combD[c];
-      const ptr=combPtrs[c];
+    for(let c=0;c<4;c++){
+      const buf=combBufs[c],d=combD[c],ptr=combPtrs[c];
       const delayed=buf[ptr];
-      buf[ptr]=preSamp+delayed*combG[c];
-      combPtrs[c]=(ptr+1)%(d+1);
+      buf[ptr]=pre+delayed*combG[c];
+      combPtrs[c]=(ptr+1)%d;
       combOut+=delayed;
     }
-    combOut*=(1/6);
+    combOut*=0.25;
 
-    // Allpass en série
-    let apOut=combOut+erOut*0.3;
-    for (let a=0;a<4;a++) {
-      const buf=apBufs[a], d=apD[a], g=apG[a];
+    // Allpass
+    let ap=combOut*0.7+er*0.3;
+    for(let a=0;a<2;a++){
+      const buf=apBufs[a],d=apD[a],g=apG[a];
       const ptr=apPtrs[a];
-      const delayed=buf[ptr];
-      const inp=apOut+delayed*g;
-      buf[ptr]=inp; apPtrs[a]=(ptr+1)%(d+1);
-      apOut=delayed-g*inp;
+      const del=buf[ptr];
+      const inp=ap+del*g;
+      buf[ptr]=inp;
+      apPtrs[a]=(ptr+1)%d;
+      ap=del-g*inp;
     }
-
-    wet[i]=apOut*0.6+erOut*0.4;
+    wet[i]=ap;
   }
 
   // Normaliser wet
-  let peak=0;
-  for (let i=0;i<len;i++) peak=Math.max(peak,Math.abs(wet[i]));
-  if (peak>0.01) { const n=0.8/peak; for(let i=0;i<len;i++) wet[i]*=n; }
+  let pk=0;
+  for(let i=0;i<len;i++) pk=Math.max(pk,Math.abs(wet[i]));
+  if(pk>0.01){const n=0.75/pk;for(let i=0;i<len;i++) wet[i]*=n;}
 
   const out=new Float32Array(len);
-  for (let i=0;i<len;i++) out[i]=signal[i]*(1-dryWet)+wet[i]*dryWet;
+  for(let i=0;i<len;i++) out[i]=signal[i]*(1-dryWet)+wet[i]*dryWet;
   return out;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// CHORUS STÉRÉO — Sépare les harmonies dans l'espace
-// Delay modulé LFO indépendant L et R → élargissement
+// CHORUS STÉRÉO — Sépare les voix dans l'espace
+// Correction v11 : les deux canaux L et R sont conservés séparément
+// jusqu'au WAV final (l'ancien code les mono-mixait dans applyGainPan)
 // ═══════════════════════════════════════════════════════════════
-function applyChorusStereo(signal, sr, depth, rate, seed) {
+function applyChorusStereo(signal, sr, depthSec, rate, seed) {
+  const rand=makePRNG(seed^0xC0FFEE);
   const len=signal.length;
-  const outL=new Float32Array(len), outR=new Float32Array(len);
-
-  // Délai max = 30ms
-  const maxDelaySamp=Math.floor(sr*0.030)+1;
-  const bufL=new Float32Array(maxDelaySamp);
-  const bufR=new Float32Array(maxDelaySamp);
+  const outL=new Float32Array(len),outR=new Float32Array(len);
+  const maxD=Math.max(1,Math.floor(sr*0.030));
+  const bufL=new Float32Array(maxD),bufR=new Float32Array(maxD);
   let ptr=0;
 
-  const rateRad=2*Math.PI*rate/sr;
-  // Phase aléatoire déterministe basée sur seed pour différencier les voix
-  const s=(seed>>>0);
-  const phaseL=(s*0.618)%(Math.PI*2);
-  const phaseR=(s*1.618)%(Math.PI*2);
+  // Phases différentes L/R (déterministes)
+  const phL=rand()*Math.PI*2;
+  const phR=rand()*Math.PI*2;
+  const rate2=rate*1.13; // légère différence de vitesse L/R
+  const center=Math.floor(sr*0.012); // 12ms délai de base
 
-  const centerDelay=Math.floor(sr*0.015); // 15ms délai de base
-
-  for (let i=0;i<len;i++) {
+  for(let i=0;i<len;i++){
     const x=signal[i]||0;
-    bufL[ptr%maxDelaySamp]=x;
-    bufR[ptr%maxDelaySamp]=x;
-
-    // Modulation LFO différente L et R
-    const modL=centerDelay+Math.sin(i*rateRad+phaseL)*depth*sr;
-    const modR=centerDelay+Math.sin(i*rateRad+phaseR)*depth*sr;
-
-    const dL=Math.max(1,Math.min(maxDelaySamp-1,Math.floor(modL)));
-    const dR=Math.max(1,Math.min(maxDelaySamp-1,Math.floor(modR)));
-    const fracL=modL-Math.floor(modL), fracR=modR-Math.floor(modR);
-
-    const idxL0=(ptr-dL+maxDelaySamp*2)%maxDelaySamp;
-    const idxL1=(idxL0+1)%maxDelaySamp;
-    const idxR0=(ptr-dR+maxDelaySamp*2)%maxDelaySamp;
-    const idxR1=(idxR0+1)%maxDelaySamp;
-
-    const delayedL=bufL[idxL0]*(1-fracL)+bufL[idxL1]*fracL;
-    const delayedR=bufR[idxR0]*(1-fracR)+bufR[idxR1]*fracR;
-
-    outL[i]=x*0.7+delayedL*0.3;
-    outR[i]=x*0.7+delayedR*0.3;
-    ptr++;
+    bufL[ptr%maxD]=x;
+    bufR[ptr%maxD]=x;
+    const depthSamp=depthSec*sr;
+    const modL=center+Math.sin(2*Math.PI*rate*i/sr+phL)*depthSamp;
+    const modR=center+Math.sin(2*Math.PI*rate2*i/sr+phR)*depthSamp;
+    const dL=Math.max(1,Math.min(maxD-1,Math.floor(modL)|0));
+    const dR=Math.max(1,Math.min(maxD-1,Math.floor(modR)|0));
+    const fL=modL-Math.floor(modL),fR=modR-Math.floor(modR);
+    const idxL0=(ptr-dL+maxD*4)%maxD,idxL1=(idxL0+1)%maxD;
+    const idxR0=(ptr-dR+maxD*4)%maxD,idxR1=(idxR0+1)%maxD;
+    const dlyL=bufL[idxL0]*(1-fL)+bufL[idxL1]*fL;
+    const dlyR=bufR[idxR0]*(1-fR)+bufR[idxR1]*fR;
+    outL[i]=x*0.72+dlyL*0.28;
+    outR[i]=x*0.72+dlyR*0.28;
+    ptr=(ptr+1)%maxD;
   }
-  return {outL, outR};
+  return{outL,outR};
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SATURATION HARMONIQUE (chaleur analogique)
+// SATURATION DOUCE (chaleur analogique)
 // ═══════════════════════════════════════════════════════════════
-function applySoftSaturation(signal, drive) {
-  if (drive<=0) return signal;
+function applySoftSaturation(signal,drive){
+  if(drive<=0) return signal;
   const out=new Float32Array(signal.length);
-  const g=1+drive*2.0;
-  for (let i=0;i<signal.length;i++) {
+  const g=1+drive*1.8;
+  for(let i=0;i<signal.length;i++){
     const x=signal[i]*g;
-    // Soft clipping (tanh approximation)
-    out[i]=(x/(1+Math.abs(x)))*((1/g)*1.08);
+    out[i]=(x/(1+Math.abs(x)))*(1.06/g);
   }
   return out;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// VARIATION PAR PHRASE (micro-intonation naturelle)
-// Variation de pitch phrase par phrase comme un vrai chanteur
+// VARIATION PAR PHRASE (micro-intonation humaine)
 // ═══════════════════════════════════════════════════════════════
-function applyPhraseVariation(signal, sr, pitchVarCents, seed) {
-  let s=seed>>>0;
-  const rand=()=>{ s=(s*1664525+1013904223)>>>0; return s/0xFFFFFFFF; };
+function applyPhraseVariation(signal,sr,pitchVarCents,seed){
+  const rand=makePRNG(seed^0xDEAD);
   const minPS=Math.floor(sr*0.25);
   const result=new Float32Array(signal.length);
   let pos=0;
-  while (pos<signal.length) {
-    const pLen=Math.floor(minPS+rand()*sr*0.8);
+  while(pos<signal.length){
+    const pLen=Math.floor(minPS+rand()*sr*0.7);
     const varC=(rand()*2-1)*pitchVarCents;
     const ratio=Math.pow(2,varC/1200);
     const end=Math.min(pos+pLen,signal.length);
-    const fade=Math.min(Math.floor(sr*0.015),pLen>>1);
-    for (let i=pos;i<end;i++) {
+    const fade=Math.min(Math.floor(sr*0.012),pLen>>1);
+    for(let i=pos;i<end;i++){
       const sp=pos+(i-pos)*ratio;
-      const s0=Math.min(Math.floor(sp),signal.length-2);
+      const s0=Math.min(Math.floor(sp)|0,signal.length-2);
       const fr=sp-Math.floor(sp);
       let v=(signal[s0]||0)*(1-fr)+(signal[Math.min(s0+1,signal.length-1)]||0)*fr;
-      const fs=i-pos, te=end-i;
-      if (fs<fade) v*=fs/fade;
-      if (te<fade) v*=te/fade;
+      const fs=i-pos,te=end-i;
+      if(fs<fade) v*=fs/fade;
+      if(te<fade) v*=te/fade;
       result[i]+=v;
     }
     pos=end;
@@ -676,161 +585,163 @@ function applyPhraseVariation(signal, sr, pitchVarCents, seed) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// OFFSET TEMPOREL (les harmonies n'attaquent pas exactement ensemble)
+// TIMING OFFSET
 // ═══════════════════════════════════════════════════════════════
-function applyTimingOffset(signal, offsetMs, sr) {
-  if (offsetMs<=0) return signal;
-  const offset=Math.floor(offsetMs*sr/1000);
+function applyTimingOffset(signal,offsetMs,sr){
+  if(offsetMs<=0) return signal;
+  const off=Math.floor(offsetMs*sr/1000);
   const result=new Float32Array(signal.length);
-  for (let i=offset;i<signal.length;i++) result[i]=signal[i-offset];
+  for(let i=off;i<signal.length;i++) result[i]=signal[i-off];
   return result;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// COLORATION TIMBRALE (chaque harmonie = personnalité propre)
-// Filtre paramétrique peak/cut pour différencier les voix
+// COLORATION TIMBRALE (EQ paramétrique par voix)
 // ═══════════════════════════════════════════════════════════════
-function applyTimbreColor(signal, fcHz, gainDB, Q, sr) {
-  if (Math.abs(gainDB)<0.2) return signal;
-  const A=Math.pow(10,gainDB/40), w0=2*Math.PI*fcHz/sr;
-  const cosW=Math.cos(w0), sinW=Math.sin(w0), alpha=sinW/(2*Q);
-  const b0=1+alpha*A, b1=-2*cosW, b2=1-alpha*A;
-  const a0=1+alpha/A, a1=-2*cosW, a2=1-alpha/A;
+function applyTimbreColor(signal,fcHz,gainDB,Q,sr){
+  if(Math.abs(gainDB)<0.2) return signal;
+  const A=Math.pow(10,gainDB/40),w0=2*Math.PI*fcHz/sr;
+  const cosW=Math.cos(w0),sinW=Math.sin(w0),alpha=sinW/(2*Q);
+  const b0=1+alpha*A,b1=-2*cosW,b2=1-alpha*A;
+  const a0=1+alpha/A,a1=-2*cosW,a2=1-alpha/A;
   const out=new Float32Array(signal.length);
   let x1=0,x2=0,y1=0,y2=0;
-  for (let i=0;i<signal.length;i++) {
+  for(let i=0;i<signal.length;i++){
     const x0=signal[i]||0;
     const y0=(b0*x0+b1*x1+b2*x2-a1*y1-a2*y2)/a0;
-    out[i]=y0; x2=x1; x1=x0; y2=y1; y1=y0;
+    out[i]=y0;x2=x1;x1=x0;y2=y1;y1=y0;
   }
   return out;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// DOUBLE TRACKING pro
+// DOUBLE TRACKING
 // ═══════════════════════════════════════════════════════════════
-function doubleTrack(mono, sr) {
+function doubleTrack(mono,sr){
+  const rand=makePRNG(0xBADF00D);
   const len=mono.length;
   const resample=(src,ratio)=>{
-    const outLen=Math.floor(src.length/ratio), out=new Float32Array(outLen);
-    for (let i=0;i<outLen;i++) {
-      const pos=i*ratio, idx=Math.min(Math.floor(pos),src.length-2);
+    const outLen=Math.floor(src.length/ratio),out=new Float32Array(outLen);
+    for(let i=0;i<outLen;i++){
+      const pos=i*ratio,idx=Math.min(Math.floor(pos)|0,src.length-2);
       out[i]=src[idx]+(src[idx+1]-src[idx])*(pos-Math.floor(pos));
     }
     return out;
   };
-  const sL=resample(mono,1/Math.pow(2, 0.10/12));
+  const sL=resample(mono,1/Math.pow(2,0.10/12));
   const sR=resample(mono,1/Math.pow(2,-0.10/12));
-  const dL=Math.floor(0.016*sr), dR=Math.floor(0.033*sr);
+  const dL=Math.floor(0.016*sr),dR=Math.floor(0.033*sr);
   const outLen=len+Math.floor(0.040*sr);
-  const outL=new Float32Array(outLen), outR=new Float32Array(outLen);
-  for (let i=0;i<len;i++) { outL[i]+=mono[i]*0.70; outR[i]+=mono[i]*0.70; }
+  const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
+  for(let i=0;i<len;i++){outL[i]+=mono[i]*0.70;outR[i]+=mono[i]*0.70;}
   const llLen=Math.min(sL.length,outLen-dL);
-  for (let i=0;i<llLen;i++) { const s=sL[i]*0.55; outL[i+dL]+=s*0.85; outR[i+dL]+=s*0.15; }
+  for(let i=0;i<llLen;i++){const s=sL[i]*0.55;outL[i+dL]+=s*0.85;outR[i+dL]+=s*0.15;}
   const rrLen=Math.min(sR.length,outLen-dR);
-  for (let i=0;i<rrLen;i++) { const s=sR[i]*0.55; outL[i+dR]+=s*0.15; outR[i+dR]+=s*0.85; }
+  for(let i=0;i<rrLen;i++){const s=sR[i]*0.55;outL[i+dR]+=s*0.15;outR[i+dR]+=s*0.85;}
   let peak=0;
-  for (let i=0;i<outLen;i++) peak=Math.max(peak,Math.abs(outL[i]),Math.abs(outR[i]));
-  if (peak>0.95) { const n=0.95/peak; for(let i=0;i<outLen;i++){outL[i]*=n;outR[i]*=n;} }
-  return { outL, outR, outLen };
+  for(let i=0;i<outLen;i++) peak=Math.max(peak,Math.abs(outL[i]),Math.abs(outR[i]));
+  if(peak>0.95){const n=0.95/peak;for(let i=0;i<outLen;i++){outL[i]*=n;outR[i]*=n;}}
+  return{outL,outR,outLen};
 }
 
 // ═══════════════════════════════════════════════════════════════
 // PROFILS PAR HARMONIE
 // ═══════════════════════════════════════════════════════════════
-const LAYER_PROFILES = {
-  2: { pitchVar:3,  timingMs:14, timbreHz:2800, timbreDb:+1.8, pan:-0.30, chorusRate:0.95, chorusDepth:0.004, reverbWet:0.18 }, // Tierce +3
-  3: { pitchVar:5,  timingMs:26, timbreHz:3400, timbreDb:-1.2, pan:+0.35, chorusRate:1.10, chorusDepth:0.006, reverbWet:0.22 }, // Quinte +7
-  4: { pitchVar:2,  timingMs:8,  timbreHz:200,  timbreDb:+2.2, pan:+0.10, chorusRate:0.80, chorusDepth:0.003, reverbWet:0.15 }, // Octave -12
-  5: { pitchVar:4,  timingMs:20, timbreHz:1800, timbreDb:+0.6, pan:-0.15, chorusRate:1.25, chorusDepth:0.005, reverbWet:0.20 }, // Quarte +5
+const LAYER_PROFILES={
+  2:{pitchVar:2.5,timingMs:14,timbreHz:2800,timbreDb:+1.5,pan:-0.30,chorusRate:0.95,chorusDepth:0.004,reverbWet:0.17},
+  3:{pitchVar:4.0,timingMs:25,timbreHz:3400,timbreDb:-1.0,pan:+0.35,chorusRate:1.10,chorusDepth:0.006,reverbWet:0.20},
+  4:{pitchVar:1.8,timingMs:8, timbreHz:250, timbreDb:+2.0,pan:+0.10,chorusRate:0.80,chorusDepth:0.003,reverbWet:0.14},
+  5:{pitchVar:3.5,timingMs:20,timbreHz:1800,timbreDb:+0.8,pan:-0.15,chorusRate:1.25,chorusDepth:0.005,reverbWet:0.19},
 };
 
 // ═══════════════════════════════════════════════════════════════
-// TRAITEMENT PRINCIPAL D'UNE HARMONIE
+// TRAITEMENT PRINCIPAL
 // ═══════════════════════════════════════════════════════════════
-function processSingle(mono, semitones, sampleRate, trackIndex) {
+function processSingle(mono,semitones,sampleRate,trackIndex){
   const profile=LAYER_PROFILES[trackIndex]||LAYER_PROFILES[2];
-  let seed=(trackIndex||2)*7919;
-  for (let i=0;i<Math.min(64,mono.length);i++) seed=(seed*31+Math.round(mono[i]*10000))|0;
+  const seed=(trackIndex||2)*7919;
 
-  // 1. Phase Vocoder (True Peak Phase Locking amélioré)
-  let shifted=phaseVocoderShift(mono, semitones, sampleRate);
+  // 1. Phase Vocoder (True Peak Phase Locking)
+  let shifted=phaseVocoderShift(mono,semitones,sampleRate);
 
-  // 2. Correction formantique LPC (remplace l'ancien cepstrum)
-  //    = même algorithme que TC-Helicon, Antares, Kits.AI
-  shifted=applyLPCFormantCorrection(shifted, mono, semitones);
+  // 2. Correction formantique SEM (Spectral Envelope Matching)
+  shifted=applySpectralEnvelopeMatching(shifted,mono,semitones,sampleRate);
 
-  // 3. AGC — normaliser au niveau de la voix originale
-  shifted=applyAGC(shifted, mono);
+  // 3. AGC — égaliser le niveau sur l'original
+  shifted=applyAGC(shifted,mono);
 
-  // 4. Saturation douce (chaleur sur les harmonies aiguës)
-  if (semitones>=4) {
-    const drive=0.03+(semitones-4)/10*0.04;
-    shifted=applySoftSaturation(shifted, drive);
+  // 4. Saturation douce (harmonies aiguës uniquement)
+  if(semitones>=4){
+    shifted=applySoftSaturation(shifted,0.03+(semitones-4)/12*0.04);
   }
 
-  // 5. Variation de phrase (micro-intonation humaine)
-  shifted=applyPhraseVariation(shifted, sampleRate, profile.pitchVar, seed);
+  // 5. Variation de phrase
+  shifted=applyPhraseVariation(shifted,sampleRate,profile.pitchVar,seed);
 
-  // 6. Jitter naturel par bruit rose (plus naturel que les LFOs sinusoïdaux)
-  shifted=applyOrganicJitter(shifted, sampleRate, seed^0xABCD1234);
+  // 6. Jitter naturel déterministe
+  shifted=applyOrganicJitter(shifted,sampleRate,seed^0xABCD1234);
 
-  // 7. Coloration timbrale (personnalité de chaque voix)
-  shifted=applyTimbreColor(shifted, profile.timbreHz, profile.timbreDb, 1.3, sampleRate);
+  // 7. Coloration timbrale par voix
+  shifted=applyTimbreColor(shifted,profile.timbreHz,profile.timbreDb,1.3,sampleRate);
 
   // 8. Offset temporel
-  shifted=applyTimingOffset(shifted, profile.timingMs, sampleRate);
+  shifted=applyTimingOffset(shifted,profile.timingMs,sampleRate);
 
-  // 9. Reverb Plate (early reflections + late diffuse)
-  shifted=applyPlateReverb(shifted, sampleRate, profile.reverbWet);
+  // 9. Reverb Plate
+  shifted=applyPlateReverb(shifted,sampleRate,profile.reverbWet);
 
   return shifted;
 }
 
-// Traitement par blocs (iOS memory limit ~128MB)
-function processChunked(mono, semitones, sampleRate, trackIndex) {
-  const chunkSec=40;
-  const chunkSamples=Math.floor(sampleRate*chunkSec);
-  if (mono.length<=chunkSamples) return processSingle(mono, semitones, sampleRate, trackIndex);
-
-  const overlapSamp=Math.floor(sampleRate*0.5);
+function processChunked(mono,semitones,sampleRate,trackIndex){
+  const chunkSamp=Math.floor(sampleRate*40);
+  if(mono.length<=chunkSamp) return processSingle(mono,semitones,sampleRate,trackIndex);
+  const overlapSamp=Math.floor(sampleRate*0.4);
   const results=[];
   let pos=0;
-  while (pos<mono.length) {
-    const end=Math.min(pos+chunkSamples, mono.length);
-    const chunk=mono.slice(pos, end+(end<mono.length?overlapSamp:0));
-    const processed=processSingle(chunk, semitones, sampleRate, trackIndex);
-    const keepLen=end<mono.length?Math.floor(processed.length*(chunkSamples/chunk.length)):processed.length;
+  while(pos<mono.length){
+    const end=Math.min(pos+chunkSamp,mono.length);
+    const chunk=mono.slice(pos,end<mono.length?end+overlapSamp:end);
+    const processed=processSingle(chunk,semitones,sampleRate,trackIndex);
+    const keepLen=end<mono.length?Math.floor(processed.length*(chunkSamp/chunk.length)):processed.length;
     results.push(processed.slice(0,keepLen));
     pos=end;
   }
   const totalLen=results.reduce((s,r)=>s+r.length,0);
   const final=new Float32Array(totalLen);
   let off=0;
-  for (const r of results) { final.set(r,off); off+=r.length; }
+  for(const r of results){final.set(r,off);off+=r.length;}
   return final;
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GAIN / PAN / WAV
+// GAIN/PAN — Correction v11 :
+// Si l'entrée est stéréo (chorus), on applique le PAN sans mono-mixer
+// Si l'entrée est mono, on applique le PAN classique
 // ═══════════════════════════════════════════════════════════════
-function applyGainPan(inL, inR, len, gain, pan, isDouble) {
-  const outL=new Float32Array(len), outR=new Float32Array(len);
-  if (isDouble) {
-    for (let i=0;i<len;i++) { outL[i]=(inL[i]||0)*gain; outR[i]=(inR[i]||0)*gain; }
-  } else {
-    const p=Math.max(-1,Math.min(1,pan)), pr=(p+1)*Math.PI/4;
-    const pL=Math.cos(pr)*gain, pR=Math.sin(pr)*gain;
-    for (let i=0;i<len;i++) {
-      const mid=((inL[i]||0)+(inR[i]||0))*0.5;
-      outL[i]=mid*pL; outR[i]=mid*pR;
-    }
+function applyGainPanStereo(inL,inR,len,gain,pan){
+  const p=Math.max(-1,Math.min(1,pan));
+  const pr=(p+1)*Math.PI/4;
+  const pL=Math.cos(pr)*gain,pR=Math.sin(pr)*gain;
+  const outL=new Float32Array(len),outR=new Float32Array(len);
+  for(let i=0;i<len;i++){
+    outL[i]=(inL[i]||0)*pL;
+    outR[i]=(inR[i]||0)*pR;
   }
-  return { outL, outR };
+  return{outL,outR};
 }
 
-function audioToWav(chL, chR, sr) {
-  const n=chL.length, dl=n*4, buf=new ArrayBuffer(44+dl), v=new DataView(buf);
+function applyGainPanDouble(inL,inR,len,gain){
+  const outL=new Float32Array(len),outR=new Float32Array(len);
+  for(let i=0;i<len;i++){outL[i]=(inL[i]||0)*gain;outR[i]=(inR[i]||0)*gain;}
+  return{outL,outR};
+}
+
+// ═══════════════════════════════════════════════════════════════
+// WAV
+// ═══════════════════════════════════════════════════════════════
+function audioToWav(chL,chR,sr){
+  const n=chL.length,dl=n*4,buf=new ArrayBuffer(44+dl),v=new DataView(buf);
   const ws=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
   ws(0,'RIFF');v.setUint32(4,36+dl,true);ws(8,'WAVE');ws(12,'fmt ');
   v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,2,true);
@@ -838,7 +749,7 @@ function audioToWav(chL, chR, sr) {
   ws(36,'data');v.setUint32(40,dl,true);
   let off=44;
   for(let i=0;i<n;i++){
-    const sL=Math.max(-1,Math.min(1,chL[i]||0)), sR=Math.max(-1,Math.min(1,chR[i]||0));
+    const sL=Math.max(-1,Math.min(1,chL[i]||0)),sR=Math.max(-1,Math.min(1,chR[i]||0));
     v.setInt16(off,sL<0?sL*0x8000:sL*0x7FFF,true);off+=2;
     v.setInt16(off,sR<0?sR*0x8000:sR*0x7FFF,true);off+=2;
   }
@@ -848,44 +759,47 @@ function audioToWav(chL, chR, sr) {
 // ═══════════════════════════════════════════════════════════════
 // MESSAGE HANDLER
 // ═══════════════════════════════════════════════════════════════
-self.onmessage = function(e) {
-  const { id, op, channelL, channelR, semitones, gain, pan, sampleRate, trackIndex } = e.data;
-  try {
+self.onmessage=function(e){
+  const{id,op,channelL,channelR,semitones,gain,pan,sampleRate,trackIndex}=e.data;
+  try{
     const len=channelL.length;
     const mono=new Float32Array(len);
-    for (let i=0;i<len;i++) mono[i]=((channelL[i]||0)+(channelR[i]||0))*0.5;
+    for(let i=0;i<len;i++) mono[i]=((channelL[i]||0)+(channelR[i]||0))*0.5;
 
-    let seed=(trackIndex||2)*7919;
-    for (let i=0;i<Math.min(64,len);i++) seed=(seed*31+Math.round(mono[i]*10000))|0;
+    const seed=(trackIndex||2)*7919;
+    let outL,outR,outLen;
 
-    let outL, outR, outLen;
-
-    if (op==='double') {
+    if(op==='double'){
       self.postMessage({id,type:'progress',label:'Double tracking...'});
       const res=doubleTrack(mono,sampleRate);
-      outL=res.outL; outR=res.outR; outLen=res.outLen;
-
-    } else {
-      self.postMessage({id,type:'progress',label:`Génération harmonie ${semitones>0?'+':''}${semitones} ST (LPC Pro)...`});
-      const profile=LAYER_PROFILES[trackIndex]||LAYER_PROFILES[2];
-
-      // 1. Traitement principal (phase vocoder + LPC + AGC + reverb)
-      const shifted=processChunked(mono, semitones, sampleRate, trackIndex);
-
-      // 2. Chorus stéréo (élargissement spatial)
-      self.postMessage({id,type:'progress',label:'Chorus stéréo...'});
-      const chorus=applyChorusStereo(shifted, sampleRate, profile.chorusDepth, profile.chorusRate, seed);
-
-      outL=chorus.outL; outR=chorus.outR; outLen=shifted.length;
+      outL=res.outL;outR=res.outR;outLen=res.outLen;
+      const gp=applyGainPanDouble(outL,outR,outLen,gain);
+      self.postMessage({id,type:'progress',label:'Encodage WAV...'});
+      const wavBuf=audioToWav(gp.outL,gp.outR,sampleRate);
+      self.postMessage({id,type:'done',wavBuf},[wavBuf]);
+      return;
     }
 
-    const gp=applyGainPan(outL,outR,outLen,gain,pan,op==='double');
+    self.postMessage({id,type:'progress',label:`Génération harmonie ${semitones>0?'+':''}${semitones} ST (SEM Pro)...`});
+
+    // Pipeline principal
+    const shifted=processChunked(mono,semitones,sampleRate,trackIndex);
+
+    // Chorus stéréo (canaux L/R conservés séparément — correction v11)
+    const profile=LAYER_PROFILES[trackIndex]||LAYER_PROFILES[2];
+    self.postMessage({id,type:'progress',label:'Chorus stéréo...'});
+    const chorus=applyChorusStereo(shifted,sampleRate,profile.chorusDepth,profile.chorusRate,seed);
+
+    outLen=shifted.length;
+
+    // Pan sur chaque canal indépendamment (pas de mono-mix)
+    const gp=applyGainPanStereo(chorus.outL,chorus.outR,outLen,gain,pan);
 
     self.postMessage({id,type:'progress',label:'Encodage WAV...'});
     const wavBuf=audioToWav(gp.outL,gp.outR,sampleRate);
     self.postMessage({id,type:'done',wavBuf},[wavBuf]);
 
-  } catch(err) {
+  }catch(err){
     self.postMessage({id,type:'error',message:err.message||String(err)});
   }
 };
