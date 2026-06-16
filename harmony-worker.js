@@ -655,6 +655,51 @@ function applyPanAutomation(outL, outR, len, basePan, driftAmt, sr) {
   }
 }
 
+// Wrapper chunked — traite les longs signaux par blocs de 45s
+// Évite le crash mémoire iOS (~128MB Web Worker limit)
+function processChunked(mono, semitones, sampleRate, trackIndex, onProgress) {
+  const chunkSec = 45; // blocs 45s — ~60MB par bloc, sûr sur iOS
+  const chunkSamples = Math.floor(sampleRate * chunkSec);
+  if (mono.length <= chunkSamples) {
+    return processSingle(mono, semitones, sampleRate, trackIndex, onProgress);
+  }
+  // Découper en blocs avec overlap de 0.5s pour éviter les artefacts aux jointures
+  const overlapSamples = Math.floor(sampleRate * 0.5);
+  const results = [];
+  let pos = 0;
+  while (pos < mono.length) {
+    const end = Math.min(pos + chunkSamples, mono.length);
+    const chunk = mono.slice(pos, end + (end < mono.length ? overlapSamples : 0));
+    const processed = processSingle(chunk, semitones, sampleRate, trackIndex, null);
+    // Garder seulement la partie sans overlap (sauf dernier bloc)
+    const keepLen = end < mono.length ? Math.floor(processed.length * (chunkSamples / chunk.length)) : processed.length;
+    results.push(processed.slice(0, keepLen));
+    pos = end;
+  }
+  // Concaténer tous les blocs
+  const totalLen = results.reduce((sum, r) => sum + r.length, 0);
+  const final = new Float32Array(totalLen);
+  let offset = 0;
+  for (const r of results) { final.set(r, offset); offset += r.length; }
+  return final;
+}
+
+function processSingle(mono, semitones, sampleRate, trackIndex, onProgress) {
+  const profile = LAYER_PROFILES[trackIndex] || LAYER_PROFILES[2];
+  let seed = (trackIndex||2)*7919;
+  for (let i=0;i<Math.min(64,mono.length);i++) seed=(seed*31+Math.round(mono[i]*10000))|0;
+
+  let shifted = phaseVocoderShift(mono, semitones, sampleRate);
+  if (Math.abs(semitones)>=3) shifted = applyFormantShift(shifted, semitones, sampleRate);
+  if (semitones>=5) { const drive=0.04+(semitones-5)/7*0.03; shifted=applySoftSaturation(shifted,drive); }
+  shifted = applyPhraseVariation(shifted, sampleRate, profile.pitchVar, seed);
+  shifted = applyOrganicJitter(shifted, sampleRate);
+  shifted = applyTimbreColor(shifted, profile.timbreHz, profile.timbreDb, 1.2, sampleRate);
+  shifted = applyTimingOffset(shifted, profile.timingMs, sampleRate);
+  shifted = applyRoomReverb(shifted, sampleRate, 0.18);
+  return shifted;
+}
+
 self.onmessage = function(e) {
   const { id, op, channelL, channelR, semitones, gain, pan, sampleRate, trackIndex } = e.data;
   try {
@@ -673,34 +718,9 @@ self.onmessage = function(e) {
       outL=res.outL; outR=res.outR; outLen=res.outLen;
 
     } else {
-      const profile=LAYER_PROFILES[trackIndex]||LAYER_PROFILES[2];
-
-      self.postMessage({id,type:'progress',label:`Phase vocoder ${semitones>0?'+':''}${semitones} ST...`});
-      let shifted=phaseVocoderShift(mono,semitones,sampleRate);
-
-      if (Math.abs(semitones)>=3) {
-        self.postMessage({id,type:'progress',label:'Correction formants...'});
-        shifted=applyFormantShift(shifted,semitones,sampleRate);
-      }
-      if (semitones>=5) {
-        const drive=0.04+(semitones-5)/7*0.03;
-        shifted=applySoftSaturation(shifted,drive);
-      }
-
-      self.postMessage({id,type:'progress',label:'Variation de phrase...'});
-      shifted=applyPhraseVariation(shifted,sampleRate,profile.pitchVar,seed);
-
-      self.postMessage({id,type:'progress',label:'Humanisation...'});
-      shifted=applyOrganicJitter(shifted,sampleRate);
-
-      shifted=applyTimbreColor(shifted,profile.timbreHz,profile.timbreDb,1.2,sampleRate);
-
-      self.postMessage({id,type:'progress',label:'Timing...'});
-      shifted=applyTimingOffset(shifted,profile.timingMs,sampleRate);
-
-      self.postMessage({id,type:'progress',label:'Reverb salle...'});
-      shifted=applyRoomReverb(shifted,sampleRate,0.18);
-
+      self.postMessage({id,type:'progress',label:`Génération harmonie ${semitones>0?'+':''}${semitones} ST...`});
+      // Traitement par blocs de 45s — évite crash mémoire iOS (limite ~128MB)
+      const shifted = processChunked(mono, semitones, sampleRate, trackIndex, null);
       outLen=shifted.length; outL=shifted; outR=shifted;
     }
 
