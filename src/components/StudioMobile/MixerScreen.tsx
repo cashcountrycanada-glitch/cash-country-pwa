@@ -13,7 +13,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   ChevronLeft, Plus, Layers, Scissors, Loader2, CheckCircle2,
-  Send, Pause, Play, Sparkles, Music2, RefreshCw, BarChart2, Download, Shield,
+  Send, Pause, Play, Sparkles, Music2, RefreshCw, BarChart2, Download, Shield, Mic,
 } from 'lucide-react';
 import { MobileRecording, TrackProject, Take, studioService } from '../../services/StudioService';
 import { studioOfflineDB } from '../../services/StudioOfflineDB';
@@ -93,6 +93,19 @@ export default function MixerScreen({
   const [sections, setSections]               = useState<SectionMarker[]>(
     (project as any).sections || []
   );
+  // Slot actif par trackIndex pour les harmonies manuelles (2-5)
+  // Initialisé depuis le projet (persisté) — sinon 'A' par défaut pour chaque piste
+  const [activeManualSlots, setActiveManualSlots] = useState<Record<number, 'A'|'B'|'C'>>(
+    () => (project as any).activeManualSlots ?? {2:'A',3:'A',4:'A',5:'A'}
+  );
+  // Persister le choix de slot dans le projet pour que handleMix() le lise au mixage
+  const setActiveManualSlot = (trackIndex: number, slot: 'A'|'B'|'C') => {
+    setActiveManualSlots(prev => {
+      const next = { ...prev, [trackIndex]: slot };
+      onProjectUpdate({ ...project, activeManualSlots: next } as any);
+      return next;
+    });
+  };
 
   const tracks    = project?.tracks || [];
   // mainVoice = la voix du slot actif en priorité, sinon premier non-muté
@@ -744,6 +757,8 @@ export default function MixerScreen({
                 {HARMONY_DEFS.map(h => {
                   const hasTrack      = tracks.some(t => t.trackIndex === h.trackIndex);
                   const existingTrack = tracks.find(t => t.trackIndex === h.trackIndex);
+                  // Détecter si c'est une prise manuelle (enregistrée à la voix)
+                  const isManualRecording = existingTrack && !(existingTrack as any).isGenerated;
                   const isGen         = generatingIndex === h.trackIndex;
                   const isDone        = generatedDone.has(h.trackIndex);
                   const appliedFxId   = (existingTrack as any)?.fxPresetId as string | undefined;
@@ -775,6 +790,11 @@ export default function MixerScreen({
                             {appliedFxId && (
                               <span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400">
                                 ⚡ {appliedFxId.replace('_', ' ')}
+                              </span>
+                            )}
+                            {isManualRecording && (
+                              <span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-blue-900/40 text-blue-300">
+                                🎤 Voix réelle
                               </span>
                             )}
                             {h.pitch !== 0 && (
@@ -829,6 +849,12 @@ export default function MixerScreen({
                           {isGen ? (
                             <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: h.color + '20' }}>
                               <Loader2 size={14} className="animate-spin" style={{ color: h.color }}/>
+                            </div>
+                          ) : isManualRecording ? (
+                            // Prise enregistrée manuellement — PAS de régénération automatique
+                            // (ça écraserait la voix réelle du chanteur par une version générée)
+                            <div className="w-9 h-9 rounded-xl bg-blue-900/30 flex items-center justify-center" title="Prise enregistrée à la voix — protégée">
+                              <Mic size={13} className="text-blue-400"/>
                             </div>
                           ) : isDone ? (
                             <div className="w-9 h-9 rounded-xl bg-emerald-900/30 flex items-center justify-center">
@@ -1051,20 +1077,52 @@ export default function MixerScreen({
               </p>
             )}
             {tracks.filter(t => !(t as any).isGenerated).filter(t => {
-              // N'afficher que le slot actif pour les voix principales
-              // Fallback : si takeSlot undefined, traiter comme slot 'A'
+              // Voix principale : slot actif global (takeSlot prop)
               if (t.trackIndex === 0) {
-                const slot = t.takeSlot ?? 'A';
-                const active = takeSlot ?? 'A';
-                return slot === active;
+                return (t.takeSlot ?? 'A') === (takeSlot ?? 'A');
+              }
+              // Harmonies manuelles (trackIndex 2-5) : slot actif par trackIndex
+              if (t.trackIndex >= 2 && t.trackIndex <= 5) {
+                const activeSlot = activeManualSlots[t.trackIndex] ?? 'A';
+                return (t.takeSlot ?? 'A') === activeSlot;
               }
               return true;
-            }).map(track => (
-              <TrackCard key={track.id} track={track} playingId={playingId}
-                allTracks={tracks}
-                onPlay={onPlay} onMute={onMute} onSolo={onSolo} onVolume={onVolume} onPan={onPan} onDelete={onDelete}
-                onTrackUpdate={handleTrackUpdate}/>
-            ))}
+            }).map(track => {
+              const preset = TRACK_PRESETS.find(p => p.index === track.trackIndex) || TRACK_PRESETS[0];
+              // Slots disponibles pour ce trackIndex (harmonies manuelles seulement)
+              const availableSlots = track.trackIndex >= 2 && track.trackIndex <= 5
+                ? (['A','B','C'] as const).filter(s =>
+                    tracks.some(t => t.trackIndex === track.trackIndex && !(t as any).isGenerated && (t.takeSlot ?? 'A') === s)
+                  )
+                : [];
+              const activeSlot = activeManualSlots[track.trackIndex] ?? 'A';
+              return (
+                <div key={track.id}>
+                  {/* Sélecteur de slot pour harmonies manuelles multi-prises */}
+                  {availableSlots.length > 1 && (
+                    <div className="flex items-center gap-1.5 px-1 mb-1">
+                      <span className="text-[8px] text-zinc-600 font-black uppercase tracking-widest">{preset.emoji} Prise:</span>
+                      {availableSlots.map(s => (
+                        <button key={s}
+                          onClick={() => setActiveManualSlot(track.trackIndex, s)}
+                          className="px-2 py-0.5 rounded-md font-black text-[9px] uppercase tracking-widest transition-all active:scale-90"
+                          style={{
+                            background: s === activeSlot ? preset.color + '25' : '#141414',
+                            border: `1px solid ${s === activeSlot ? preset.color : '#2a2a2a'}`,
+                            color: s === activeSlot ? preset.color : '#52525b',
+                          }}>
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <TrackCard key={track.id} track={track} playingId={playingId}
+                    allTracks={tracks}
+                    onPlay={onPlay} onMute={onMute} onSolo={onSolo} onVolume={onVolume} onPan={onPan} onDelete={onDelete}
+                    onTrackUpdate={handleTrackUpdate}/>
+                </div>
+              );
+            })}
 
             {tracks.filter(t => (t as any).isGenerated).length > 0 && (
               <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest px-1 pt-2">

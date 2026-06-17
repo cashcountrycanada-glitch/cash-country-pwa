@@ -28,6 +28,8 @@ export interface TrackPreset {
   gain:  number;
   color: string;
   emoji: string;
+  intervalLabel?: string;   // ex: "Tierce majeure", "Quinte juste"
+  singingTip?:   string;    // ex: "Chante +3 demi-tons au-dessus de ta mélodie"
 }
 
 // ── Preset d\'effets par piste ────────────────────────────────────────────────
@@ -221,12 +223,18 @@ export const FX_PRESETS: FxPreset[] = [
 export const FX_PRESET_DEFAULT = FX_PRESETS[0]; // Clean
 
 export const TRACK_PRESETS: TrackPreset[] = [
-  { index: 0, label: 'Voix principale', pitch: 0,   pan: 0,    gain: 1.0,  color: '#ef4444', emoji: '🎤' },
-  { index: 1, label: 'Double tracking', pitch: 0,   pan: -0.4, gain: 0.6,  color: '#f97316', emoji: '🎵' },
-  { index: 2, label: 'Harmonie +3',     pitch: 3,   pan: 0.5,  gain: 0.5,  color: '#eab308', emoji: '🎶' },
-  { index: 3, label: 'Harmonie +7',     pitch: 7,   pan: -0.5, gain: 0.45, color: '#22c55e', emoji: '🎼' },
-  { index: 4, label: 'Octave bas',      pitch: -12, pan: 0,    gain: 0.35, color: '#3b82f6', emoji: '🔉' },
-  { index: 5, label: 'Harmonie +5',     pitch: 5,   pan: 0.3,  gain: 0.4,  color: '#a855f7', emoji: '✨' },
+  { index: 0, label: 'Voix principale', pitch: 0,   pan: 0,    gain: 1.0,  color: '#ef4444', emoji: '🎤',
+    intervalLabel: 'Mélodie principale', singingTip: 'Chante ta mélodie normalement' },
+  { index: 1, label: 'Double tracking', pitch: 0,   pan: -0.4, gain: 0.6,  color: '#f97316', emoji: '🎵',
+    intervalLabel: 'Unisson (doublement)', singingTip: 'Chante la même mélodie — légères variations naturelles' },
+  { index: 2, label: 'Harmonie +3',     pitch: 3,   pan: 0.5,  gain: 0.5,  color: '#eab308', emoji: '🎶',
+    intervalLabel: 'Tierce mineure ↑', singingTip: 'Chante 3 demi-tons AU-DESSUS de ta mélodie — écoute le guide dans les écouteurs' },
+  { index: 3, label: 'Harmonie +7',     pitch: 7,   pan: -0.5, gain: 0.45, color: '#22c55e', emoji: '🎼',
+    intervalLabel: 'Quinte juste ↑', singingTip: 'Chante 7 demi-tons AU-DESSUS — quinte parfaite, très country' },
+  { index: 4, label: 'Octave bas',      pitch: -12, pan: 0,    gain: 0.35, color: '#3b82f6', emoji: '🔉',
+    intervalLabel: 'Octave ↓', singingTip: 'Chante UNE OCTAVE EN DESSOUS — voix grave de soutien' },
+  { index: 5, label: 'Harmonie +5',     pitch: 5,   pan: 0.3,  gain: 0.4,  color: '#a855f7', emoji: '✨',
+    intervalLabel: 'Quarte juste ↑', singingTip: 'Chante 5 demi-tons AU-DESSUS — quarte, sonne folk/country' },
 ];
 
 // Presets FX recommandés par type de piste

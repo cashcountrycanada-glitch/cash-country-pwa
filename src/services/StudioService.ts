@@ -35,6 +35,7 @@ export interface TrackProject {
   id: string; songId: string; songTitle: string; createdAt: number;
   tracks: MobileRecording[]; takes?: Take[]; compRegions?: Region[];
   mixedDataUrl?: string; sections?: any[]; suggestedKey?: string;
+  activeManualSlots?: Record<number, 'A'|'B'|'C'>; // slot actif par trackIndex pour harmonies manuelles (2-5)
 }
 const STORAGE_KEY = 'cash_studio_recordings';
 
@@ -1230,21 +1231,22 @@ export const studioService = {
     const trackMeta = { ...track, dataUrl: undefined, blob: undefined };
 
     // DEDUP COMPLET avant ajout — nettoyer tous les doublons existants d'abord
-    // (même id ou même slot pour voix principale)
+    // (même id ou même trackIndex+slot pour toutes les pistes manuelles)
     const seenIds = new Set<string>();
-    const seenVoiceSlots = new Set<string>();
+    const seenTrackSlots = new Set<string>(); // clé = `${trackIndex}_${slot}`
     project.tracks = project.tracks.filter((t: any) => {
       if (t.id && seenIds.has(t.id)) return false;
       if (t.id) seenIds.add(t.id);
-      if (t.trackIndex === 0 && !t.isGenerated) {
-        const slot = t.takeSlot ?? 'A';
-        if (seenVoiceSlots.has(slot)) return false;
-        seenVoiceSlots.add(slot);
+      if (!t.isGenerated) {
+        const slotKey = `${t.trackIndex}_${t.takeSlot ?? 'A'}`;
+        if (seenTrackSlots.has(slotKey)) return false;
+        seenTrackSlots.add(slotKey);
       }
       return true;
     });
 
     if (track.trackIndex === 0 && !(track as any).isGenerated) {
+      // Voix principale : remplacer seulement la prise du MÊME slot
       const incomingSlot = track.takeSlot ?? 'A';
       project.tracks = project.tracks.filter((t: any) => {
         if (t.trackIndex === 0 && !t.isGenerated) {
@@ -1252,8 +1254,19 @@ export const studioService = {
         }
         return true;
       });
+    } else if (track.trackIndex !== 0 && !(track as any).isGenerated) {
+      // Harmonies manuelles (trackIndex 2-5) : remplacer seulement la prise
+      // du MÊME trackIndex ET du MÊME slot — les autres slots sont conservés
+      const incomingSlot = track.takeSlot ?? 'A';
+      project.tracks = project.tracks.filter((t: any) => {
+        if (t.trackIndex === track.trackIndex && !t.isGenerated) {
+          return (t.takeSlot ?? 'A') !== incomingSlot;
+        }
+        return true;
+      });
     } else {
-      project.tracks = project.tracks.filter(t => t.trackIndex !== track.trackIndex);
+      // Pistes générées automatiquement (isGenerated=true) : remplacer par trackIndex
+      project.tracks = project.tracks.filter(t => !(t.trackIndex === track.trackIndex && (t as any).isGenerated));
     }
     project.tracks.push(trackMeta as MobileRecording); this.saveProject(project);
     // Sauvegarder backup_voice en arriere-plan (fire-and-forget — pas de await)

@@ -542,16 +542,38 @@ function applyChorusStereo(signal, sr, depthSec, rate, seed) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SATURATION DOUCE (chaleur analogique)
+// SATURATION DOUCE (chaleur analogique) — v12 : compensation RMS exacte
+// Bug v11 corrigé : la formule de compensation fixe (1.06/g) ne
+// compensait pas la perte non-linéaire réelle de x/(1+|x|), qui
+// dépend de l'amplitude du signal. Résultat : jusqu'à -22% de volume
+// sur les harmonies aiguës (+7 ST et plus), inaudibles dans le mix.
+// Maintenant : on mesure le RMS avant/après et on compense exactement
+// → la saturation ajoute de la chaleur harmonique SANS jamais changer
+// le niveau perçu du signal.
 // ═══════════════════════════════════════════════════════════════
 function applySoftSaturation(signal,drive){
   if(drive<=0) return signal;
-  const out=new Float32Array(signal.length);
+  const N=signal.length;
   const g=1+drive*1.8;
-  for(let i=0;i<signal.length;i++){
+
+  let rmsIn=0;
+  for(let i=0;i<N;i++) rmsIn+=signal[i]*signal[i];
+  rmsIn=Math.sqrt(rmsIn/N);
+  if(rmsIn<1e-7) return signal;
+
+  const tmp=new Float32Array(N);
+  for(let i=0;i<N;i++){
     const x=signal[i]*g;
-    out[i]=(x/(1+Math.abs(x)))*(1.06/g);
+    tmp[i]=x/(1+Math.abs(x));
   }
+  let rmsOut=0;
+  for(let i=0;i<N;i++) rmsOut+=tmp[i]*tmp[i];
+  rmsOut=Math.sqrt(rmsOut/N);
+  if(rmsOut<1e-7) return signal;
+
+  const comp=rmsIn/rmsOut;
+  const out=new Float32Array(N);
+  for(let i=0;i<N;i++) out[i]=tmp[i]*comp;
   return out;
 }
 

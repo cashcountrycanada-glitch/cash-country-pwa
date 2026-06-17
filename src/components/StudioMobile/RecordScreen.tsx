@@ -23,6 +23,7 @@ interface Props {
   isRecording: boolean; isSaving: boolean; duration: number; analyser: AnalyserNode | null;
   vuLevel: number; monitoring: boolean; permError: boolean; httpsUrl: string;
   inputGain: number; onInputGainChange: (v: number) => void;
+  monitorVol: number; onMonitorVolChange: (v: number) => void;
   instUrl: string | null; instLoading: boolean; instCached: boolean;
   vocalGuideUrl: string | null; vocalLoading: boolean; vocalCached: boolean;
   vocalGuideVol: number; showLyrics: boolean;
@@ -124,9 +125,268 @@ function deviceStyle(dev: AudioDevice, isSelected: boolean, isAuto: boolean, aut
   return { bg: isSelected ? presetColor + '20' : '#1a1a1a', border: isSelected ? presetColor : '#2a2a2a', color: isSelected ? presetColor : '#52525b', icon: '🎙' };
 }
 
+// ═══════════════════════════════════════════════════════════════
+// HarmonyGuide v2 — Guide vocal avec pitch shift réel du guide vocal
+//
+// Deux boutons :
+//   🎧 ÉCOUTER  → pitch-shift le guide vocal (BufferSourceNode + playbackRate)
+//                 = tu entends TA voix à la hauteur exacte de l'harmonie
+//                 L'instrumental joue en même temps en fond
+//   🔴 ENREGISTRER → lance onStartRecording (passé en prop)
+//
+// Technique pitch shift :
+//   BufferSourceNode.playbackRate = 2^(semitones/12)
+//   Simple, zéro latence, fonctionne sur iOS Safari
+//   Pas parfait sur les voyelles longues mais largement suffisant
+//   pour servir de RÉFÉRENCE de hauteur pendant 10-30 secondes
+// ═══════════════════════════════════════════════════════════════
+function HarmonyGuide({ preset, vocalGuideUrl, instUrl, isRecording, isSaving, onStartRecording, onStopRecording }: {
+  preset: TrackPreset;
+  vocalGuideUrl: string | null;
+  instUrl: string | null;
+  isRecording: boolean;
+  isSaving: boolean;
+  onStartRecording: () => void;
+  onStopRecording: () => void;
+}) {
+  const [isListening, setIsListening] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const ctxRef  = useRef<AudioContext | null>(null);
+  const vSrcRef = useRef<AudioBufferSourceNode | null>(null);
+  const iSrcRef = useRef<AudioBufferSourceNode | null>(null);
+  const vBufRef = useRef<AudioBuffer | null>(null);
+  const iBufRef = useRef<AudioBuffer | null>(null);
+
+  // Arrêter le guide quand on commence à enregistrer ou changer de preset
+  useEffect(() => { if (isRecording) stopListening(); }, [isRecording]);
+  useEffect(() => { stopListening(); vBufRef.current = null; iBufRef.current = null; }, [preset.index]);
+
+  function stopListening() {
+    try { vSrcRef.current?.stop(); } catch {} vSrcRef.current = null;
+    try { iSrcRef.current?.stop(); } catch {} iSrcRef.current = null;
+    setIsListening(false);
+  }
+
+  async function getCtx(): Promise<AudioContext> {
+    if (!ctxRef.current || ctxRef.current.state === 'closed') {
+      ctxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ latencyHint: 'playback' });
+    }
+    if (ctxRef.current.state === 'suspended') await ctxRef.current.resume();
+    return ctxRef.current;
+  }
+
+  async function fetchBuf(url: string, ctx: AudioContext): Promise<AudioBuffer> {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const ab = await resp.arrayBuffer();
+    return ctx.decodeAudioData(ab);
+  }
+
+  async function toggleListening() {
+    if (isListening) { stopListening(); return; }
+    if (!vocalGuideUrl) return;
+
+    setIsLoading(true);
+    try {
+      const ctx = await getCtx();
+
+      // Charger le guide vocal si pas encore en cache
+      if (!vBufRef.current) {
+        vBufRef.current = await fetchBuf(vocalGuideUrl, ctx);
+      }
+      // Charger l'instrumental si disponible et pas en cache
+      if (instUrl && !iBufRef.current) {
+        try { iBufRef.current = await fetchBuf(instUrl, ctx); } catch {}
+      }
+
+      // ── Nœud voix guide pitch-shiftée ────────────────────────────────
+      const vSrc = ctx.createBufferSource();
+      vSrc.buffer = vBufRef.current;
+      // playbackRate = 2^(semitones/12) → pitch shift simple et efficace
+      vSrc.playbackRate.value = Math.pow(2, preset.pitch / 12);
+      const vGain = ctx.createGain();
+      vGain.gain.value = 0.85;
+      vSrc.connect(vGain);
+      vGain.connect(ctx.destination);
+      vSrcRef.current = vSrc;
+
+      // ── Nœud instrumental (fond à volume bas) ─────────────────────────
+      if (iBufRef.current) {
+        const iSrc = ctx.createBufferSource();
+        iSrc.buffer = iBufRef.current;
+        iSrc.playbackRate.value = 1.0;
+        const iGain = ctx.createGain();
+        iGain.gain.value = 0.30; // instrumental discret
+        iSrc.connect(iGain);
+        iGain.connect(ctx.destination);
+        iSrcRef.current = iSrc;
+        iSrc.start(ctx.currentTime + 0.05);
+        iSrc.onended = () => { iSrcRef.current = null; };
+      }
+
+      const startAt = ctx.currentTime + 0.05;
+      vSrc.start(startAt);
+      vSrc.onended = () => {
+        vSrcRef.current = null;
+        try { iSrcRef.current?.stop(); } catch {} iSrcRef.current = null;
+        setIsListening(false);
+      };
+
+      setIsListening(true);
+    } catch (e) {
+      console.error('[HarmonyGuide] toggleListening error:', e);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  const semitones = preset.pitch;
+  const absST = Math.abs(semitones);
+  const direction = semitones > 0 ? '↑' : semitones < 0 ? '↓' : '';
+  const hasGuide = !!vocalGuideUrl;
+  const disabled = isSaving;
+
+  return (
+    <div className="shrink-0 mx-4 mt-3 mb-1 rounded-2xl overflow-hidden"
+      style={{ background: preset.color + '12', border: `1.5px solid ${preset.color}40` }}>
+
+      {/* ── En-tête : intervalle ── */}
+      <div className="px-4 pt-3 pb-2 flex items-center gap-2">
+        <div className="flex flex-col flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[12px] font-black uppercase tracking-widest leading-none" style={{ color: preset.color }}>
+              {preset.intervalLabel || `${semitones > 0 ? '+' : ''}${semitones} ST`}
+            </span>
+            <span className="text-[20px] font-black leading-none" style={{ color: preset.color }}>{direction}</span>
+          </div>
+          <span className="text-[9px] text-zinc-500 font-black uppercase tracking-wide mt-0.5">
+            {semitones > 0 ? `+${semitones}` : semitones} demi-tons · {preset.emoji} {preset.label}
+          </span>
+        </div>
+        {/* Indicateur de hauteur compact */}
+        <div className="flex flex-col items-center gap-0.5 shrink-0">
+          <div className="flex flex-col items-center justify-end gap-0.5" style={{ height: 32 }}>
+            {semitones !== 0 && (
+              <div className="w-5 rounded-sm flex items-center justify-center"
+                style={{ height: Math.min(24, 8 + absST * 1.5), background: preset.color + '60', border: `1px solid ${preset.color}` }}>
+                <span className="text-[6px] font-black" style={{ color: preset.color }}>{direction}</span>
+              </div>
+            )}
+            <div className="w-5 h-2 rounded-sm bg-red-500/60 border border-red-500 flex items-center justify-center">
+              <span className="text-[5px] font-black text-red-300">DO</span>
+            </div>
+          </div>
+          <span className="text-[6px] text-zinc-600 font-black uppercase">hauteur</span>
+        </div>
+      </div>
+
+      {/* ── Conseil de chant ── */}
+      <div className="px-4 pb-3">
+        <p className="text-[10px] font-semibold leading-snug" style={{ color: preset.color + 'bb' }}>
+          💡 {preset.singingTip || `Chante ${absST} demi-tons ${semitones > 0 ? 'au-dessus' : 'en dessous'} de ta mélodie`}
+        </p>
+      </div>
+
+      {/* ── Deux boutons : ÉCOUTER + ENREGISTRER ── */}
+      <div className="px-4 pb-4 flex gap-3">
+
+        {/* Bouton ÉCOUTER — guide vocal pitch-shifté */}
+        <button
+          onClick={toggleListening}
+          disabled={disabled || !hasGuide || isRecording}
+          className="flex-1 flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl active:scale-95 transition-all disabled:opacity-30"
+          style={{
+            background: isListening ? preset.color + '25' : '#141414',
+            border: `2px solid ${isListening ? preset.color : hasGuide ? '#333' : '#222'}`,
+          }}>
+          {isLoading ? (
+            <>
+              <span className="text-[18px] animate-spin">⏳</span>
+              <span className="text-[8px] font-black uppercase tracking-widest text-zinc-500">Chargement...</span>
+            </>
+          ) : isListening ? (
+            <>
+              {/* Barres animées waveform */}
+              <div className="flex gap-0.5 items-end h-5">
+                {[3,5,7,5,8,5,3,6,4,7].map((h, i) => (
+                  <div key={i} className="w-0.5 rounded-full animate-bounce"
+                    style={{ height: h * 2, background: preset.color, animationDelay: `${i * 60}ms`, animationDuration: '0.6s' }} />
+                ))}
+              </div>
+              <span className="text-[8px] font-black uppercase tracking-widest" style={{ color: preset.color }}>
+                ⏹ Arrêter
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-[22px]">🎧</span>
+              <span className="text-[8px] font-black uppercase tracking-widest" style={{ color: hasGuide ? '#a1a1aa' : '#52525b' }}>
+                {hasGuide ? 'Écouter' : 'No guide'}
+              </span>
+              <span className="text-[7px] font-black uppercase tracking-wide text-zinc-600">
+                Guide pitch-shifté
+              </span>
+            </>
+          )}
+        </button>
+
+        {/* Séparateur vertical */}
+        <div className="w-px self-stretch" style={{ background: preset.color + '25' }} />
+
+        {/* Bouton ENREGISTRER */}
+        <button
+          onClick={isRecording ? onStopRecording : () => { stopListening(); onStartRecording(); }}
+          disabled={disabled}
+          className="flex-1 flex flex-col items-center justify-center gap-1.5 py-3 rounded-2xl active:scale-95 transition-all disabled:opacity-30"
+          style={{
+            background: isRecording ? '#7f1d1d' : preset.color + '18',
+            border: `2px solid ${isRecording ? '#ef4444' : preset.color + '80'}`,
+          }}>
+          {isRecording ? (
+            <>
+              {/* Pulsation REC */}
+              <div className="relative flex items-center justify-center">
+                <div className="absolute w-8 h-8 rounded-full bg-red-500/20 animate-ping" />
+                <div className="w-5 h-5 rounded-full bg-red-500 border-2 border-red-300" />
+              </div>
+              <span className="text-[8px] font-black uppercase tracking-widest text-red-400">
+                ⏹ Stop
+              </span>
+            </>
+          ) : (
+            <>
+              <div className="w-7 h-7 rounded-full flex items-center justify-center border-2"
+                style={{ background: preset.color + '30', borderColor: preset.color }}>
+                <div className="w-3 h-3 rounded-full" style={{ background: preset.color }} />
+              </div>
+              <span className="text-[8px] font-black uppercase tracking-widest" style={{ color: preset.color }}>
+                Enregistrer
+              </span>
+              <span className="text-[7px] font-black uppercase tracking-wide text-zinc-600">
+                {preset.label}
+              </span>
+            </>
+          )}
+        </button>
+
+      </div>
+
+      {/* Indicateur d'état pendant REC */}
+      {isRecording && (
+        <div className="px-4 pb-3 flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+          <span className="text-[9px] font-black uppercase tracking-widest text-red-400">
+            Enregistrement en cours — chante {absST} ST {semitones > 0 ? 'au-dessus' : 'en dessous'}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function RecordScreen({
   selected, project, currentPreset, reverb, isRecording, isSaving, duration, analyser, vuLevel,
-  monitoring, permError, httpsUrl, inputGain, onInputGainChange,
+  monitoring, permError, httpsUrl, inputGain, onInputGainChange, monitorVol, onMonitorVolChange,
   instUrl, instLoading, instCached, vocalGuideUrl, vocalLoading, vocalCached,
   vocalGuideVol, showLyrics, instRef, vocalGuideRef, getInstPlaybackTime, onRefreshSong,
   takeSlot, onTakeSlotChange, slotTakes, onSlotGuide, slotGuideActive,
@@ -328,67 +588,78 @@ export default function RecordScreen({
 
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Sélection piste */}
-        {/* ── Sélecteur A/B/C — Voix principale uniquement ── */}
-        {currentPreset.index === 0 && (
-          <div className="shrink-0 px-4 pt-3 pb-2">
-            <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest mb-2">Prise</p>
-            <div className="flex gap-2">
-              {(['A', 'B', 'C'] as const).map(slot => {
-                const hasTake = !!slotTakes[slot];
-                const isActive = takeSlot === slot;
-                return (
-                  <button key={slot}
-                    onClick={() => !isRecording && !isSaving && onTakeSlotChange(slot)}
-                    disabled={isRecording || isSaving}
-                    className="flex-1 py-2 rounded-xl font-black text-[13px] transition-all active:scale-95 disabled:opacity-40 flex flex-col items-center gap-1"
-                    style={{
-                      background: isActive ? currentPreset.color + '20' : '#141414',
-                      border: `2px solid ${isActive ? currentPreset.color : hasTake ? '#22c55e40' : '#222'}`,
-                    }}>
-                    <span style={{ color: isActive ? currentPreset.color : hasTake ? '#22c55e' : '#52525b' }}>{slot}</span>
-                    <span className="text-[7px] font-black" style={{ color: hasTake ? '#22c55e' : '#3f3f46' }}>
-                      {hasTake ? '● PRISE' : 'vide'}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            {/* Guide vocal slot — jouer un autre slot comme référence */}
-            {(['A','B','C'] as const).some(s => s !== takeSlot && !!slotTakes[s]) && (
-              <div className="mt-2">
-                <p className="text-[8px] text-zinc-600 font-black uppercase tracking-widest mb-1.5">🎧 Écouter un autre slot comme guide</p>
-                <div className="flex gap-1.5">
-                  {(['A','B','C'] as const).map(slot => {
-                    if (!slotTakes[slot] || slot === takeSlot) return null;
-                    const isGuide = slotGuideActive === slot;
-                    return (
-                      <button key={slot}
-                        onClick={() => onSlotGuide(isGuide ? null : slot)}
-                        disabled={isRecording}
-                        className="px-3 py-1.5 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-40 flex items-center gap-1"
-                        style={{
-                          background: isGuide ? '#16a34a30' : '#141414',
-                          border: `1.5px solid ${isGuide ? '#16a34a' : '#333'}`,
-                          color: isGuide ? '#4ade80' : '#71717a',
-                        }}>
-                        {isGuide ? '🎧' : '▶'} Slot {slot}
-                      </button>
-                    );
-                  })}
-                  {slotGuideActive && !isRecording && (
-                    <button onClick={() => onSlotGuide(null)}
-                      className="px-2 py-1.5 rounded-lg font-black text-[10px] uppercase text-zinc-600 border border-zinc-800 active:scale-95 transition-all">
-                      ✕ Arrêter
-                    </button>
-                  )}
-                  {isRecording && slotGuideActive && (
-                    <span className="text-[9px] text-emerald-500 font-black uppercase animate-pulse self-center">🎧 Guide actif</span>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
+        {/* ── GUIDE VOCAL HARMONIQUE — affiché pour toutes les harmonies (index ≥ 2) ── */}
+        {currentPreset.index >= 2 && (
+          <HarmonyGuide
+            preset={currentPreset}
+            vocalGuideUrl={vocalGuideUrl}
+            instUrl={instUrl}
+            isRecording={isRecording}
+            isSaving={isSaving}
+            onStartRecording={onStartRecording}
+            onStopRecording={onStopRecording}
+          />
         )}
+
+        {/* ── Sélecteur A/B/C — toutes les pistes (voix + harmonies) ── */}
+        <div className="shrink-0 px-4 pt-3 pb-2">
+          <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest mb-2">Prise</p>
+          <div className="flex gap-2">
+            {(['A', 'B', 'C'] as const).map(slot => {
+              const hasTake = !!slotTakes[slot];
+              const isActive = takeSlot === slot;
+              return (
+                <button key={slot}
+                  onClick={() => !isRecording && !isSaving && onTakeSlotChange(slot)}
+                  disabled={isRecording || isSaving}
+                  className="flex-1 py-2 rounded-xl font-black text-[13px] transition-all active:scale-95 disabled:opacity-40 flex flex-col items-center gap-1"
+                  style={{
+                    background: isActive ? currentPreset.color + '20' : '#141414',
+                    border: `2px solid ${isActive ? currentPreset.color : hasTake ? '#22c55e40' : '#222'}`,
+                  }}>
+                  <span style={{ color: isActive ? currentPreset.color : hasTake ? '#22c55e' : '#52525b' }}>{slot}</span>
+                  <span className="text-[7px] font-black" style={{ color: hasTake ? '#22c55e' : '#3f3f46' }}>
+                    {hasTake ? '● PRISE' : 'vide'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {/* Guide vocal slot — jouer un autre slot comme référence */}
+          {(['A','B','C'] as const).some(s => s !== takeSlot && !!slotTakes[s]) && (
+            <div className="mt-2">
+              <p className="text-[8px] text-zinc-600 font-black uppercase tracking-widest mb-1.5">🎧 Écouter un slot comme guide</p>
+              <div className="flex gap-1.5">
+                {(['A','B','C'] as const).map(slot => {
+                  if (!slotTakes[slot] || slot === takeSlot) return null;
+                  const isGuide = slotGuideActive === slot;
+                  return (
+                    <button key={slot}
+                      onClick={() => onSlotGuide(isGuide ? null : slot)}
+                      disabled={isRecording}
+                      className="px-3 py-1.5 rounded-lg font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-40 flex items-center gap-1"
+                      style={{
+                        background: isGuide ? '#16a34a30' : '#141414',
+                        border: `1.5px solid ${isGuide ? '#16a34a' : '#333'}`,
+                        color: isGuide ? '#4ade80' : '#71717a',
+                      }}>
+                      {isGuide ? '🎧' : '▶'} Slot {slot}
+                    </button>
+                  );
+                })}
+                {slotGuideActive && !isRecording && (
+                  <button onClick={() => onSlotGuide(null)}
+                    className="px-2 py-1.5 rounded-lg font-black text-[10px] uppercase text-zinc-600 border border-zinc-800 active:scale-95 transition-all">
+                    ✕ Arrêter
+                  </button>
+                )}
+                {isRecording && slotGuideActive && (
+                  <span className="text-[9px] text-emerald-500 font-black uppercase animate-pulse self-center">🎧 Guide actif</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
 
         <div className="shrink-0 px-4 pt-4 pb-2">
           <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest mb-2">Piste</p>
@@ -528,6 +799,20 @@ export default function RecordScreen({
                 {inputGain >= 1.0 ? `+${((inputGain-1)*100).toFixed(0)}%` : `-${((1-inputGain)*100).toFixed(0)}%`}
               </span>
             </div>
+            {/* Volume monitoring écouteurs — INDÉPENDANT du gain d'enregistrement */}
+            {(monitoring || isRecording) && (
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[9px] text-emerald-500 font-black uppercase tracking-widest whitespace-nowrap">🎧 Écoute</span>
+                <input type="range" min={0.3} max={3.0} step={0.1}
+                  value={monitorVol}
+                  onChange={e => onMonitorVolChange(parseFloat(e.target.value))}
+                  className="flex-1 h-1 accent-emerald-500"
+                />
+                <span className="text-[9px] text-emerald-400 font-black w-8 text-right">
+                  {monitorVol >= 1.0 ? `+${((monitorVol-1)*100).toFixed(0)}%` : `-${((1-monitorVol)*100).toFixed(0)}%`}
+                </span>
+              </div>
+            )}
             <VUMeter analyser={analyser} vuLevel={vuLevel} active={isRecording} />
           </div>
 

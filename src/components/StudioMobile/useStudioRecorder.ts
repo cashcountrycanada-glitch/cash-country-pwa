@@ -128,6 +128,20 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     setInputGainRaw(v);
     try { localStorage.setItem('studio_inputGain', String(v)); } catch {}
   };
+  // Volume de monitoring dans les écouteurs — INDÉPENDANT du gain d'enregistrement
+  // Défaut 1.5 = plus fort que l'ancien 0.8 → on s'entend mieux sans forcer
+  const [monitorVol, setMonitorVolRaw]  = useState(() => {
+    try { const v = parseFloat(localStorage.getItem('studio_monitorVol') || '1.5'); return isNaN(v) ? 1.5 : Math.max(0.3, Math.min(3.0, v)); } catch { return 1.5; }
+  });
+  const setMonitorVol = (v: number) => {
+    const clamped = Math.max(0.3, Math.min(3.0, v));
+    setMonitorVolRaw(clamped);
+    try { localStorage.setItem('studio_monitorVol', String(clamped)); } catch {}
+    // Mettre à jour le GainNode en temps réel si le monitoring est actif
+    if (monitorGainRef.current && monitorConnectedRef.current && audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+      try { monitorGainRef.current.gain.setTargetAtTime(clamped, audioCtxRef.current.currentTime, 0.015); } catch {}
+    }
+  };
   const [duration, setDuration]         = useState(0);
   const [analyser, setAnalyser]         = useState<AnalyserNode | null>(null);
   const [vuLevel, setVuLevel]           = useState<number>(0);
@@ -183,6 +197,8 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
   const streamRef           = useRef<MediaStream | null>(null);
   const timerRef            = useRef<any>(null);
   const monitorGainRef      = useRef<GainNode | null>(null);
+  const monitorVolRef       = useRef(monitorVol);
+  useEffect(() => { monitorVolRef.current = monitorVol; }, [monitorVol]);
   const sourceNodeRef       = useRef<MediaStreamAudioSourceNode | null>(null);
   const monitorConnectedRef = useRef(false);
   const stopWorkletRef      = useRef<(() => Blob) | null>(null);
@@ -392,6 +408,20 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       sourceNodeRef.current       = (result as any).sourceNode ?? null;
       monitorConnectedRef.current = false;
 
+      // ── Activer le monitoring automatiquement dès le début du REC ──────────
+      // L'utilisateur n'a pas besoin d'appuyer sur le bouton casque.
+      // Le slider 🎧 Écoute contrôle le volume sans toucher l'enregistrement.
+      if (monitorGain && context) {
+        try {
+          monitorGain.gain.value = monitorVolRef.current;
+          monitorGain.connect(context.destination);
+          monitorConnectedRef.current = true;
+          setMonitoring(true);
+        } catch (e) {
+          optsRef.current.onLog?.(`⚠️ Monitor auto-connect: ${e}`);
+        }
+      }
+
       setAnalyser(an);
       setIsRecording(true);
       setIsSaving(false);
@@ -525,7 +555,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           id, songId: song.id, songTitle: song.title, artist: song.artist || '',
           duration: durationRef.current, recordedAt: Date.now(), dataUrl, transferred: false,
           fileName, trackIndex: optsRef.current.currentPreset.index, trackLabel: optsRef.current.currentPreset.label,
-          takeSlot: optsRef.current.currentPreset.index === 0 ? (optsRef.current.takeSlot ?? 'A') : undefined,
+          takeSlot: optsRef.current.takeSlot ?? 'A',
           pitchShift: optsRef.current.currentPreset.pitch, gain: optsRef.current.currentPreset.gain,
           pan: optsRef.current.currentPreset.pan, projectId: project.id,
         };
@@ -708,7 +738,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       const next = !v;
       const gain = monitorGainRef.current; const ctx = audioCtxRef.current;
       if (gain && ctx) {
-        if (next && !monitorConnectedRef.current) { gain.gain.value = 0.8; try { gain.connect(ctx.destination); } catch {} monitorConnectedRef.current = true; }
+        if (next && !monitorConnectedRef.current) { gain.gain.value = monitorVolRef.current; try { gain.connect(ctx.destination); } catch {} monitorConnectedRef.current = true; }
         else if (!next && monitorConnectedRef.current) { try { gain.disconnect(ctx.destination); } catch {} monitorConnectedRef.current = false; }
       }
       return next;
@@ -721,6 +751,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     audioDevices, selectedDevice, setSelectedDevice, refreshDevices,
     punchIn, punchOut, setPunchIn, setPunchOut,
     setPermError, toggleMonitoring, preWarmMic, startRecording, stopRecording,
+    monitorVol, setMonitorVol,
     vocalGainNodeRef, autoSelectReason, activeDeviceLabel,
   };
 }
