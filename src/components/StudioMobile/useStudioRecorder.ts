@@ -121,17 +121,20 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
   useEffect(() => { optsRef.current = opts; }); // sync every render, no deps
   const [isRecording, setIsRecording]   = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
+  // Gain d'entrée ENREGISTREMENT — neutre par défaut (1.0 = signal brut du micro)
+  // NE PAS monter ce slider pour s'entendre mieux — utiliser le slider 🎧 Écoute
+  // Avant : défaut 2.5x causait enregistrements dans le rouge (clipping)
   const [inputGain, setInputGainRaw]    = useState(() => {
-    try { const v = parseFloat(localStorage.getItem('studio_inputGain') || '2.5'); return isNaN(v) ? 2.5 : Math.max(0.5, Math.min(3.0, v)); } catch { return 2.5; }
+    try { const v = parseFloat(localStorage.getItem('studio_inputGain') || '1.0'); return isNaN(v) ? 1.0 : Math.max(0.5, Math.min(3.0, v)); } catch { return 1.0; }
   });
   const setInputGain = (v: number) => {
     setInputGainRaw(v);
     try { localStorage.setItem('studio_inputGain', String(v)); } catch {}
   };
   // Volume de monitoring dans les écouteurs — INDÉPENDANT du gain d'enregistrement
-  // Défaut 1.5 = plus fort que l'ancien 0.8 → on s'entend mieux sans forcer
+  // Défaut 2.0x = bien audible sans forcer, sans affecter le WAV enregistré
   const [monitorVol, setMonitorVolRaw]  = useState(() => {
-    try { const v = parseFloat(localStorage.getItem('studio_monitorVol') || '1.5'); return isNaN(v) ? 1.5 : Math.max(0.3, Math.min(3.0, v)); } catch { return 1.5; }
+    try { const v = parseFloat(localStorage.getItem('studio_monitorVol') || '2.0'); return isNaN(v) ? 2.0 : Math.max(0.3, Math.min(3.0, v)); } catch { return 2.0; }
   });
   const setMonitorVol = (v: number) => {
     const clamped = Math.max(0.3, Math.min(3.0, v));

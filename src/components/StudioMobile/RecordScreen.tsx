@@ -126,6 +126,57 @@ function deviceStyle(dev: AudioDevice, isSelected: boolean, isAuto: boolean, aut
 }
 
 // ═══════════════════════════════════════════════════════════════
+// GuideTransposeSlider — Ajuster la tonalité du guide vocal
+// Utilise HTMLAudioElement.playbackRate pour changer le pitch
+// du guide vocal en temps réel (la vitesse change aussi, c'est
+// acceptable pour servir de RÉFÉRENCE de hauteur uniquement).
+// Valeur par défaut : -5 demi-tons (quinte vers le bas)
+// Range : -12 ST (octave bas) à 0 ST (original)
+// Persisté dans window.__vocalGuidePlaybackRate et localStorage
+// ═══════════════════════════════════════════════════════════════
+function GuideTransposeSlider() {
+  const [semitones, setSemitones] = useState<number>(() => {
+    try { const v = parseFloat(localStorage.getItem('guide_transpose_st') || '-5'); return isNaN(v) ? -5 : Math.max(-12, Math.min(0, v)); } catch { return -5; }
+  });
+
+  const applyTranspose = (st: number) => {
+    const rate = Math.pow(2, st / 12);
+    (window as any).__vocalGuidePlaybackRate = rate;
+    // Appliquer en temps réel si déjà chargé
+    try {
+      const el = document.querySelector('audio[data-role="vocal-guide"]') as HTMLAudioElement | null;
+      if (el) el.playbackRate = rate;
+    } catch {}
+    try { localStorage.setItem('guide_transpose_st', String(st)); } catch {}
+  };
+
+  const handleChange = (st: number) => {
+    setSemitones(st);
+    applyTranspose(st);
+  };
+
+  // Appliquer au montage
+  useEffect(() => { applyTranspose(semitones); }, []);
+
+  const NOTE_NAMES = ['', '♭2', '2', '♭3', '3', '4', '♭5', '5', '♭6', '6', '♭7', '7', '8ve'];
+  const label = semitones === 0 ? 'Original' : semitones === -12 ? '-1 Octave' : `${semitones} ST`;
+
+  return (
+    <div className="flex items-center gap-2 mb-1">
+      <span className="text-[9px] text-purple-400 font-black uppercase tracking-widest whitespace-nowrap">🎼 Guide</span>
+      <input type="range" min={-12} max={0} step={1}
+        value={semitones}
+        onChange={e => handleChange(parseInt(e.target.value))}
+        className="flex-1 h-1 accent-purple-500"
+      />
+      <span className="text-[9px] text-purple-400 font-black w-14 text-right whitespace-nowrap">
+        {label}
+      </span>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // HarmonyGuide v2 — Guide vocal avec pitch shift réel du guide vocal
 //
 // Deux boutons :
@@ -787,9 +838,13 @@ export default function RecordScreen({
               <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest">Niveau</p>
               {isRecording && <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" /><span className="text-[9px] font-black text-red-400 uppercase tracking-widest">REC</span></div>}
             </div>
-            {/* Gain micro entrée */}
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-[9px] text-zinc-500 font-black uppercase tracking-widest whitespace-nowrap">🎙 Gain</span>
+            {/* Transposition du guide vocal — seulement pour voix principale */}
+            {currentPreset.index === 0 && (
+              <GuideTransposeSlider />
+            )}
+            {/* Gain enregistrement — toucher seulement si le niveau REC est trop faible/fort */}
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-[9px] text-red-400 font-black uppercase tracking-widest whitespace-nowrap">🎙 REC</span>
               <input type="range" min={0.5} max={3.0} step={0.1}
                 value={inputGain}
                 onChange={e => onInputGainChange(parseFloat(e.target.value))}
@@ -799,9 +854,9 @@ export default function RecordScreen({
                 {inputGain >= 1.0 ? `+${((inputGain-1)*100).toFixed(0)}%` : `-${((1-inputGain)*100).toFixed(0)}%`}
               </span>
             </div>
-            {/* Volume monitoring écouteurs — INDÉPENDANT du gain d'enregistrement */}
+            {/* Volume monitoring écouteurs — monter ici pour mieux s'entendre SANS affecter le REC */}
             {(monitoring || isRecording) && (
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-2 mb-1">
                 <span className="text-[9px] text-emerald-500 font-black uppercase tracking-widest whitespace-nowrap">🎧 Écoute</span>
                 <input type="range" min={0.3} max={3.0} step={0.1}
                   value={monitorVol}

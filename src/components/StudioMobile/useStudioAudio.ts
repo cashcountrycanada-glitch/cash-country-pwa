@@ -262,7 +262,11 @@ export function useStudioAudio(selected: Song | null): AudioResult {
   if (!createdRef.current && typeof document !== 'undefined') {
     createdRef.current = true;
     (instRef as React.MutableRefObject<HTMLAudioElement>).current = makeAudioEl();
-    (vocalGuideRef as React.MutableRefObject<HTMLAudioElement>).current = makeAudioEl();
+    const vgEl = makeAudioEl();
+    vgEl.setAttribute('data-role', 'vocal-guide');
+    // Appliquer la transposition sauvegardée dès la création
+    try { vgEl.playbackRate = (window as any).__vocalGuidePlaybackRate ?? Math.pow(2, parseFloat(localStorage.getItem('guide_transpose_st') || '-5') / 12); } catch {}
+    (vocalGuideRef as React.MutableRefObject<HTMLAudioElement>).current = vgEl;
     (playRef as React.MutableRefObject<HTMLAudioElement>).current = makeAudioEl();
     // 4e élément dédié au preview inst — complètement séparé de instRef
     (previewInstRef as React.MutableRefObject<HTMLAudioElement>).current = makeAudioEl();
@@ -338,15 +342,13 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     if (!el) return;
     if (vocalGuideUrl) {
       el.src = vocalGuideUrl;
-      // Appliquer le volume dès que possible
       el.oncanplay = () => {
-        // 1. Fallback immédiat via .volume (fonctionne toujours)
         try { el.volume = vocalVolRef.current; } catch {}
-        // 2. GainNode si AudioContext disponible
         setVolumeIOS(vocalVolRef.current);
       };
-      // Aussi appliquer .volume directement maintenant (avant canplay)
       try { el.volume = vocalVolRef.current; } catch {}
+      // Appliquer la transposition du guide vocal si définie
+      try { el.playbackRate = (window as any).__vocalGuidePlaybackRate ?? 1.0; } catch {}
       el.load();
     } else {
       el.removeAttribute('src'); el.load();

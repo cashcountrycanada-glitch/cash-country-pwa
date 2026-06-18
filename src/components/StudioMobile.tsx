@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.237';
+const BUILD_VERSION = 'v7.6.242';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -203,6 +203,20 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     setDebugLog(prev => [`[${t}] ${msg}`, ...prev].slice(0, 20));
   };
   (window as any).__addLog = addLog;
+
+  // Rejouer les crashs survenus avant ce rechargement (capturés par le filet
+  // global window.onerror / unhandledrejection dans index.tsx). Permet de
+  // diagnostiquer un écran noir même après avoir relancé l'app, puisque
+  // le DebugPanel disparaissait avec le reste de l'UI au moment du crash.
+  useEffect(() => {
+    try {
+      const crashes = JSON.parse(localStorage.getItem('cc_crash_log') || '[]');
+      if (crashes.length > 0) {
+        crashes.slice(0, 5).forEach((c: string) => addLog(`💥 ${c}`));
+        localStorage.removeItem('cc_crash_log');
+      }
+    } catch {}
+  }, []);
 
   // Pré-initialiser IndexedDB dès le premier render
   // Lister les clés après 2s pour diagnostic — sans bloquer l'init
