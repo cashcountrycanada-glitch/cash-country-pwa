@@ -178,7 +178,18 @@ export default function MixerScreen({
   };
 
   const handleGoComp = () => {
-    const takes: Take[] = tracks.map(t => ({ id: t.id, recording: t, regions: t.regions || [] }));
+    // FIX écran noir : n'envoyer que les prises de VOIX PRINCIPALE (trackIndex 0, non générées)
+    // Avant : tracks.map() envoyait TOUTES les pistes (harmonies générées, double tracking...)
+    // au CompEditor, qui tentait de décoder ~6-8 fichiers audio en parallèle au montage.
+    // Sur iOS cela dépasse la limite de 6 AudioContext simultanés et fait planter le
+    // composant silencieusement (pas d'ErrorBoundary → écran complètement noir).
+    // Le comping n'a de sens que sur les prises de voix de toute façon.
+    const voiceTracks = tracks.filter(t => t.trackIndex === 0 && !(t as any).isGenerated);
+    const takes: Take[] = voiceTracks.map(t => ({ id: t.id, recording: t, regions: t.regions || [] }));
+    if (takes.length === 0) {
+      alert('Aucune prise de voix principale à comper. Enregistre au moins une prise (slot A/B/C) avant d\'utiliser le Comp Editor.');
+      return;
+    }
     onGoComp(takes);
   };
 

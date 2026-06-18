@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.234';
+const BUILD_VERSION = 'v7.6.237';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -127,6 +127,51 @@ function DebugPanel({ debugLog, onClear }: { debugLog: string[]; onClear: () => 
       ))}
     </div>
   );
+}
+
+// ── ScreenErrorBoundary ─────────────────────────────────────────────────────
+// Avant ce correctif : un crash de rendu dans n'importe quel écran (Comp,
+// Mixer, etc.) démontait tout l'arbre React → écran complètement NOIR sans
+// aucun message, impossible à diagnostiquer pour l'utilisateur.
+// Maintenant : on catch l'erreur et on affiche un écran de secours avec un
+// bouton "Retour" — au minimum l'app reste utilisable et le bug est visible.
+class ScreenErrorBoundary extends React.Component<
+  { children: React.ReactNode; onReset: () => void; screenName: string },
+  { hasError: boolean; errorMsg: string }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, errorMsg: '' };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, errorMsg: error?.message || String(error) };
+  }
+  componentDidCatch(error: any, info: any) {
+    console.error(`[ScreenErrorBoundary] Crash dans l'écran "${this.props.screenName}":`, error, info);
+    try { (window as any).__addLog?.(`❌ CRASH écran "${this.props.screenName}": ${error?.message || error}`); } catch {}
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-[#020202] text-white flex flex-col items-center justify-center gap-4 px-6">
+          <p className="text-[40px]">⚠️</p>
+          <p className="font-bebas text-xl tracking-widest text-center">ÉCRAN INDISPONIBLE</p>
+          <p className="text-[11px] text-zinc-500 text-center max-w-xs">
+            Une erreur est survenue dans l'écran "{this.props.screenName}". Tes prises et projets sont sauvegardés — tu peux revenir en arrière sans rien perdre.
+          </p>
+          <p className="text-[9px] text-zinc-700 font-mono text-center max-w-xs break-all">
+            {this.state.errorMsg}
+          </p>
+          <button
+            onClick={() => { this.setState({ hasError: false, errorMsg: '' }); this.props.onReset(); }}
+            className="px-6 py-3 bg-red-600 rounded-2xl font-black text-[13px] uppercase tracking-widest active:scale-95 transition-all mt-2">
+            ← Retour
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 export default function StudioMobile({ songs: propSongs = [] }: Props) {
@@ -855,7 +900,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const pendingCount = recordings.filter(r => !r.transferred).length;
 
   if (screen === 'master' && masterVocalBlob && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></>;
-  if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {
+  if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Comp Editor" onReset={() => setScreen('mixer')}><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {
               // Persister les régions dans les pistes du projet
               if (!project) return;
               const newTracks = project.tracks.map(track => {
@@ -866,7 +911,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
               setProject(updated);
               studioService.saveProject(updated);
             }}
-            onCompReady={async (blob) => { const dataUrl = await studioService.blobToDataUrl(blob); const rec: MobileRecording = { id: `COMP-${Date.now()}`, songId: selected.id, songTitle: selected.title, artist: selected.artist || '', duration: compTakes.reduce((s,t)=>s+t.regions.reduce((rs,r)=>rs+(r.endSec-r.startSec),0),0), recordedAt: Date.now(), dataUrl, transferred: false, fileName: `COMP_${selected.title.replace(/\s+/g,'_')}_${Date.now()}.mp4`, trackLabel: 'Comp final', trackIndex: 99, projectId: project?.id }; studioService.saveRecordingLocally(rec); reloadRecordings(); if (project) { updateProject(p => ({ ...p, mixedDataUrl: dataUrl })); setMixDone(true); } setScreen('mixer'); }} /></>;
+            onCompReady={async (blob) => { const dataUrl = await studioService.blobToDataUrl(blob); const rec: MobileRecording = { id: `COMP-${Date.now()}`, songId: selected.id, songTitle: selected.title, artist: selected.artist || '', duration: compTakes.reduce((s,t)=>s+t.regions.reduce((rs,r)=>rs+(r.endSec-r.startSec),0),0), recordedAt: Date.now(), dataUrl, transferred: false, fileName: `COMP_${selected.title.replace(/\s+/g,'_')}_${Date.now()}.mp4`, trackLabel: 'Comp final', trackIndex: 99, projectId: project?.id }; studioService.saveRecordingLocally(rec); reloadRecordings(); if (project) { updateProject(p => ({ ...p, mixedDataUrl: dataUrl })); setMixDone(true); } setScreen('mixer'); }} /></ScreenErrorBoundary></>;
   const [autoSyncing, setAutoSyncing] = useState(false);
   const handleAutoSync = async () => {
     if (!project || autoSyncing) return;

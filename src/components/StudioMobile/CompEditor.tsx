@@ -33,9 +33,17 @@ function fmt(s: number) {
   return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 }
 
-// Récupérer le dataUrl d'un enregistrement (mémoire ou IndexedDB)
+// Récupérer le dataUrl d'un enregistrement (mémoire, OPFS, ou IndexedDB)
 async function getRecordingDataUrl(rec: MobileRecording): Promise<string | null> {
-  if (rec.dataUrl) return rec.dataUrl;
+  // dataUrl direct valide (data: ou blob: déjà résolu)
+  if (rec.dataUrl && !rec.dataUrl.startsWith('opfs:')) return rec.dataUrl;
+  // Sentinelle opfs: → résoudre via le blob réel puis convertir en blob: URL
+  if (rec.dataUrl && rec.dataUrl.startsWith('opfs:')) {
+    try {
+      const blob = await studioService.resolveBlobAsync(rec.dataUrl);
+      if (blob) return URL.createObjectURL(blob);
+    } catch {}
+  }
   try {
     const blob = await studioOfflineDB.getAudio(`rec_${rec.id}`);
     if (blob) return studioService.blobToDataUrl(blob);
