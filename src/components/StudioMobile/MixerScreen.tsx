@@ -171,9 +171,20 @@ export default function MixerScreen({
 
 
   const handleTrackUpdate = (updated: MobileRecording) => {
-    const newTracks = project.tracks.map(t =>
-      t.trackIndex === updated.trackIndex ? updated : t
-    );
+    // FIX : matcher par id d'abord (identifiant unique et stable) — avant,
+    // le matching se faisait uniquement par trackIndex, ce qui remplaçait
+    // TOUTES les prises du même trackIndex (ex: voix principale slot A ET B)
+    // par la même piste mise à jour → doublon visuel et perte du slot B.
+    const newTracks = project.tracks.map(t => {
+      if (updated.id && t.id === updated.id) return updated;
+      // Fallback si pas d'id (ne devrait pas arriver) : matcher par trackIndex + slot + type
+      if (!updated.id && t.trackIndex === updated.trackIndex
+          && (t.takeSlot ?? 'A') === (updated.takeSlot ?? 'A')
+          && !!(t as any).isGenerated === !!(updated as any).isGenerated) {
+        return updated;
+      }
+      return t;
+    });
     onProjectUpdate({ ...project, tracks: newTracks });
   };
 
