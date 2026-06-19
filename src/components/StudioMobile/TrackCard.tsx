@@ -43,6 +43,122 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
   const [showFxPanel, setShowFxPanel]   = useState(false);
   const [reverbOverrides, setReverbOverrides] = useState<Record<string, number>>({});
   const [applyingFx, setApplyingFx]     = useState(false);
+
+  // ── Aperçu live de la reverb ──────────────────────────────────────────────
+  // AVANT : le slider ne faisait que stocker une valeur — aucun son ne
+  // changeait avant de cliquer "Appliquer", ce qui rendait impossible de
+  // trouver le bon réglage à l'oreille (cycle lent : ajuster → appliquer →
+  // attendre le traitement → écouter → recommencer).
+  // MAINTENANT : pendant que le panneau FX est ouvert, la lecture passe par
+  // un graphe Web Audio dédié avec un vrai ConvolverNode dont le mix dry/wet
+  // suit le slider EN TEMPS RÉEL, sans aucun traitement de fichier.
+  const [livePreviewPlaying, setLivePreviewPlaying] = useState(false);
+  const liveCtxRef    = useRef<AudioContext | null>(null);
+  const liveSrcRef    = useRef<AudioBufferSourceNode | null>(null);
+  const liveBufRef    = useRef<AudioBuffer | null>(null);
+  const liveDryRef    = useRef<GainNode | null>(null);
+  const liveWetRef    = useRef<GainNode | null>(null);
+  const liveConvRef   = useRef<ConvolverNode | null>(null);
+  const liveIrCacheRef = useRef<Record<string, AudioBuffer>>({});
+
+  function makeReverbIR(ctx: AudioContext, reverbType: string): AudioBuffer {
+    const cacheKey = reverbType;
+    if (liveIrCacheRef.current[cacheKey]) return liveIrCacheRef.current[cacheKey];
+    const irParams: Record<string, { duration: number; decay: number; preDelay: number }> = {
+      room:  { duration: 0.8,  decay: 2.5, preDelay: 0.008 },
+      hall:  { duration: 1.8,  decay: 3.5, preDelay: 0.018 },
+      plate: { duration: 1.2,  decay: 3.0, preDelay: 0.005 },
+    };
+    const p = irParams[reverbType] || irParams.room;
+    const irSr = ctx.sampleRate;
+    const irLen = Math.floor(irSr * p.duration);
+    const irBuf = ctx.createBuffer(2, irLen, irSr);
+    const preDelayS = Math.floor(irSr * p.preDelay);
+    for (let c = 0; c < 2; c++) {
+      const ch = irBuf.getChannelData(c);
+      for (let i = 0; i < irLen; i++) {
+        if (i < preDelayS) { ch[i] = 0; continue; }
+        const t = (i - preDelayS) / irSr;
+        ch[i] = (Math.random() * 2 - 1) * Math.exp(-p.decay * t);
+        if (i === preDelayS + Math.floor(irSr * 0.020)) ch[i] += 0.5 * (c === 0 ? 1 : 0.7);
+        if (i === preDelayS + Math.floor(irSr * 0.035)) ch[i] += 0.35 * (c === 0 ? 0.8 : 1);
+        if (i === preDelayS + Math.floor(irSr * 0.055)) ch[i] += 0.25;
+      }
+      let peak = 0;
+      for (let i = 0; i < irLen; i++) { const a = Math.abs(ch[i]); if (a > peak) peak = a; }
+      if (peak > 0) for (let i = 0; i < irLen; i++) ch[i] /= peak;
+    }
+    liveIrCacheRef.current[cacheKey] = irBuf;
+    return irBuf;
+  }
+
+  async function startLivePreview(fx: FxPreset) {
+    stopLivePreview();
+    if (!track.dataUrl) return;
+    try {
+      const ctx = liveCtxRef.current && liveCtxRef.current.state !== 'closed'
+        ? liveCtxRef.current
+        : new (window.AudioContext || (window as any).webkitAudioContext)();
+      liveCtxRef.current = ctx;
+      if (ctx.state === 'suspended') await ctx.resume();
+
+      if (!liveBufRef.current) {
+        const resp = await fetch(track.dataUrl);
+        const ab = await resp.arrayBuffer();
+        liveBufRef.current = await ctx.decodeAudioData(ab);
+      }
+
+      const src = ctx.createBufferSource();
+      src.buffer = liveBufRef.current;
+
+      const dryGain = ctx.createGain();
+      const wetGain = ctx.createGain();
+      const wetAmount = reverbOverrides[fx.id] ?? fx.reverbMix ?? 0;
+      dryGain.gain.value = 1 - wetAmount;
+      wetGain.gain.value = wetAmount;
+
+      const convolver = ctx.createConvolver();
+      convolver.buffer = makeReverbIR(ctx, fx.reverb !== 'none' ? fx.reverb : 'room');
+
+      const outGain = ctx.createGain();
+      outGain.gain.value = 0.9;
+
+      src.connect(dryGain); dryGain.connect(outGain);
+      src.connect(convolver); convolver.connect(wetGain); wetGain.connect(outGain);
+      outGain.connect(ctx.destination);
+
+      liveSrcRef.current  = src;
+      liveDryRef.current  = dryGain;
+      liveWetRef.current  = wetGain;
+      liveConvRef.current = convolver;
+
+      src.onended = () => { setLivePreviewPlaying(false); liveSrcRef.current = null; };
+      src.start();
+      setLivePreviewPlaying(true);
+    } catch (e) {
+      console.error('[TrackCard] startLivePreview error:', e);
+    }
+  }
+
+  function stopLivePreview() {
+    try { liveSrcRef.current?.stop(); } catch {}
+    liveSrcRef.current = null;
+    setLivePreviewPlaying(false);
+  }
+
+  // Mettre à jour le mix dry/wet EN TEMPS RÉEL pendant que le slider bouge
+  function updateLivePreviewWet(wetAmount: number) {
+    if (!liveDryRef.current || !liveWetRef.current || !liveCtxRef.current) return;
+    const ctx = liveCtxRef.current;
+    liveDryRef.current.gain.setTargetAtTime(1 - wetAmount, ctx.currentTime, 0.02);
+    liveWetRef.current.gain.setTargetAtTime(wetAmount, ctx.currentTime, 0.02);
+  }
+
+  // Nettoyer à la fermeture du panneau FX ou au démontage
+  useEffect(() => {
+    if (!showFxPanel) stopLivePreview();
+    return () => stopLivePreview();
+  }, [showFxPanel]);
   const [applyPct, setApplyPct]         = useState(0);
   const [applyDone, setApplyDone]       = useState(false);
   const [showFxDetail, setShowFxDetail] = useState<FxPreset | null>(null);
@@ -329,7 +445,7 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
                           <span className="text-[9px] font-black" style={{ color: fx.color }}>{value}</span>
                         </div>
                       ))}
-                      {/* Slider Reverb ajustable */}
+                      {/* Slider Reverb ajustable — avec aperçu live */}
                       {fx.reverb !== 'none' && (
                         <div className="pt-1">
                           <div className="flex justify-between mb-1">
@@ -338,9 +454,20 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
                           </div>
                           <input type="range" min="0" max="0.6" step="0.02"
                             value={reverbOverrides[fx.id] ?? fx.reverbMix}
-                            onChange={e => setReverbOverrides(prev => ({ ...prev, [fx.id]: parseFloat(e.target.value) }))}
+                            onChange={e => {
+                              const v = parseFloat(e.target.value);
+                              setReverbOverrides(prev => ({ ...prev, [fx.id]: v }));
+                              updateLivePreviewWet(v); // ← change le son immédiatement si l'aperçu joue
+                            }}
                             className="w-full h-1 rounded-full appearance-none cursor-pointer"
                             style={{ accentColor: fx.color }}/>
+                          {/* Bouton aperçu live — entendre le résultat AVANT d'appliquer */}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); livePreviewPlaying ? stopLivePreview() : startLivePreview(fx); }}
+                            className="mt-1.5 w-full py-1.5 rounded-lg text-[9px] font-black uppercase flex items-center justify-center gap-1.5"
+                            style={{ background: livePreviewPlaying ? fx.color + '35' : '#1a1a1a', border: `1px solid ${livePreviewPlaying ? fx.color : '#2a2a2a'}`, color: livePreviewPlaying ? fx.color : '#a1a1aa' }}>
+                            {livePreviewPlaying ? <><Pause size={10}/> Arrêter l'aperçu</> : <><Play size={10}/> 🎧 Écouter avec cette reverb</>}
+                          </button>
                           {(reverbOverrides[fx.id] !== undefined && reverbOverrides[fx.id] !== fx.reverbMix) && (
                             <button onClick={() => handleApplyFx({ ...fx, reverbMix: reverbOverrides[fx.id] ?? fx.reverbMix })}
                               className="mt-1.5 w-full py-1 rounded-lg text-[9px] font-black uppercase"

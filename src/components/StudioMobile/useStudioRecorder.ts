@@ -58,6 +58,11 @@ interface RecorderOptions {
   sections?: any[];
   onLog?: (msg: string) => void;
   takeSlot?: 'A' | 'B' | 'C';
+  // Décalage instrumental/voix détecté par l'Auto Sync du mixer (en ms).
+  // AVANT v233 : appliqué seulement au mixage final, jamais pendant le REC →
+  // le chanteur entendait toujours le décalage non corrigé en live, ce qui
+  // rendait la synchronisation manuelle nécessaire à chaque prise.
+  instOffsetMs?: number;
 }
 
 interface RecorderResult {
@@ -318,7 +323,15 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
             (window as any).__instGainNode  = null;
             (window as any).__instWallStart = null;
           };
-          bsrc.start(startAt, t);
+          // Appliquer le décalage Auto Sync — même convention que mixProject :
+          // offset > 0 → inst démarre plus tard ; offset < 0 → inst démarre
+          // à une position plus avancée dans le buffer (compense un inst en retard)
+          const instOffsetSec = (optsRef.current.instOffsetMs ?? 0) / 1000;
+          if (instOffsetSec >= 0) {
+            bsrc.start(startAt + instOffsetSec, t);
+          } else {
+            bsrc.start(startAt, t + Math.min(-instOffsetSec, Math.max(0, instBuf.duration - t)));
+          }
         } else if (instEl && optsRef.current.instUrl) {
           // Buffer non dispo → fallback <audio>
           instEl.play().catch(() => {});
@@ -329,6 +342,8 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           vGain.gain.value = optsRef.current.vocalGuideVolRef?.current ?? 0.4;
           const vsrc = ctx.createBufferSource();
           vsrc.buffer = vocalBuf;
+          // Transposition du guide vocal pendant l'enregistrement — slider 🎼 Guide
+          try { vsrc.playbackRate.value = (window as any).__vocalGuidePlaybackRate ?? 1.0; } catch {}
           vsrc.connect(vGain);
           vGain.connect(ctx.destination);
           (window as any).__vocalBufSrc  = vsrc;
@@ -339,6 +354,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           };
           vsrc.start(startAt, t);  // ← même startAt que inst : synchro parfaite
         } else if (vocalEl && optsRef.current.vocalGuideUrl) {
+          try { vocalEl.playbackRate = (window as any).__vocalGuidePlaybackRate ?? 1.0; } catch {}
           vocalEl.play().catch(() => {});
         }
       };

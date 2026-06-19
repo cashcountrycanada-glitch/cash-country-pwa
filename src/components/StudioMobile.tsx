@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.242';
+const BUILD_VERSION = 'v7.6.246';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -271,6 +271,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     sections: (project?.sections as any[]) ?? [],
     takeSlot,
     onLog: addLog,
+    instOffsetMs: audio.instOffsetMs,
   });
 
   const allSongs = propSongs.length > 0 ? propSongs : apiSongs;
@@ -705,8 +706,15 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         (window as any).__vocalBufSrc = null;
         (window as any).__vocalBufGain = null;
       };
-      bsrc.start(startAt);
-      addLog(`inst BufferSource → start @ ctx+80ms`);
+      // Appliquer le décalage Auto Sync — même convention que mixProject/REC :
+      // offset > 0 → inst démarre plus tard ; offset < 0 → inst démarre plus avancé
+      const previewOffsetSec = (audio.instOffsetMs ?? 0) / 1000;
+      if (previewOffsetSec >= 0) {
+        bsrc.start(startAt + previewOffsetSec);
+      } else {
+        bsrc.start(startAt, Math.min(-previewOffsetSec, Math.max(0, instBuf.duration)));
+      }
+      addLog(`inst BufferSource → start @ ctx+80ms (offset=${(audio.instOffsetMs ?? 0)}ms)`);
     }
 
     if (vocalBuf) {
@@ -714,6 +722,9 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       vGain.gain.value = audio.vocalVolRef.current;
       const vsrc = ctx.createBufferSource();
       vsrc.buffer = vocalBuf;
+      // Transposition du guide vocal — slider 🎼 Guide dans RecordScreen
+      // (window.__vocalGuidePlaybackRate, persisté dans localStorage)
+      try { vsrc.playbackRate.value = (window as any).__vocalGuidePlaybackRate ?? 1.0; } catch {}
       vsrc.connect(vGain);
       vGain.connect(ctx.destination);
       (window as any).__vocalBufGain = vGain;
@@ -724,7 +735,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         if (!instBuf) { isPreviewingRef.current = false; setIsPreviewing(false); }
       };
       vsrc.start(startAt); // ← même startAt que inst : synchronisation sample-accurate
-      addLog(`vocal BufferSource → start @ ctx+80ms (même timestamp)`);
+      addLog(`vocal BufferSource → start @ ctx+80ms (transpose=${((window as any).__vocalGuidePlaybackRate ?? 1.0).toFixed(3)}x)`);
     }
 
     // Si aucun buffer n'a pu être décodé → setIsPreviewing(false)
