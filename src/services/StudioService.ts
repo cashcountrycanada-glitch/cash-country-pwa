@@ -886,9 +886,9 @@ export const studioService = {
       try {
         // Créer une IR synthétique — exponential decay + early reflections
         const irParams: Record<string, { duration: number; decay: number; preDelay: number }> = {
-          room:  { duration: 0.8,  decay: 2.5, preDelay: 0.008 },
-          hall:  { duration: 1.8,  decay: 3.5, preDelay: 0.018 },
-          plate: { duration: 1.2,  decay: 3.0, preDelay: 0.005 },
+          room:  { duration: 1.1,  decay: 2.0, preDelay: 0.010 },
+          hall:  { duration: 2.2,  decay: 2.8, preDelay: 0.020 },
+          plate: { duration: 1.5,  decay: 2.4, preDelay: 0.006 },
         };
         const p = irParams[reverbType] || irParams.room;
         const irSr   = audioContext.sampleRate;
@@ -917,15 +917,27 @@ export const studioService = {
         const convolver = audioContext.createConvolver();
         convolver.buffer = irBuf;
 
-        // Mix dry/wet : 70% sec + 30% reverb pour un son naturel
-        const dryGain = audioContext.createGain(); dryGain.gain.value = 0.70;
-        const wetGain = audioContext.createGain(); wetGain.gain.value = 0.30;
+        // Mix dry/wet — niveau par défaut plus généreux (45% reverb) car
+        // certains chanteurs ont besoin de beaucoup de reverb dans le retour
+        // pour bien chanter sans forcer. Ajustable en live via le slider
+        // 🌊 Reverb dans RecordScreen (window.__monitorReverbWet, 0 à 0.8).
+        const savedWet = (() => { try { return parseFloat(localStorage.getItem('studio_monitorReverbWet') || '0.45'); } catch { return 0.45; } })();
+        const wetLevel = isNaN(savedWet) ? 0.45 : Math.max(0, Math.min(0.8, savedWet));
+        const dryGain = audioContext.createGain(); dryGain.gain.value = 1 - wetLevel;
+        const wetGain = audioContext.createGain(); wetGain.gain.value = wetLevel;
 
         monitorComp.connect(dryGain);
         monitorComp.connect(convolver);
         convolver.connect(wetGain);
         dryGain.connect(monitorGain);
         wetGain.connect(monitorGain);
+
+        // Exposer pour ajustement live par le slider 🌊 Reverb (sans toucher
+        // l'enregistrement — ces noeuds sont uniquement sur le chemin monitoring,
+        // jamais connectés au worklet/recorder qui captent inputGain directement)
+        (window as any).__monitorReverbDry = dryGain;
+        (window as any).__monitorReverbWetGain = wetGain;
+        (window as any).__monitorReverbCtx = audioContext;
       } catch (e) {
         // Fallback si ConvolverNode échoue sur iOS — chaîne sèche
         console.warn('[Monitor] ConvolverNode non disponible, monitoring sec:', e);

@@ -126,6 +126,54 @@ function deviceStyle(dev: AudioDevice, isSelected: boolean, isAuto: boolean, aut
 }
 
 // ═══════════════════════════════════════════════════════════════
+// ReverbMonitorSlider — Reverb dans le retour écouteurs pendant REC
+//
+// Beaucoup de chanteurs ont besoin d'entendre une bonne dose de reverb
+// pour bien chanter sans forcer — une voix complètement sèche dans les
+// écouteurs donne l'impression de "crier dans le vide" et pousse
+// instinctivement à pousser plus fort. Ce slider ajuste le mix dry/wet
+// de la reverb de monitoring EN TEMPS RÉEL (window.__monitorReverbWetGain),
+// sans jamais toucher au signal qui va dans le fichier enregistré —
+// la reverb de monitoring est sur une branche séparée du inputGain qui
+// alimente le worklet d'enregistrement.
+// ═══════════════════════════════════════════════════════════════
+function ReverbMonitorSlider() {
+  const [wet, setWet] = useState<number>(() => {
+    try { const v = parseFloat(localStorage.getItem('studio_monitorReverbWet') || '0.45'); return isNaN(v) ? 0.45 : Math.max(0, Math.min(0.8, v)); } catch { return 0.45; }
+  });
+
+  const applyWet = (v: number) => {
+    const dryGain = (window as any).__monitorReverbDry as GainNode | undefined;
+    const wetGain = (window as any).__monitorReverbWetGain as GainNode | undefined;
+    const ctx = (window as any).__monitorReverbCtx as AudioContext | undefined;
+    if (dryGain && wetGain && ctx && ctx.state !== 'closed') {
+      try {
+        dryGain.gain.setTargetAtTime(1 - v, ctx.currentTime, 0.03);
+        wetGain.gain.setTargetAtTime(v, ctx.currentTime, 0.03);
+      } catch {}
+    }
+    try { localStorage.setItem('studio_monitorReverbWet', String(v)); } catch {}
+  };
+
+  const handleChange = (v: number) => { setWet(v); applyWet(v); };
+  useEffect(() => { applyWet(wet); }, []);
+
+  return (
+    <div className="flex items-center gap-2 mb-1">
+      <span className="text-[9px] text-cyan-400 font-black uppercase tracking-widest whitespace-nowrap">🌊 Reverb</span>
+      <input type="range" min={0} max={0.8} step={0.05}
+        value={wet}
+        onChange={e => handleChange(parseFloat(e.target.value))}
+        className="flex-1 h-1 accent-cyan-500"
+      />
+      <span className="text-[9px] text-cyan-400 font-black w-10 text-right">
+        {Math.round(wet * 100)}%
+      </span>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // GuideTransposeSlider — Ajuster la tonalité du guide vocal
 // Utilise HTMLAudioElement.playbackRate pour changer le pitch
 // du guide vocal en temps réel (la vitesse change aussi, c'est
@@ -867,6 +915,10 @@ export default function RecordScreen({
                   {monitorVol >= 1.0 ? `+${((monitorVol-1)*100).toFixed(0)}%` : `-${((1-monitorVol)*100).toFixed(0)}%`}
                 </span>
               </div>
+            )}
+            {/* Reverb dans le retour écouteurs — aide à chanter sans forcer */}
+            {(monitoring || isRecording) && (
+              <ReverbMonitorSlider />
             )}
             <VUMeter analyser={analyser} vuLevel={vuLevel} active={isRecording} />
           </div>
