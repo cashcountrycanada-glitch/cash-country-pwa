@@ -23,7 +23,7 @@ interface Props {
   onSolo:    (trackIndex: number) => void;
   onVolume:  (trackIndex: number, gain: number) => void;
   onPan:     (trackIndex: number, pan: number) => void;
-  onDelete:  (trackIndex: number) => void;
+  onDelete:  (trackId: string) => void;
   onTrackUpdate?: (updated: MobileRecording) => void;
 }
 
@@ -307,7 +307,7 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
           </button>
 
           {/* Delete */}
-          <button onClick={() => onDelete(track.trackIndex!)}
+          <button onClick={() => onDelete(track.id)}
             className="w-8 h-8 rounded-xl bg-red-950/60 flex items-center justify-center text-red-700 active:text-red-400 active:scale-90 active:bg-red-900/60 transition-all">
             <Trash2 size={13}/>
           </button>

@@ -493,15 +493,39 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     // ── Chercher le blob audio ────────────────────────────────────────────
     let blob: Blob | null = null;
 
-    // 1. IndexedDB (stocké par saveRecordingLocallyAsync)
-    try {
-      blob = await studioOfflineDB.getAudio(`rec_${rec.id}`);
-      if (blob) console.log(`[Play] IndexedDB: ${(blob.size/1024).toFixed(0)} Ko`);
-    } catch(e) {
-      console.warn('[Play] IndexedDB erreur:', e);
+    // 1. PRIORITÉ ABSOLUE : data: URL déjà en mémoire dans rec.dataUrl.
+    // C'est TOUJOURS la version la plus à jour (ex: juste après un FX/reverb
+    // appliqué). AVANT ce correctif, IndexedDB était interrogé en premier,
+    // mais sa sauvegarde après un FX est asynchrone et non-bloquante — si
+    // l'utilisateur cliquait Play juste après "✓ Appliqué", l'écriture
+    // IndexedDB pouvait ne pas être terminée et l'ANCIENNE version (sans
+    // l'effet) était lue à la place, donnant l'impression que le FX/reverb
+    // ne s'appliquait pas du tout.
+    if (rec.dataUrl && rec.dataUrl.startsWith('data:')) {
+      try {
+        const [header, data] = rec.dataUrl.split(',');
+        const mime = header.match(/:(.*?);/)?.[1] ?? 'audio/mp4';
+        const binary = atob(data);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        blob = new Blob([bytes], { type: mime });
+        console.log(`[Play] dataUrl mémoire (priorité): ${(blob.size/1024).toFixed(0)} Ko | type=${mime}`);
+      } catch (e) {
+        console.warn('[Play] Erreur décodage dataUrl mémoire:', e);
+      }
     }
 
-    // 2. dataUrl en mémoire (ou sentinelle opfs:)
+    // 2. IndexedDB (stocké par saveRecordingLocallyAsync) — fallback
+    if (!blob) {
+      try {
+        blob = await studioOfflineDB.getAudio(`rec_${rec.id}`);
+        if (blob) console.log(`[Play] IndexedDB: ${(blob.size/1024).toFixed(0)} Ko`);
+      } catch(e) {
+        console.warn('[Play] IndexedDB erreur:', e);
+      }
+    }
+
+    // 3. dataUrl en mémoire (blob: ou sentinelle opfs:) — autres formats
     if (!blob && rec.dataUrl) {
       try {
         if (rec.dataUrl.startsWith('blob:')) {
@@ -535,14 +559,6 @@ export function useStudioAudio(selected: Song | null): AudioResult {
             // Fallback OPFS
             try { blob = await studioOfflineDB.getAudio(key); } catch {}
           }
-        } else {
-          const [header, data] = rec.dataUrl.split(',');
-          const mime = header.match(/:(.*?);/)?.[1] ?? 'audio/mp4';
-          const binary = atob(data);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          blob = new Blob([bytes], { type: mime });
-          console.log(`[Play] dataUrl: ${(blob.size/1024).toFixed(0)} Ko | type=${mime}`);
         }
       } catch(e) {
         console.error('[Play] Erreur décodage dataUrl:', e);

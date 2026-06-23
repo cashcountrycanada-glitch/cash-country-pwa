@@ -42,7 +42,7 @@ interface Props {
   onSolo:          (trackIndex: number) => void;
   onVolume:        (trackIndex: number, gain: number) => void;
   onPan:           (trackIndex: number, pan: number) => void;
-  onDelete:        (trackIndex: number) => void;
+  onDelete:        (trackId: string) => void;
   onMix:           (layerIds: string[]) => void;
   onPlayMix:       () => void;
   onMasterize:     (vocalBlob: Blob, instBlob: Blob | null) => void;

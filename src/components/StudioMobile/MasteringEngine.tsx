@@ -50,6 +50,11 @@ export interface MasteringProps {
   vocalBlob:    Blob;
   // L'instrumental à mixer pour l'export publication (null si non disponible)
   instBlob:     Blob | null;
+  // Décalage Auto Sync détecté dans le mixer (ms) — appliqué entre la voix
+  // déjà masterisée et l'instrumental au moment de la fusion finale.
+  // AVANT ce correctif : jamais transmis ici, donc jamais appliqué dans le
+  // fichier exporté final, peu importe le réglage Auto Sync fait ailleurs.
+  instOffsetMs?: number;
   songTitle:    string;
   songId:       string;
   // Fonctions de retour
@@ -244,9 +249,11 @@ async function mixVocalWithInst(
   vocalBuf: AudioBuffer,
   instBuf:  AudioBuffer,
   instGainDb: number = -3,
+  instOffsetMs: number = 0,
 ): Promise<AudioBuffer> {
   const sr       = Math.max(vocalBuf.sampleRate, instBuf.sampleRate);
-  const duration = Math.max(vocalBuf.duration, instBuf.duration);
+  const offsetSec = instOffsetMs / 1000;
+  const duration = Math.max(vocalBuf.duration, instBuf.duration + Math.abs(offsetSec));
 
   // Mesurer les peaks des deux signaux
   const peakOf = (buf: AudioBuffer): number => {
@@ -278,13 +285,21 @@ async function mixVocalWithInst(
   vSrc.connect(vGain); vGain.connect(offline.destination);
   vSrc.start(0);
 
-  // Instrumental
+  // Instrumental — décalage Auto Sync appliqué ici (AVANT ce correctif :
+  // jamais appliqué dans le fichier final masterisé/exporté, peu importe
+  // le réglage Auto Sync fait dans le mixer). Même convention que mixProject
+  // et le REC en direct : offset > 0 → inst démarre plus tard ;
+  // offset < 0 → inst démarre à une position plus avancée dans son buffer.
   const iSrc = offline.createBufferSource();
   iSrc.buffer = instBuf;
   const iGain = offline.createGain();
   iGain.gain.value = instGain;
   iSrc.connect(iGain); iGain.connect(offline.destination);
-  iSrc.start(0);
+  if (offsetSec >= 0) {
+    iSrc.start(offsetSec);
+  } else {
+    iSrc.start(0, Math.min(-offsetSec, instBuf.duration));
+  }
 
   const mixed = await offline.startRendering();
 
@@ -876,7 +891,7 @@ function db(v: number) { return v >= 0 ? `+${v.toFixed(1)} dB` : `${v.toFixed(1)
 // ── Composant principal ───────────────────────────────────────────────────────
 
 export default function MasteringEngine({
-  vocalBlob, instBlob, songTitle, songId, onBack, onStemReady, isOnline,
+  vocalBlob, instBlob, instOffsetMs = 0, songTitle, songId, onBack, onStemReady, isOnline,
 }: MasteringProps) {
 
   const [preset, setPreset]               = useState('country');
@@ -980,7 +995,7 @@ export default function MasteringEngine({
         const instRaw = await decodeBlob(instBlob);
 
         setProgressLabel('Mixage vocal + instrumental...'); setProgress(70);
-        const fullRaw = await mixVocalWithInst(vocalM, instRaw, instGainDb);
+        const fullRaw = await mixVocalWithInst(vocalM, instRaw, instGainDb, instOffsetMs);
 
         setProgressLabel('Masterisation du mix complet...'); setProgress(80);
         const fullM = await masterAudio(fullRaw, settings);

@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.250';
+const BUILD_VERSION = 'v7.6.260';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -181,7 +181,12 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const [apiSongs, setApiSongs] = useState<Song[]>([]);
   const [recordings, setRecordings] = useState<MobileRecording[]>([]);
   const [currentPreset, setCurrentPreset] = useState<TrackPreset>(TRACK_PRESETS[0]);
-  const [reverb, setReverb] = useState<ReverbType>('room');
+  // Reverb par défaut : 'hall' (grande salle) plutôt que 'room' (petite pièce).
+  // 'hall' a la traîne la plus longue (2.2s) et le decay le plus doux (2.8) des
+  // trois types — donne l'impression de chanter dans un grand espace, ce qui
+  // aide à projeter naturellement sans forcer la voix, même en chantant dans
+  // un environnement réel petit et sec (ex: voiture).
+  const [reverb, setReverb] = useState<ReverbType>('hall');
   const [showLyrics, setShowLyrics] = useState(true);
   const [isMixing, setIsMixing] = useState(false);
   const [mixProgress, setMixProgress] = useState(0);
@@ -608,7 +613,12 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   });
   const handleVolumeTrack = (i: number, v: number) => updateProject(p => ({ ...p, tracks: p.tracks.map(t => t.trackIndex === i ? { ...t, gain: v } : t) }));
   const handlePanTrack = (i: number, v: number) => updateProject(p => ({ ...p, tracks: p.tracks.map(t => t.trackIndex === i ? { ...t, pan: v } : t) }));
-  const handleDeleteTrack = (i: number) => updateProject(p => ({ ...p, tracks: p.tracks.filter(t => t.trackIndex !== i) }));
+  // FIX bug critique : la suppression filtrait par trackIndex seul, donc
+  // supprimer la voix principale slot A effaçait AUSSI les slots B et C
+  // (même trackIndex: 0 pour les trois). Maintenant on filtre par id unique,
+  // qui ne se confond jamais entre deux prises différentes, peu importe
+  // leur trackIndex ou leur slot.
+  const handleDeleteTrack = (trackId: string) => updateProject(p => ({ ...p, tracks: p.tracks.filter(t => t.id !== trackId) }));
 
   const handlePreviewStems = async () => {
     const inst  = audio.instRef.current;
@@ -924,7 +934,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const getInstBlob = async (): Promise<Blob | null> => { if (!audio.instUrl) return null; try { return await studioOfflineDB.getAudio(`inst_${selected?.id}`); } catch { return null; } };
   const pendingCount = recordings.filter(r => !r.transferred).length;
 
-  if (screen === 'master' && masterVocalBlob && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></>;
+  if (screen === 'master' && masterVocalBlob && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></>;
   if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Comp Editor" onReset={() => setScreen('mixer')}><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {
               // Persister les régions dans les pistes du projet
               if (!project) return;

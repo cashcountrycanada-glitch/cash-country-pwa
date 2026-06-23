@@ -1060,7 +1060,7 @@ export default function RecordScreen({
           {/* Reverb (post-prod uniquement, masqué pendant REC) */}
           {!isRecording && !isSaving && (
             <div className="flex items-center gap-2 mb-4">
-              <span className="text-[9px] text-zinc-700 font-black uppercase w-16 shrink-0">Reverb (post)</span>
+              <span className="text-[9px] text-zinc-700 font-black uppercase w-16 shrink-0">Reverb (écoute)</span>
               <div className="flex gap-1.5 flex-1">
                 {REVERB_TYPES.map(r => (
                   <button key={r} onClick={() => onReverbChange(r)} disabled={isRecording || isSaving}

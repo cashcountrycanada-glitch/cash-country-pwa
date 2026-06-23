@@ -845,7 +845,7 @@ export const studioService = {
       log(`Micro: ${s.sampleRate ?? '?'}Hz | echo=${s.echoCancellation} | noise=${s.noiseSuppression}`);
     }
 
-    // Chaîne SÈCHE : source → inputGain → analyser uniquement. Aucun effet.
+    // Chaîne SÈCHE : source → inputGain → limiteur de sécurité → analyser.
     const source = audioContext.createMediaStreamSource(stream);
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 256;
@@ -853,8 +853,26 @@ export const studioService = {
     // GainNode d'entrée — amplifie le signal brut avant capture
     const inputGain = audioContext.createGain();
     inputGain.gain.value = Math.max(config.gainL ?? 1.0, config.gainR ?? 1.0);
+
+    // Limiteur de sécurité DÉDIÉ À L'ENREGISTREMENT — protège le fichier final
+    // du clipping si le signal d'entrée est déjà fort (carte son externe avec
+    // gain micro élevé, ex. V8). AVANT ce correctif : seul le monitoring avait
+    // un compresseur (monitorComp) — le signal réellement enregistré (via
+    // inputGain → analyser → workletNode) n'avait AUCUNE protection, donc
+    // un micro externe fort pouvait clipper dans le fichier WAV sans que
+    // l'app ne s'en rende compte ni ne corrige quoi que ce soit.
+    // Seuil élevé (-3dB) et ratio fort (20:1) = transparent en usage normal,
+    // intervient seulement pour écrêter les vrais pics de clipping.
+    const recLimiter = audioContext.createDynamicsCompressor();
+    recLimiter.threshold.value = -3;
+    recLimiter.knee.value = 0;
+    recLimiter.ratio.value = 20;
+    recLimiter.attack.value = 0.001;
+    recLimiter.release.value = 0.1;
+
     source.connect(inputGain);
-    inputGain.connect(analyser);
+    inputGain.connect(recLimiter);
+    recLimiter.connect(analyser);
 
     // ── Chaîne de monitoring temps réel avec effets ──────────────────────────
     // inputGain → HPF → Comp léger → Reverb → monitorGain → destination
@@ -878,7 +896,7 @@ export const studioService = {
 
     // Reverb temps réel — ConvolverNode avec IR synthétique (Schroeder simplifié)
     // Générer une IR (Impulse Response) courte selon le type de reverb choisi
-    const reverbType = config.reverb ?? 'room';
+    const reverbType = config.reverb ?? 'hall';
     const monitorGain = audioContext.createGain();
     monitorGain.gain.value = 0;
 
@@ -996,8 +1014,9 @@ export const studioService = {
     let recorder: MediaRecorder | null = null;
     if (!useWorklet) {
       // Créer gainedDest seulement maintenant — évite un noeud actif inutile si worklet dispo
+      // Passe par recLimiter pour la même protection anti-clipping que le worklet
       const gainedDest = audioContext.createMediaStreamDestination();
-      inputGain.connect(gainedDest);
+      recLimiter.connect(gainedDest);
       gainedStream = gainedDest.stream;
       const mimeType = getBestMimeType();
       const recOpts: MediaRecorderOptions = {}; if (mimeType) recOpts.mimeType = mimeType; recOpts.audioBitsPerSecond = 256000;
