@@ -98,7 +98,20 @@ function phaseVocoderShift(input, semitones, sr) {
   if(semitones===0) return input.slice();
   const pitchFactor=Math.pow(2,semitones/12);
   const N=4096,hopA=N>>2;
-  const hopS=Math.max(1,Math.min(Math.round(hopA/pitchFactor),N>>1));
+  // CORRECTIF CRITIQUE : la formule était inversée — hopS = hopA/pitchFactor
+  // faisait l'INVERSE de ce qui est nécessaire pour changer le pitch.
+  // Principe correct du phase vocoder (time-stretch puis resample) :
+  //   - Pour MONTER le pitch (pitchFactor > 1) : on étire le signal en
+  //     synthèse (hopS > hopA), donc on joue le signal plus LENTEMENT à
+  //     fréquence d'échantillonnage inchangée, puis on le rééchantillonne
+  //     plus vite à la fin pour revenir à la durée d'origine — ce
+  //     rééchantillonnage final est ce qui élève réellement le pitch.
+  //   - Pour DESCENDRE le pitch (pitchFactor < 1) : hopS < hopA (compression).
+  // Avant ce correctif, hopS=hopA/pitchFactor faisait l'inverse exact :
+  // un pitch monté donnait un résultat plus bas et avec un ratio incohérent
+  // (mesuré 0.70 au lieu de 1.4983 attendu pour +7 demi-tons) → harmoniques
+  // non-entières → son métallique/cloche caractéristique.
+  const hopS=Math.max(1,Math.min(Math.round(hopA*pitchFactor),N>>1));
 
   const win=new Float32Array(N);
   for(let i=0;i<N;i++) win[i]=0.5*(1-Math.cos(2*Math.PI*i/(N-1)));
@@ -711,6 +724,15 @@ function processSingle(mono,semitones,sampleRate,trackIndex){
 
   // 9. Reverb Plate
   shifted=applyPlateReverb(shifted,sampleRate,profile.reverbWet);
+
+  // 10. Limiteur de sécurité final — empêche tout dépassement de 1.0
+  // (observé occasionnellement sur Octave bas après cumul des étages)
+  let peakOut=0;
+  for(let i=0;i<shifted.length;i++) peakOut=Math.max(peakOut,Math.abs(shifted[i]));
+  if(peakOut>0.98){
+    const n=0.98/peakOut;
+    for(let i=0;i<shifted.length;i++) shifted[i]*=n;
+  }
 
   return shifted;
 }
