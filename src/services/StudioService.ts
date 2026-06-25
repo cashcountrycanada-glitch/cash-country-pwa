@@ -663,6 +663,31 @@ export const studioService = {
           }
         }
 
+        // Pour les sentinelles opfs: (FX appliqué) → sauvegarder le blob FX sous rec_ aussi
+        // Sans ça, le FX est perdu au rechargement car le blob opfs: n'est pas sous rec_${id}
+        if (isOpfsSentinel && rec.dataUrl?.startsWith('opfs:')) {
+          try {
+            const fxKey = rec.dataUrl.slice(5);
+            const fxBlobs = (window as any).__harmonyBlobs as Record<string,Blob> | undefined;
+            const fxResultBlobs = (window as any).__fxResultBlobs as Record<string,Blob> | undefined;
+            const lastFxBlob = (window as any).__lastFxBlob as Blob | undefined;
+            const lastFxKey = (window as any).__lastFxKey as string | undefined;
+            const fxBlob = (fxBlobs && fxBlobs[fxKey])
+              || (fxResultBlobs && fxResultBlobs[fxKey])
+              || (lastFxKey === fxKey ? lastFxBlob : undefined);
+            if (fxBlob && fxBlob.size > 100) {
+              await db.saveAudio(`rec_${rec.id}`, fxBlob, {
+                songId: rec.songId,
+                songTitle: rec.songTitle,
+                type: 'recording_fx',
+                savedAt: Date.now(),
+              });
+            }
+          } catch (fxSaveErr) {
+            console.warn('[saveRec] FX blob sous rec_ non sauvegardé:', fxSaveErr);
+          }
+        }
+
         // Sauvegarder aussi les métadonnées
         const meta = { ...rec, dataUrl: undefined, blob: undefined };
         const existing = await db.getState<any[]>('recordings', []);

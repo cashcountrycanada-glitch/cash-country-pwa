@@ -32,15 +32,25 @@ let rbReady = false;
 
 async function initRubberBand() {
   try {
-    // Charger le JS wrapper UMD
-    importScripts('/rubberband.umd.min.js');
+    // Charger le JS wrapper via fetch + eval pour éviter les problèmes de SW cache
+    // importScripts() peut échouer silencieusement si le SW sert une mauvaise version
+    const jsResp = await fetch('/rubberband.umd.min.js', { cache: 'no-store' });
+    if (!jsResp.ok) throw new Error('rubberband.umd.min.js HTTP ' + jsResp.status);
+    const jsText = await jsResp.text();
+    // eslint-disable-next-line no-new-func
+    (new Function(jsText))();
+
+    // rubberband est maintenant disponible sur self (globalThis dans le worker)
+    const rb = self.rubberband || globalThis.rubberband;
+    if (!rb || !rb.RubberBandInterface) throw new Error('rubberband global non disponible après eval');
 
     // Charger et compiler le WASM
-    const wasmResp = await fetch('/rubberband.wasm');
+    const wasmResp = await fetch('/rubberband.wasm', { cache: 'no-store' });
     if (!wasmResp.ok) throw new Error('rubberband.wasm HTTP ' + wasmResp.status);
     const wasm = await WebAssembly.compileStreaming(wasmResp);
-    rbApi = await rubberband.RubberBandInterface.initialize(wasm);
+    rbApi = await rb.RubberBandInterface.initialize(wasm);
     rbReady = true;
+    console.log('[HarmonyWorker] Rubber Band WASM prêt ✅');
   } catch(e) {
     console.error('[HarmonyWorker] Rubber Band init failed:', e);
     rbReady = false;

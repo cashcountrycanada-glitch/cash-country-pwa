@@ -103,8 +103,11 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
       if (ctx.state === 'suspended') await ctx.resume();
 
       if (!liveBufRef.current) {
-        const resp = await fetch(track.dataUrl);
-        const ab = await resp.arrayBuffer();
+        // Résoudre le blob correctement — supporte data:, opfs:, blob:
+        // fetch(track.dataUrl) ne fonctionne pas sur Safari iOS pour les data: URL
+        const blob = await studioService.resolveBlobAsync(track.dataUrl);
+        if (!blob || blob.size === 0) throw new Error('Blob introuvable pour preview');
+        const ab = await blob.arrayBuffer();
         liveBufRef.current = await ctx.decodeAudioData(ab);
       }
 
@@ -197,6 +200,15 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
         sourceDataUrl, fx,
         (pct) => setApplyPct(pct),
       );
+
+      // Stocker le blob FX sous __trackBlob_${track.id} pour que playRecording
+      // trouve toujours le bon audio même si rec.dataUrl est une sentinelle opfs:
+      // C'est le fix du bug "FX inaudible" : playRecording tombe en IDB (prise brute)
+      // si __trackBlob_ ne pointe pas vers le résultat FX.
+      const fxResultBlob = (window as any).__lastFxBlob as Blob | undefined;
+      if (fxResultBlob && fxResultBlob.size > 100) {
+        (window as any)[`__trackBlob_${track.id}`] = fxResultBlob;
+      }
       const updated = {
         ...track,
         dataUrl: newDataUrl,

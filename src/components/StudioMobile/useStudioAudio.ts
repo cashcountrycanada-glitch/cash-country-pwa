@@ -551,7 +551,11 @@ export function useStudioAudio(selected: Song | null): AudioResult {
           const fxBlob = (window as any).__lastFxBlob as Blob | undefined;
           const fxKey  = (window as any).__lastFxKey  as string | undefined;
           const harmBlobs = (window as any).__harmonyBlobs as Record<string,Blob> | undefined;
-          if (fxBlob && fxKey === key) {
+          // Priorité : blob storé directement sous l'id de la piste (mis par handleApplyFx)
+          const trackBlob = (window as any)[`__trackBlob_${rec.id}`] as Blob | undefined;
+          if (trackBlob && trackBlob.size > 100) {
+            blob = trackBlob;
+          } else if (fxBlob && fxKey === key) {
             blob = fxBlob;
           } else if (harmBlobs && harmBlobs[key]) {
             blob = harmBlobs[key];
