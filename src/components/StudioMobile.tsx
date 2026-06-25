@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.268';
+const BUILD_VERSION = 'v7.6.271';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -591,13 +591,13 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     const takes: { A?: any; B?: any; C?: any } = {};
     if (!project) return takes;
     // Pour la voix principale seulement (trackIndex 0, non générée)
-    // Les harmonies ont leur propre gestion de slots dans HarmonyGuide
+    // takeSlot absent (anciennes prises) → défaut 'A' (slots B/C n'existaient pas encore)
     project.tracks.forEach(t => {
-      if (t.trackIndex === 0 && !t.isGenerated && t.takeSlot) {
-        // Ne garder que la prise la plus récente par slot (au cas où dedup raté)
-        const existing = takes[t.takeSlot as 'A' | 'B' | 'C'];
+      if (t.trackIndex === 0 && !t.isGenerated) {
+        const slot = (t.takeSlot as 'A' | 'B' | 'C') ?? 'A';
+        const existing = takes[slot];
         if (!existing || (t as any).recordedAt > (existing as any).recordedAt) {
-          takes[t.takeSlot as 'A' | 'B' | 'C'] = t;
+          takes[slot] = t;
         }
       }
     });
