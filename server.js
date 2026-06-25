@@ -51,6 +51,22 @@ app.get('/libs/', (req, res) => {
   res.json({ libsDir, exists, files });
 });
 
+// ── Rubber Band WASM — routes explicites avec bon Content-Type ───────────────
+app.get('/rubberband.wasm', (req, res) => {
+  const filePath = path.join(ROOT, 'public', 'rubberband.wasm');
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'rubberband.wasm not found' });
+  res.setHeader('Content-Type', 'application/wasm');
+  res.setHeader('Cache-Control', 'public, max-age=604800'); // 1 semaine
+  res.sendFile(filePath);
+});
+app.get('/rubberband.umd.min.js', (req, res) => {
+  const filePath = path.join(ROOT, 'public', 'rubberband.umd.min.js');
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'rubberband.umd.min.js not found' });
+  res.setHeader('Content-Type', 'application/javascript');
+  res.setHeader('Cache-Control', 'public, max-age=604800');
+  res.sendFile(filePath);
+});
+
 // Fichiers statiques (sw-studio.js, manifest.json, recorder-worklet.js, env_config.js)
 app.use(express.static(ROOT, {
   index: false,

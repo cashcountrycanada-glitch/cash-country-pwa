@@ -19,7 +19,7 @@
  * ╚══════════════════════════════════════════════════════════════════╝
  */
 
-const CACHE = 'studio-v361';
+const CACHE = 'studio-v363';
 
 const CRITICAL = [
   '/index-pwa.html',
@@ -34,6 +34,8 @@ const CRITICAL = [
 
 const USEFUL = [
   '/lame.min.js',
+  '/rubberband.umd.min.js',
+  '/rubberband.wasm',
 ];
 
 const EXTERNAL_LIBS = [

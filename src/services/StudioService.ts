@@ -1475,7 +1475,7 @@ export const studioService = {
     if (hasChordData) progress(`🎵 Analyse harmonique — ${chordMap.length} accords détectés`, 8);
 
     // Helper : envoyer une couche au Web Worker et attendre le résultat WAV
-    const processLayerInWorker = (op: string, semitones: number, gain: number, pan: number): Promise<Blob> => {
+    const processLayerInWorker = (op: string, semitones: number, gain: number, pan: number, trackIndex?: number): Promise<Blob> => {
       return new Promise((resolve, reject) => {
         const workerUrl = '/harmony-worker.js';
         let worker: Worker;
@@ -1508,7 +1508,7 @@ export const studioService = {
           }
         };
         worker.onerror = (e) => { clearTimeout(timeout); worker.terminate(); reject(new Error(e.message)); };
-        worker.postMessage({ id, op, channelL: transferL, channelR: transferR, semitones, gain, pan, sampleRate: srcBuffer.sampleRate }, [transferL.buffer, transferR.buffer]);
+        worker.postMessage({ id, op, channelL: transferL, channelR: transferR, semitones, gain, pan, sampleRate: srcBuffer.sampleRate, trackIndex: trackIndex ?? 2 }, [transferL.buffer, transferR.buffer]);
       });
     };
 
@@ -1536,7 +1536,7 @@ export const studioService = {
       try {
         blob = await processLayerInWorker(
           layer.isDouble ? 'double' : 'pitch',
-          layer.pitch, layer.gain, layer.pan
+          layer.pitch, layer.gain, layer.pan, layer.trackIndex
         );
         progress(`${layer.emoji} ${layer.trackLabel} — OK (${(blob.size/1024).toFixed(0)} Ko)`, pct + 5);
       } catch (workerErr: any) {
