@@ -687,7 +687,7 @@ export default function RecordScreen({
       {/* Badge statut pendant l'enregistrement */}
       {renderAutoStatusBadge()}
 
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-y-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
         {/* Sélection piste */}
         {/* ── GUIDE VOCAL HARMONIQUE — affiché pour toutes les harmonies (index ≥ 2) ── */}
         {currentPreset.index >= 2 && (
