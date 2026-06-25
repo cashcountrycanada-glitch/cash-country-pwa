@@ -43,6 +43,8 @@ interface Props {
   stemDuration: number; sections: SectionMarker[];
   autoSelectReason: AutoSelectReason;
   activeDeviceLabel: string;
+  onPlayRaw: (rec: any) => void;
+  playingId: string | null;
 }
 
 function parseLyricsWithChords(raw: string): { text: string; isChord: boolean; isSection: boolean }[] {
@@ -494,7 +496,7 @@ export default function RecordScreen({
   onPreviewStems, isPreviewing, onPreWarmMic,
   audioDevices, selectedDevice, onSelectDevice, onRefreshDevices,
   punchIn, punchOut, onSetPunchIn, onSetPunchOut, stemDuration, sections,
-  autoSelectReason, activeDeviceLabel,
+  autoSelectReason, activeDeviceLabel, onPlayRaw, playingId,
 }: Props) {
   const localVolRef = useRef<number>(vocalGuideVol);
   const [localVol, setLocalVol] = useState<number>(vocalGuideVol);
@@ -760,6 +762,25 @@ export default function RecordScreen({
           )}
         </div>
 
+        {/* Écouter la prise brute + accès Clean/FX */}
+        {slotTakes[takeSlot] && !isRecording && (
+          <div className="shrink-0 px-4 pt-3 pb-1">
+            <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest mb-2">Écouter</p>
+            <div className="flex gap-2">
+              <button onClick={() => onPlayRaw(slotTakes[takeSlot])}
+                className="flex-1 py-2 rounded-xl font-black text-[10px] uppercase tracking-wider active:scale-95 transition-all"
+                style={{ background: playingId === slotTakes[takeSlot]?.id ? '#166534' : '#14532d', color: '#4ade80', border: '1px solid #166534' }}>
+                {playingId === slotTakes[takeSlot]?.id ? '■ Stop' : '🎙 Brut'}
+              </button>
+              <button onClick={onGoMixer}
+                className="flex-1 py-2 rounded-xl font-black text-[10px] uppercase tracking-wider active:scale-95 transition-all"
+                style={{ background: '#1c1917', color: '#a8a29e', border: '1px solid #292524' }}>
+                ✨ Clean / FX →
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="shrink-0 px-4 pt-4 pb-2">
           <p className="text-[9px] text-zinc-700 font-black uppercase tracking-widest mb-2">Piste</p>
           <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
@@ -916,9 +937,12 @@ export default function RecordScreen({
                 </span>
               </div>
             )}
-            {/* Reverb dans le retour écouteurs — aide à chanter sans forcer */}
+            {/* Signal brut V8 — indicateur (reverb monitoring retiré) */}
             {(monitoring || isRecording) && (
-              <ReverbMonitorSlider />
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[9px] text-green-400 font-black uppercase tracking-widest">🎙 Signal brut V8</span>
+                <span className="text-[9px] text-zinc-400">— aucun traitement • post-prod uniquement</span>
+              </div>
             )}
             <VUMeter analyser={analyser} vuLevel={vuLevel} active={isRecording} />
           </div>

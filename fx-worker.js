@@ -1,4 +1,4 @@
-// fx-worker.js v5 — Reverb Dattorro 1997 + Early Reflections + Modulation LFO
+// fx-worker.js v6 — Reverb Schroeder/Moorer corrigée + chaîne FX
 
 // ── High-Pass Filter Butterworth 2nd order ───────────────────────────────
 function applyHPF(data, fcHz, sr) {
@@ -89,7 +89,7 @@ function applyDeEsser(data, sr, thresholdDB, freqHz, bwHz, maxCutDB) {
   return out;
 }
 
-// ── Compresseur avec ballistic detection ────────────────────────────────
+// ── Compresseur ────────────────────────────────────────────────────────
 function compress(data, threshold, ratio, attackMs, releaseMs, sr, kneeDb, blend) {
   if (ratio<=1.0) return data;
   blend=blend!==undefined?blend:0.5;
@@ -176,241 +176,166 @@ function saturate(data, amount) {
   return out;
 }
 
-// ── Reverb Dattorro (1997) — algorithme studio pro ───────────────────────
-// Référence: Jon Dattorro, "Effect Design Part 1: Reverberator and Other Filters"
-// Journal of the Audio Engineering Society, 1997
+// ── Reverb Schroeder/Moorer corrigée — 4 combs + 2 allpass par canal ────
+// Architecture classique mais fiable, réponse audible garantie.
+// Stéréo naturel : délais légèrement différents L/R.
 //
-// Architecture :
-//   Input → Pre-EQ (HPF 200Hz) → Pre-delay → 4 allpass d'entrée
-//   → 2 tanks stéréo en boucle (chacun : delay + allpass modulé + diffusion)
-//   → Early Reflections mixées séparément
-//   → Mix dry/wet
-//
-// Améliorations vs Schroeder :
-//   - Modulation LFO sur les délais des allpass du tank → évite la coloration tonale
-//   - Early reflections réalistes → définit la taille perçue de la salle
-//   - Pre-EQ HPF sur le signal envoyé à la reverb → évite la boue dans les graves
-//   - Décorrélation stéréo naturelle via les deux tanks indépendants
+// Bug v5 corrigé : les taps Dattorro lisaient aux mauvais offsets
+// (pointeur déjà avancé). Cette implémentation utilise des délais
+// circulaires simples avec lecture ARRIÈRE garantie.
+
+function makeDelay(size) {
+  return { buf: new Float32Array(size), ptr: 0, size };
+}
+
+function delayRead(d) {
+  return d.buf[d.ptr];
+}
+
+function delayWrite(d, v) {
+  d.buf[d.ptr] = v;
+  d.ptr = (d.ptr + 1) % d.size;
+}
+
+function combFilter(d, input, feedback, damp) {
+  // Schroeder comb with damping (lowpass in feedback loop)
+  const delayed = delayRead(d);
+  const filtered = delayed * (1 - damp) + (d._last || 0) * damp;
+  d._last = filtered;
+  delayWrite(d, input + filtered * feedback);
+  return filtered;
+}
+
+function allpassFilter(d, input, coeff) {
+  const delayed = delayRead(d);
+  const out = -input * coeff + delayed;
+  delayWrite(d, input + delayed * coeff);
+  return out;
+}
+
+// Délais en ms (seront convertis en samples selon sr)
+// L/R légèrement différents pour décorrélation stéréo naturelle
+const COMB_DELAYS_MS = {
+  L: [29.7, 37.1, 41.1, 43.7],
+  R: [30.1, 37.5, 41.5, 44.1],
+};
+const ALLPASS_DELAYS_MS = {
+  L: [5.0, 1.7],
+  R: [5.1, 1.8],
+};
+
+const REVERB_PARAMS = {
+  room:  { feedback: 0.76, damp: 0.35, preDelayMs: 8,  erDecay: 0.55 },
+  hall:  { feedback: 0.82, damp: 0.25, preDelayMs: 22, erDecay: 0.70 },
+  plate: { feedback: 0.78, damp: 0.45, preDelayMs: 4,  erDecay: 0.60 },
+};
+
+function reverbChannel(input, combDelays, apDelays, sr, params) {
+  const len = input.length;
+  const { feedback, damp, preDelayMs } = params;
+
+  // Pre-delay
+  const preD = Math.max(1, Math.round(preDelayMs * sr / 1000));
+  const preBuf = new Float32Array(preD);
+  let prePtr = 0;
+
+  // 4 comb filters
+  const combs = combDelays.map(ms => makeDelay(Math.round(ms * sr / 1000)));
+
+  // 2 allpass filters
+  const allpasses = apDelays.map(ms => makeDelay(Math.round(ms * sr / 1000)));
+
+  const out = new Float32Array(len);
+
+  for (let i = 0; i < len; i++) {
+    // Pre-delay
+    const preSig = preBuf[prePtr];
+    preBuf[prePtr] = input[i];
+    prePtr = (prePtr + 1) % preD;
+
+    // 4 combs en parallèle
+    let combSum = 0;
+    for (const c of combs) {
+      combSum += combFilter(c, preSig, feedback, damp);
+    }
+    combSum *= 0.25; // moyenne des 4 combs
+
+    // 2 allpass en série
+    let sig = combSum;
+    for (const ap of allpasses) {
+      sig = allpassFilter(ap, sig, 0.5);
+    }
+
+    out[i] = sig;
+  }
+  return out;
+}
+
+// Early reflections simples (7 taps) — définissent la taille perçue
+function earlyReflections(input, sr, erDecay) {
+  const tapsMs = [5.0, 11.0, 17.3, 23.0, 31.7, 40.2, 55.0];
+  const out = new Float32Array(input.length);
+  for (let t = 0; t < tapsMs.length; t++) {
+    const d = Math.round(tapsMs[t] * sr / 1000);
+    const g = erDecay * Math.pow(0.75, t);
+    for (let i = d; i < input.length; i++) {
+      out[i] += input[i - d] * g;
+    }
+  }
+  return out;
+}
 
 function reverb(dL, dR, type, mix, sr) {
-  if (type==='none'||type==='sec'||mix<=0) return {L:dL,R:dR};
-  const len=dL.length;
-  // Traitement par blocs de 30s pour éviter le crash mémoire iOS (~128MB limit)
-  // Les buffers de signal pour 3min+ dépassent la limite du Web Worker
-  const chunkSamples = sr * 30; // blocs 30s
-  if (len > chunkSamples) {
-    const outL = new Float32Array(len), outR = new Float32Array(len);
-    // Traiter chunk par chunk en réutilisant l'état des buffers entre les blocs
-    let pos = 0;
-    while (pos < len) {
-      const end = Math.min(pos + chunkSamples, len);
-      const chunkL = dL.slice(pos, end);
-      const chunkR = dR.slice(pos, end);
-      const res = reverbCore(chunkL, chunkR, type, mix, sr);
-      outL.set(res.L, pos);
-      outR.set(res.R, pos);
-      pos = end;
-    }
-    return {L:outL, R:outR};
-  }
-  return reverbCore(dL, dR, type, mix, sr);
-}
+  if (!type || type === 'none' || type === 'sec' || mix <= 0) return { L: dL, R: dR };
 
-function reverbCore(dL, dR, type, mix, sr) {
-  const len=dL.length;
+  const params = REVERB_PARAMS[type] || REVERB_PARAMS.room;
+  const len = dL.length;
 
-  // Paramètres par type de salle
-  const cfgs = {
-    room:  { preDelayMs:8,   decay:0.50, inputDiff1:0.750, inputDiff2:0.625, tankDiff:0.700, tankDecay:0.500, modDepth:0.3, modRate:0.10, erMix:0.25 },
-    hall:  { preDelayMs:20,  decay:0.75, inputDiff1:0.750, inputDiff2:0.625, tankDiff:0.700, tankDecay:0.750, modDepth:0.5, modRate:0.07, erMix:0.20 },
-    plate: { preDelayMs:5,   decay:0.60, inputDiff1:0.750, inputDiff2:0.625, tankDiff:0.700, tankDecay:0.600, modDepth:0.6, modRate:0.14, erMix:0.15 },
-  };
-  const c=cfgs[type]||cfgs.room;
+  // HPF sur signal entrant (coupe boue basse dans la reverb)
+  const hpfRev = (sig) => applyHPF(sig, 120, sr);
+  const inL = hpfRev(dL);
+  const inR = hpfRev(dR);
 
-  // ── Pre-EQ : HPF 200Hz sur le signal envoyé à la reverb ─────────────────
-  // Évite la boue dans les graves — standard studio
-  const preEQ=(sig)=>{
-    const wc=2*Math.PI*200/sr, k=Math.tan(wc/2);
-    const norm=1/(1+Math.SQRT2*k+k*k);
-    const b0=norm,b1=-2*norm,b2=norm,a1=2*(k*k-1)*norm,a2=(1-Math.SQRT2*k+k*k)*norm;
-    const out=new Float32Array(sig.length); let x1=0,x2=0,y1=0,y2=0;
-    for (let i=0;i<sig.length;i++) {
-      const x0=sig[i],y0=b0*x0+b1*x1+b2*x2-a1*y1-a2*y2;
-      out[i]=y0; x2=x1; x1=x0; y2=y1; y1=y0;
-    }
-    return out;
-  };
-  const inL=preEQ(dL), inR=preEQ(dR);
-
-  // ── Early Reflections ─────────────────────────────────────────────────────
-  // 7 réflexions précoces par canal avec délais et gains calibrés
-  // Simule les premières réflexions des murs d'une vraie salle
-  const erTapsMs = [
-    {ms:5.0, gL:0.70, gR:0.50}, {ms:11.0,gL:0.60,gR:0.70},
-    {ms:17.3,gL:0.50,gR:0.40}, {ms:23.0,gL:0.40,gR:0.55},
-    {ms:31.7,gL:0.35,gR:0.30}, {ms:40.2,gL:0.25,gR:0.35},
-    {ms:55.0,gL:0.15,gR:0.20},
-  ];
-  const erL=new Float32Array(len), erR=new Float32Array(len);
-  for (const tap of erTapsMs) {
-    const d=Math.floor(tap.ms*sr/1000);
-    for (let i=d;i<len;i++) {
-      erL[i]+=inL[i-d]*tap.gL;
-      erR[i]+=inR[i-d]*tap.gR;
-    }
+  // Mixer légèrement L+R pour alimenter les deux canaux (évite reverb fantôme mono)
+  const feedL = new Float32Array(len);
+  const feedR = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    feedL[i] = inL[i] * 0.85 + inR[i] * 0.15;
+    feedR[i] = inR[i] * 0.85 + inL[i] * 0.15;
   }
 
-  // ── Pre-delay ─────────────────────────────────────────────────────────────
-  const preD=Math.max(1,Math.floor(c.preDelayMs*sr/1000));
-  const preBufL=new Float32Array(preD), preBufR=new Float32Array(preD); let prePtr=0;
+  // Early reflections
+  const erL = earlyReflections(feedL, sr, params.erDecay);
+  const erR = earlyReflections(feedR, sr, params.erDecay);
 
-  // ── 4 Allpass d'entrée (diffusion du signal entrant) ─────────────────────
-  // Ces allpass "éparpillent" le signal dans le temps avant le tank
-  const apInDelays=[142,107,379,277].map(d=>Math.floor(d*sr/44100));
-  const apInBufsL=apInDelays.map(d=>new Float32Array(d));
-  const apInBufsR=apInDelays.map(d=>new Float32Array(d));
-  const apInPtrsL=new Int32Array(4), apInPtrsR=new Int32Array(4);
-
-  // ── Tank L : boucle de réverbération gauche ──────────────────────────────
-  // Délais du tank (en samples à 44.1kHz, normalisés au sr actuel)
-  const tankLDelays=[4453,3720,4217].map(d=>Math.floor(d*sr/44100));
-  const tankLBufs=tankLDelays.map(d=>new Float32Array(d+8)); // +8 pour la modulation
-  const tankLPtrs=new Int32Array(3);
-  // Allpass du tank L avec modulation LFO
-  const apLDelays=[908,2656].map(d=>Math.floor(d*sr/44100));
-  const apLBufs=apLDelays.map(d=>new Float32Array(d+8));
-  const apLPtrs=new Int32Array(2);
-
-  // ── Tank R : boucle de réverbération droite ──────────────────────────────
-  const tankRDelays=[4217,3163,3720].map(d=>Math.floor(d*sr/44100));
-  const tankRBufs=tankRDelays.map(d=>new Float32Array(d+8));
-  const tankRPtrs=new Int32Array(3);
-  const apRDelays=[2656,908].map(d=>Math.floor(d*sr/44100));
-  const apRBufs=apRDelays.map(d=>new Float32Array(d+8));
-  const apRPtrs=new Int32Array(2);
-
-  // État des tanks (feedback)
-  let tankL=0, tankR=0;
-
-  // LFO pour la modulation des allpass du tank (évite la coloration tonale)
-  const lfoRate=c.modRate; // Hz
-  const lfoInc=2*Math.PI*lfoRate/sr;
-  let lfoPhaseL=0, lfoPhaseR=Math.PI*0.5; // déphasés pour stéréo naturel
-  const modDepthSamp=Math.floor(c.modDepth*sr/1000); // profondeur en samples
-
-  const wetL=new Float32Array(len), wetR=new Float32Array(len);
-
-  // Fonction allpass modulé (cœur du tank Dattorro)
-  const allpassMod=(buf, ptr, len, coeff, input, modOffset)=>{
-    const readPtr=(ptr-Math.floor(modOffset)+len+len)%len;
-    const delayed=buf[readPtr];
-    const out=delayed+input*(-coeff);
-    buf[ptr%len]=input+delayed*coeff;
-    return { out, next:(ptr+1)%len };
-  };
-
-  for (let i=0;i<len;i++) {
-    // Pre-delay
-    const pdL=preBufL[prePtr], pdR=preBufR[prePtr];
-    preBufL[prePtr]=inL[i]||0; preBufR[prePtr]=inR[i]||0;
-    prePtr=(prePtr+1)%preD;
-
-    // Mixer les deux canaux en entrée des allpass (mono diffusion)
-    let sigL=(pdL+pdR)*0.5, sigR=sigL;
-
-    // 4 Allpass d'entrée (même pour L et R, diffusion identique)
-    for (let a=0;a<4;a++) {
-      // Canal L
-      const dL2=apInBufsL[a][apInPtrsL[a]];
-      const outL2=dL2-c.inputDiff1*sigL;
-      apInBufsL[a][apInPtrsL[a]]=sigL+dL2*c.inputDiff1;
-      sigL=outL2; apInPtrsL[a]=(apInPtrsL[a]+1)%apInDelays[a];
-      // Canal R (légèrement différent pour décorrélation stéréo)
-      const dR2=apInBufsR[a][apInPtrsR[a]];
-      const outR2=dR2-c.inputDiff2*sigR;
-      apInBufsR[a][apInPtrsR[a]]=sigR+dR2*c.inputDiff2;
-      sigR=outR2; apInPtrsR[a]=(apInPtrsR[a]+1)%apInDelays[a];
-    }
-
-    // LFO modulation
-    lfoPhaseL+=lfoInc; if (lfoPhaseL>2*Math.PI) lfoPhaseL-=2*Math.PI;
-    lfoPhaseR+=lfoInc; if (lfoPhaseR>2*Math.PI) lfoPhaseR-=2*Math.PI;
-    const lfoL=0.5*(1+Math.sin(lfoPhaseL))*modDepthSamp;
-    const lfoR=0.5*(1+Math.sin(lfoPhaseR))*modDepthSamp;
-
-    // ── Tank gauche ───────────────────────────────────────────────────────
-    let tL=sigL+tankR*c.decay;
-    // Delay 1
-    const tL_d0=tankLBufs[0][tankLPtrs[0]];
-    tankLBufs[0][tankLPtrs[0]]=tL; tankLPtrs[0]=(tankLPtrs[0]+1)%tankLDelays[0];
-    tL=tL_d0;
-    // Allpass modulé 1
-    const apLmod1=allpassMod(apLBufs[0],apLPtrs[0],apLDelays[0],c.tankDiff,tL,lfoL);
-    tL=apLmod1.out; apLPtrs[0]=apLmod1.next;
-    // Delay 2
-    const tL_d1=tankLBufs[1][tankLPtrs[1]];
-    tankLBufs[1][tankLPtrs[1]]=tL*c.tankDecay; tankLPtrs[1]=(tankLPtrs[1]+1)%tankLDelays[1];
-    tL=tL_d1;
-    // Allpass modulé 2
-    const apLmod2=allpassMod(apLBufs[1],apLPtrs[1],apLDelays[1],c.tankDiff,tL,lfoL*0.7);
-    tL=apLmod2.out; apLPtrs[1]=apLmod2.next;
-    // Delay 3
-    const tL_d2=tankLBufs[2][tankLPtrs[2]];
-    tankLBufs[2][tankLPtrs[2]]=tL; tankLPtrs[2]=(tankLPtrs[2]+1)%tankLDelays[2];
-    tankL=tL_d2;
-
-    // ── Tank droit ────────────────────────────────────────────────────────
-    let tR=sigR+tankL*c.decay;
-    const tR_d0=tankRBufs[0][tankRPtrs[0]];
-    tankRBufs[0][tankRPtrs[0]]=tR; tankRPtrs[0]=(tankRPtrs[0]+1)%tankRDelays[0];
-    tR=tR_d0;
-    const apRmod1=allpassMod(apRBufs[0],apRPtrs[0],apRDelays[0],c.tankDiff,tR,lfoR);
-    tR=apRmod1.out; apRPtrs[0]=apRmod1.next;
-    const tR_d1=tankRBufs[1][tankRPtrs[1]];
-    tankRBufs[1][tankRPtrs[1]]=tR*c.tankDecay; tankRPtrs[1]=(tankRPtrs[1]+1)%tankRDelays[1];
-    tR=tR_d1;
-    const apRmod2=allpassMod(apRBufs[1],apRPtrs[1],apRDelays[1],c.tankDiff,tR,lfoR*0.7);
-    tR=apRmod2.out; apRPtrs[1]=apRmod2.next;
-    const tR_d2=tankRBufs[2][tankRPtrs[2]];
-    tankRBufs[2][tankRPtrs[2]]=tR; tankRPtrs[2]=(tankRPtrs[2]+1)%tankRDelays[2];
-    tankR=tR_d2;
-
-    // Sorties wet : taps multiples sur les tanks (technique Dattorro)
-    // Plusieurs points de lecture sur les délais du tank → densité naturelle
-    const outL2 = tankLBufs[1][(tankLPtrs[1]+Math.floor(tankLDelays[1]*0.28))%tankLDelays[1]]
-                + tankLBufs[2][(tankLPtrs[2]+Math.floor(tankLDelays[2]*0.54))%tankLDelays[2]]
-                - apRBufs[0][(apRPtrs[0]+Math.floor(apRDelays[0]*0.63))%apRDelays[0]]
-                + tankRBufs[1][(tankRPtrs[1]+Math.floor(tankRDelays[1]*0.41))%tankRDelays[1]]
-                - tankLBufs[0][(tankLPtrs[0]+Math.floor(tankLDelays[0]*0.72))%tankLDelays[0]]
-                - apLBufs[1][(apLPtrs[1]+Math.floor(apLDelays[1]*0.35))%apLDelays[1]];
-
-    const outR2 = tankRBufs[1][(tankRPtrs[1]+Math.floor(tankRDelays[1]*0.28))%tankRDelays[1]]
-                + tankRBufs[2][(tankRPtrs[2]+Math.floor(tankRDelays[2]*0.54))%tankRDelays[2]]
-                - apLBufs[0][(apLPtrs[0]+Math.floor(apLDelays[0]*0.63))%apLDelays[0]]
-                + tankLBufs[1][(tankLPtrs[1]+Math.floor(tankLDelays[1]*0.41))%tankLDelays[1]]
-                - tankRBufs[0][(tankRPtrs[0]+Math.floor(tankRDelays[0]*0.72))%tankRDelays[0]]
-                - apRBufs[1][(apRPtrs[1]+Math.floor(apRDelays[1]*0.35))%apRDelays[1]];
-
-    wetL[i]=outL2; wetR[i]=outR2;
-  }
+  // Comb + allpass par canal (délais différents L/R)
+  const wetL = reverbChannel(feedL, COMB_DELAYS_MS.L, ALLPASS_DELAYS_MS.L, sr, params);
+  const wetR = reverbChannel(feedR, COMB_DELAYS_MS.R, ALLPASS_DELAYS_MS.R, sr, params);
 
   // Normaliser wet
-  let peak=0;
-  for (let i=0;i<len;i++) peak=Math.max(peak,Math.abs(wetL[i]),Math.abs(wetR[i]));
-  if (peak>0.001) { const n=0.85/peak; for(let i=0;i<len;i++){wetL[i]*=n;wetR[i]*=n;} }
+  let peakW = 0;
+  for (let i = 0; i < len; i++) peakW = Math.max(peakW, Math.abs(wetL[i]), Math.abs(wetR[i]));
+  // Normaliser ER séparément
+  let peakER = 0;
+  for (let i = 0; i < len; i++) peakER = Math.max(peakER, Math.abs(erL[i]), Math.abs(erR[i]));
 
-  // Mix final : dry + early reflections + wet tank
-  const erAmt=c.erMix;
-  const outL=new Float32Array(len), outR=new Float32Array(len);
-  const outFinal=new Float32Array(len), outFinalR=new Float32Array(len);
-  for (let i=0;i<len;i++) {
-    outFinal[i]=dL[i]*(1-mix) + (wetL[i]*(1-erAmt)+erL[i]*erAmt)*mix;
-    outFinalR[i]=dR[i]*(1-mix) + (wetR[i]*(1-erAmt)+erR[i]*erAmt)*mix;
+  const nW = peakW > 0.001 ? 1.0 / peakW : 0;
+  const nER = peakER > 0.001 ? 0.6 / peakER : 0;
+
+  // Mix final : dry*(1-mix) + (wet*0.7 + er*0.3)*mix
+  const outL = new Float32Array(len);
+  const outR = new Float32Array(len);
+  const erAmt = 0.30;
+  for (let i = 0; i < len; i++) {
+    const wL = wetL[i] * nW * (1 - erAmt) + erL[i] * nER * erAmt;
+    const wR = wetR[i] * nW * (1 - erAmt) + erR[i] * nER * erAmt;
+    outL[i] = dL[i] * (1 - mix) + wL * mix;
+    outR[i] = dR[i] * (1 - mix) + wR * mix;
   }
-  return {L:outFinal,R:outFinalR};
+  return { L: outL, R: outR };
 }
 
-// ── WAV ───────────────────────────────────────────────────────────────────
+// ── WAV encoder ───────────────────────────────────────────────────────────
 function toWav(chL, chR, sr) {
   const n=chL.length, dl=n*4, buf=new ArrayBuffer(44+dl), v=new DataView(buf);
   const ws=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i));};
@@ -432,29 +357,30 @@ self.onmessage = function(e) {
   const {id,channelL,channelR,sampleRate,fx}=e.data;
   try {
     let pL=new Float32Array(channelL), pR=new Float32Array(channelR);
-    self.postMessage({id,type:'progress',pct:8, label:'EQ...'});
+    self.postMessage({id,type:'progress',pct:8,  label:'EQ...'});
     pL=applyEQChain(pL,fx,sampleRate); pR=applyEQChain(pR,fx,sampleRate);
-    self.postMessage({id,type:'progress',pct:18,label:'De-esser...'});
+    self.postMessage({id,type:'progress',pct:18, label:'De-esser...'});
     pL=applyDeEsser(pL,sampleRate,-20,7500,2500,-6);
     pR=applyDeEsser(pR,sampleRate,-20,7500,2500,-6);
-    self.postMessage({id,type:'progress',pct:32,label:'Compression...'});
+    self.postMessage({id,type:'progress',pct:32, label:'Compression...'});
     pL=compress(pL,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate,fx.compKnee,0.6);
     pR=compress(pR,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate,fx.compKnee,0.6);
-    self.postMessage({id,type:'progress',pct:48,label:'Auto-Tune...'});
+    self.postMessage({id,type:'progress',pct:48, label:'Auto-Tune...'});
     if ((fx.autotune||0)>0) {
       const speedMs=fx.autotuneSpeed==='fast'?30:fx.autotuneSpeed==='medium'?80:150;
       pL=autotune(pL,fx.autotune,speedMs,sampleRate);
       pR=autotune(pR,fx.autotune,speedMs,sampleRate);
     }
-    self.postMessage({id,type:'progress',pct:60,label:'Saturation...'});
+    self.postMessage({id,type:'progress',pct:60, label:'Saturation...'});
     pL=saturate(pL,fx.saturation||0); pR=saturate(pR,fx.saturation||0);
-    self.postMessage({id,type:'progress',pct:72,label:'Reverb Dattorro...'});
+    self.postMessage({id,type:'progress',pct:72, label:'Reverb...'});
     const rv=reverb(pL,pR,fx.reverb,fx.reverbMix,sampleRate);
     pL=rv.L; pR=rv.R;
+    // Limiteur final doux
     let peak=0;
     for(let i=0;i<pL.length;i++) peak=Math.max(peak,Math.abs(pL[i]),Math.abs(pR[i]));
     if(peak>0.95){const n=0.95/peak;for(let i=0;i<pL.length;i++){pL[i]*=n;pR[i]*=n;}}
-    self.postMessage({id,type:'progress',pct:92,label:'Encodage WAV...'});
+    self.postMessage({id,type:'progress',pct:92, label:'Encodage WAV...'});
     const wavBuf=toWav(pL,pR,sampleRate);
     self.postMessage({id,type:'done',wavBuf},[wavBuf]);
   } catch(err) {

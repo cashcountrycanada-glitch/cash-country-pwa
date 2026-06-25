@@ -863,108 +863,24 @@ export const studioService = {
     // l'app ne s'en rende compte ni ne corrige quoi que ce soit.
     // Seuil élevé (-3dB) et ratio fort (20:1) = transparent en usage normal,
     // intervient seulement pour écrêter les vrais pics de clipping.
-    const recLimiter = audioContext.createDynamicsCompressor();
-    recLimiter.threshold.value = -3;
-    recLimiter.knee.value = 0;
-    recLimiter.ratio.value = 20;
-    recLimiter.attack.value = 0.001;
-    recLimiter.release.value = 0.1;
+    // recLimiter retiré — enregistrement brut V8 sans compression.
+    // La V8 gère le niveau ; le post-traitement (clean, FX) se fait après.
 
     source.connect(inputGain);
-    inputGain.connect(recLimiter);
-    recLimiter.connect(analyser);
+    inputGain.connect(analyser); // Signal brut V8 — zéro traitement avant capture
 
     // ── Chaîne de monitoring temps réel avec effets ──────────────────────────
-    // inputGain → HPF → Comp léger → Reverb → monitorGain → destination
-    // iOS WebAudio natif — zéro latence ajoutée, sûr sur Lightning adapter
-
-    // HPF 80Hz — coupe le bruit de fond et les basses parasites du micro
-    const monitorHPF = audioContext.createBiquadFilter();
-    monitorHPF.type = 'highpass';
-    monitorHPF.frequency.value = 80;
-    monitorHPF.Q.value = 0.707;
-    inputGain.connect(monitorHPF);
-
-    // Compresseur léger — évite les crêtes qui saturent dans les écouteurs
-    const monitorComp = audioContext.createDynamicsCompressor();
-    monitorComp.threshold.value = -18;
-    monitorComp.ratio.value = 3;
-    monitorComp.attack.value = 0.003;
-    monitorComp.release.value = 0.15;
-    monitorComp.knee.value = 6;
-    monitorHPF.connect(monitorComp);
-
-    // Reverb temps réel — ConvolverNode avec IR synthétique (Schroeder simplifié)
-    // Générer une IR (Impulse Response) courte selon le type de reverb choisi
-    const reverbType = config.reverb ?? 'hall';
+    // Monitoring BRUT — inputGain → monitorGain → destination
+    // L'utilisateur entend exactement ce qui est enregistré (signal V8 pur).
+    // Aucun HPF, compresseur ni reverb dans le retour casque — ce qui entre sort.
     const monitorGain = audioContext.createGain();
     monitorGain.gain.value = 0;
-
-    if (reverbType !== 'none' && reverbType !== 'sec') {
-      try {
-        // Créer une IR synthétique — exponential decay + early reflections
-        const irParams: Record<string, { duration: number; decay: number; preDelay: number }> = {
-          room:  { duration: 1.1,  decay: 2.0, preDelay: 0.010 },
-          hall:  { duration: 2.2,  decay: 2.8, preDelay: 0.020 },
-          plate: { duration: 1.5,  decay: 2.4, preDelay: 0.006 },
-        };
-        const p = irParams[reverbType] || irParams.room;
-        const irSr   = audioContext.sampleRate;
-        const irLen  = Math.floor(irSr * p.duration);
-        const irBuf  = audioContext.createBuffer(2, irLen, irSr);
-        const preDelayS = Math.floor(irSr * p.preDelay);
-
-        for (let c = 0; c < 2; c++) {
-          const ch = irBuf.getChannelData(c);
-          for (let i = 0; i < irLen; i++) {
-            if (i < preDelayS) { ch[i] = 0; continue; }
-            // Decay exponentiel + bruit blanc (simule les réflexions diffuses)
-            const t = (i - preDelayS) / irSr;
-            ch[i] = (Math.random() * 2 - 1) * Math.exp(-p.decay * t);
-            // Early reflections (quelques pics dans les 80ms)
-            if (i === preDelayS + Math.floor(irSr * 0.020)) ch[i] += 0.5 * (c === 0 ? 1 : 0.7);
-            if (i === preDelayS + Math.floor(irSr * 0.035)) ch[i] += 0.35 * (c === 0 ? 0.8 : 1);
-            if (i === preDelayS + Math.floor(irSr * 0.055)) ch[i] += 0.25;
-          }
-          // Normaliser l'IR
-          let peak = 0;
-          for (let i = 0; i < irLen; i++) { const a = Math.abs(ch[i]); if (a > peak) peak = a; }
-          if (peak > 0) for (let i = 0; i < irLen; i++) ch[i] /= peak;
-        }
-
-        const convolver = audioContext.createConvolver();
-        convolver.buffer = irBuf;
-
-        // Mix dry/wet — niveau par défaut plus généreux (45% reverb) car
-        // certains chanteurs ont besoin de beaucoup de reverb dans le retour
-        // pour bien chanter sans forcer. Ajustable en live via le slider
-        // 🌊 Reverb dans RecordScreen (window.__monitorReverbWet, 0 à 0.8).
-        const savedWet = (() => { try { return parseFloat(localStorage.getItem('studio_monitorReverbWet') || '0.45'); } catch { return 0.45; } })();
-        const wetLevel = isNaN(savedWet) ? 0.45 : Math.max(0, Math.min(0.8, savedWet));
-        const dryGain = audioContext.createGain(); dryGain.gain.value = 1 - wetLevel;
-        const wetGain = audioContext.createGain(); wetGain.gain.value = wetLevel;
-
-        monitorComp.connect(dryGain);
-        monitorComp.connect(convolver);
-        convolver.connect(wetGain);
-        dryGain.connect(monitorGain);
-        wetGain.connect(monitorGain);
-
-        // Exposer pour ajustement live par le slider 🌊 Reverb (sans toucher
-        // l'enregistrement — ces noeuds sont uniquement sur le chemin monitoring,
-        // jamais connectés au worklet/recorder qui captent inputGain directement)
-        (window as any).__monitorReverbDry = dryGain;
-        (window as any).__monitorReverbWetGain = wetGain;
-        (window as any).__monitorReverbCtx = audioContext;
-      } catch (e) {
-        // Fallback si ConvolverNode échoue sur iOS — chaîne sèche
-        console.warn('[Monitor] ConvolverNode non disponible, monitoring sec:', e);
-        monitorComp.connect(monitorGain);
-      }
-    } else {
-      // Pas de reverb — signal sec direct
-      monitorComp.connect(monitorGain);
-    }
+    inputGain.connect(monitorGain);
+    // Les noeuds monitorHPF/monitorComp/convolver ne sont plus créés.
+    // Exposer des refs nulles pour compatibilité slider reverb (slider désactivé en brut)
+    (window as any).__monitorReverbDry = null;
+    (window as any).__monitorReverbWetGain = null;
+    (window as any).__monitorReverbCtx = null;
     // (monitorGain → destination est géré par toggleMonitoring)
 
     // gainedDest créé plus bas si fallback nécessaire (évite noeud inutile si worklet disponible)
@@ -1014,9 +930,9 @@ export const studioService = {
     let recorder: MediaRecorder | null = null;
     if (!useWorklet) {
       // Créer gainedDest seulement maintenant — évite un noeud actif inutile si worklet dispo
-      // Passe par recLimiter pour la même protection anti-clipping que le worklet
+      // Signal brut — analyser connecté directement (recLimiter retiré)
       const gainedDest = audioContext.createMediaStreamDestination();
-      recLimiter.connect(gainedDest);
+      analyser.connect(gainedDest);
       gainedStream = gainedDest.stream;
       const mimeType = getBestMimeType();
       const recOpts: MediaRecorderOptions = {}; if (mimeType) recOpts.mimeType = mimeType; recOpts.audioBitsPerSecond = 256000;
