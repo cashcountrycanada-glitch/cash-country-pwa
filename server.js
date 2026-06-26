@@ -67,6 +67,18 @@ app.get('/rubberband.umd.min.js', (req, res) => {
   res.sendFile(filePath);
 });
 
+// ── Routes explicites pour les Web Workers — MIME type garanti application/javascript ──
+// express.static peut retourner text/html sur iOS Safari si le SW intercepte mal
+['fx-worker.js', 'harmony-worker.js', 'recorder-worklet.js'].forEach(file => {
+  app.get('/' + file, (req, res) => {
+    const filePath = path.join(ROOT, file);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: file + ' not found' });
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(filePath);
+  });
+});
+
 // Fichiers statiques (sw-studio.js, manifest.json, recorder-worklet.js, env_config.js)
 app.use(express.static(ROOT, {
   index: false,
