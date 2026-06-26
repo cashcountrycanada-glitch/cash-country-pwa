@@ -1,4 +1,9 @@
 import { studioOfflineDB } from './StudioOfflineDB';
+// Cache-buster pour les Workers (fx-worker.js, harmony-worker.js) — évite les erreurs
+// "'text/html' is not a valid JavaScript MIME type" causées par un cache HTTP/SW périmé
+// qui retournait une vieille réponse cassée pour ces fichiers. Chaque version a une URL
+// unique → impossible que le navigateur ait un vieux cache pour cette URL précise.
+const CACHE_BUST_VERSION = '7.6.281';
 /**
  * StudioService.ts — Pipeline d'enregistrement mobile v7.6
  *
@@ -1326,7 +1331,7 @@ export const studioService = {
         try {
           const workerBlob = await new Promise<Blob>((resolve, reject) => {
             let worker: Worker;
-            try { worker = new Worker('/harmony-worker.js'); } catch(e: any) { reject(e); return; }
+            try { worker = new Worker('/harmony-worker.js?v=' + CACHE_BUST_VERSION); } catch(e: any) { reject(e); return; }
             const id = Date.now();
             const chL = buffer.getChannelData(0).slice();
             const chR = (buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0)).slice();
@@ -1502,7 +1507,7 @@ export const studioService = {
     // Helper : envoyer une couche au Web Worker et attendre le résultat WAV
     const processLayerInWorker = (op: string, semitones: number, gain: number, pan: number, trackIndex?: number): Promise<Blob> => {
       return new Promise((resolve, reject) => {
-        const workerUrl = '/harmony-worker.js';
+        const workerUrl = '/harmony-worker.js?v=' + CACHE_BUST_VERSION;
         let worker: Worker;
         try { worker = new Worker(workerUrl); } catch(e: any) {
           reject(new Error('Worker non disponible : ' + e.message)); return;
@@ -1674,7 +1679,7 @@ export const studioService = {
     // Envoyer au Worker FX — tout le traitement hors main thread
     return new Promise((resolve, reject) => {
       let worker: Worker;
-      try { worker = new Worker('/fx-worker.js'); } catch(e: any) {
+      try { worker = new Worker('/fx-worker.js?v=' + CACHE_BUST_VERSION); } catch(e: any) {
         reject(new Error('FX Worker non disponible : ' + e.message)); return;
       }
       const id = Date.now();
