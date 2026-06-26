@@ -183,17 +183,35 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
     if (!track.dataUrl) return;
     setApplyingFx(true); setApplyPct(0); setApplyDone(false);
     try {
-      // Toujours appliquer depuis l'original — évite le double-application
-      // Pour les blob: URLs (rechargées depuis IDB), utiliser le blob en mémoire directement
-      let sourceDataUrl = (track as any).originalDataUrl || track.dataUrl;
-      // Si blob: URL potentiellement morte → essayer de la re-valider via __trackBlob_
-      if (sourceDataUrl.startsWith('blob:')) {
-        const memBlob = (window as any)[`__trackBlob_${track.id}`] as Blob | undefined;
-        if (memBlob && memBlob.size > 100) {
-          // Recréer une blob: URL fraîche depuis le blob en mémoire
-          const freshUrl = URL.createObjectURL(memBlob);
-          (window as any)[`__trackBlob_${track.id}`] = memBlob; // garder en vie
-          sourceDataUrl = freshUrl;
+      // TOUJOURS appliquer depuis la voix brute originale.
+      // On cherche dans cet ordre :
+      // 1. __originalBlob_${id}  — blob brut mis de côté dès le 1er FX
+      // 2. originalDataUrl persisté sur la piste (session courante seulement)
+      // 3. __trackBlob_${id}     — MAIS seulement si pas de blob FX connu
+      // 4. track.dataUrl         — dernier recours
+      const originalBlob = (window as any)[`__originalBlob_${track.id}`] as Blob | undefined;
+      let sourceDataUrl: string;
+
+      if (originalBlob && originalBlob.size > 100) {
+        // Blob brut original mis de côté — source la plus fiable
+        sourceDataUrl = URL.createObjectURL(originalBlob);
+      } else {
+        sourceDataUrl = (track as any).originalDataUrl || track.dataUrl;
+        if (sourceDataUrl.startsWith('blob:') || sourceDataUrl.startsWith('opfs:')) {
+          // Chercher le blob brut dans backup_voice_ (jamais écrasé par les FX)
+          const { studioOfflineDB } = await import('../../services/StudioOfflineDB');
+          const backupBlob = await studioOfflineDB.getAudio(`backup_voice_${track.id}`).catch(() => null);
+          if (backupBlob && backupBlob.size > 100) {
+            sourceDataUrl = URL.createObjectURL(backupBlob);
+            // Mettre en cache pour éviter IDB à chaque fois
+            (window as any)[`__originalBlob_${track.id}`] = backupBlob;
+          } else {
+            // Fallback : blob en mémoire (peut être FX ou brut selon l'historique)
+            const memBlob = (window as any)[`__trackBlob_${track.id}`] as Blob | undefined;
+            if (memBlob && memBlob.size > 100) {
+              sourceDataUrl = URL.createObjectURL(memBlob);
+            }
+          }
         }
       }
       const newDataUrl = await studioService.applyFxToTrack(
@@ -207,6 +225,14 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
       // si __trackBlob_ ne pointe pas vers le résultat FX.
       const fxResultBlob = (window as any).__lastFxBlob as Blob | undefined;
       if (fxResultBlob && fxResultBlob.size > 100) {
+        // Sauvegarder le blob brut AVANT de l'écraser avec le FX
+        // __originalBlob_ ne doit jamais contenir un résultat FX
+        if (!(window as any)[`__originalBlob_${track.id}`]) {
+          const currentBlob = (window as any)[`__trackBlob_${track.id}`] as Blob | undefined;
+          if (currentBlob && currentBlob.size > 100) {
+            (window as any)[`__originalBlob_${track.id}`] = currentBlob;
+          }
+        }
         (window as any)[`__trackBlob_${track.id}`] = fxResultBlob;
       }
       const updated = {

@@ -360,8 +360,10 @@ self.onmessage = function(e) {
     self.postMessage({id,type:'progress',pct:8,  label:'EQ...'});
     pL=applyEQChain(pL,fx,sampleRate); pR=applyEQChain(pR,fx,sampleRate);
     self.postMessage({id,type:'progress',pct:18, label:'De-esser...'});
-    pL=applyDeEsser(pL,sampleRate,-20,7500,2500,-6);
-    pR=applyDeEsser(pR,sampleRate,-20,7500,2500,-6);
+    if ((fx.compRatio||1) > 1 || (fx.highGain||0) !== 0) {
+      pL=applyDeEsser(pL,sampleRate,-20,7500,2500,-6);
+      pR=applyDeEsser(pR,sampleRate,-20,7500,2500,-6);
+    }
     self.postMessage({id,type:'progress',pct:32, label:'Compression...'});
     pL=compress(pL,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate,fx.compKnee,0.6);
     pR=compress(pR,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate,fx.compKnee,0.6);

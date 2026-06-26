@@ -83,13 +83,16 @@ function rbPitchShift(mono, semitones, sampleRate) {
   rbApi.rubberband_set_time_ratio(rbState, timeRatio);
 
   const samplesRequired = rbApi.rubberband_get_samples_required(rbState) || 1024;
+  // Allouer un buffer plus grand que samplesRequired pour absorber les variations
+  // de taille que RubberBand peut retourner lors du retrieve (évite les artefacts/vents)
+  const bufferSize = Math.max(samplesRequired * 4, 16384);
   const outputLen = mono.length;
   const outputBuffer = new Float32Array(outputLen);
 
-  // Allouer : 1 ptr dans le tableau de canaux, + 1 buffer de données
+  // Allouer : 1 ptr dans le tableau de canaux, + 1 buffer de données sécurisé
   const channelArrayPtr = rbApi.malloc(numChannels * 4);
-  const channelDataPtr = rbApi.malloc(samplesRequired * 4);
-  rbApi.memWritePtr(channelArrayPtr, channelDataPtr); // channel 0 → offset 0
+  const channelDataPtr = rbApi.malloc(bufferSize * 4);
+  rbApi.memWritePtr(channelArrayPtr, channelDataPtr);
 
   rbApi.rubberband_set_expected_input_duration(rbState, mono.length);
 
@@ -97,7 +100,7 @@ function rbPitchShift(mono, semitones, sampleRate) {
     // ── PASS 1 : Study ──
     let read = 0;
     while (read < mono.length) {
-      const remaining = Math.min(samplesRequired, mono.length - read);
+      const remaining = Math.min(bufferSize, mono.length - read);
       rbApi.memWrite(channelDataPtr, mono.subarray(read, read + remaining));
       const isFinal = (read + remaining >= mono.length) ? 1 : 0;
       rbApi.rubberband_study(rbState, channelArrayPtr, remaining, isFinal);
@@ -113,7 +116,7 @@ function rbPitchShift(mono, semitones, sampleRate) {
         const available = rbApi.rubberband_available(rbState);
         if (available < 1) break;
         if (!final && available < samplesRequired) break;
-        const toRead = Math.min(samplesRequired, available);
+        const toRead = Math.min(bufferSize, available);
         const recv = rbApi.rubberband_retrieve(rbState, channelArrayPtr, toRead);
         if (recv > 0) {
           const chunk = rbApi.memReadF32(channelDataPtr, recv);
@@ -124,7 +127,7 @@ function rbPitchShift(mono, semitones, sampleRate) {
     };
 
     while (read < mono.length) {
-      const remaining = Math.min(samplesRequired, mono.length - read);
+      const remaining = Math.min(bufferSize, mono.length - read);
       rbApi.memWrite(channelDataPtr, mono.subarray(read, read + remaining));
       const isFinal = (read + remaining >= mono.length) ? 1 : 0;
       rbApi.rubberband_process(rbState, channelArrayPtr, remaining, isFinal);
