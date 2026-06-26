@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.278';
+const BUILD_VERSION = 'v7.6.280';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -246,10 +246,13 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // Forcer la mise à jour du SW immédiatement sans attendre fermeture des onglets
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
+    // Recharger la page quand un nouveau SW prend le contrôle
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      window.location.reload();
+    });
     navigator.serviceWorker.ready.then(reg => {
       const activate = (sw: ServiceWorker) => {
         sw.postMessage({ type: 'SKIP_WAITING' });
-        navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload(), { once: true });
       };
       if (reg.waiting) { activate(reg.waiting); return; }
       reg.addEventListener('updatefound', () => {
@@ -257,6 +260,8 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         if (!sw) return;
         sw.addEventListener('statechange', () => { if (sw.state === 'installed') activate(sw); });
       });
+      // Vérifier s'il y a une mise à jour disponible maintenant
+      reg.update().catch(() => {});
     }).catch(() => {});
   }, []);
 

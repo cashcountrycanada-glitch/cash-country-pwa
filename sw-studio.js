@@ -19,7 +19,7 @@
  * ╚══════════════════════════════════════════════════════════════════╝
  */
 
-const CACHE = 'studio-v373';
+const CACHE = 'studio-v375';
 
 const CRITICAL = [
   '/index-pwa.html',
@@ -133,6 +133,22 @@ self.addEventListener('activate', event => {
       .then(keys => Promise.all(
         keys.filter(k => k !== CACHE).map(k => caches.delete(k))
       ))
+      .then(async () => {
+        // Nettoyer les entrées empoisonnées (text/html) du cache courant
+        // Cause du bug "text/html is not a valid JS MIME type"
+        const cache = await caches.open(CACHE);
+        const WORKERS = ['/fx-worker.js', '/harmony-worker.js', '/recorder-worklet.js', '/rubberband.umd.min.js'];
+        for (const url of WORKERS) {
+          const cached = await cache.match(url);
+          if (cached) {
+            const ct = cached.headers.get('content-type') || '';
+            if (ct.includes('text/html')) {
+              await cache.delete(url);
+              console.log('[SW] Cache empoisonné nettoyé:', url);
+            }
+          }
+        }
+      })
       .then(() => self.clients.claim())
   );
 });
