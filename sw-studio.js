@@ -19,7 +19,7 @@
  * ╚══════════════════════════════════════════════════════════════════╝
  */
 
-const CACHE = 'studio-v372';
+const CACHE = 'studio-v373';
 
 const CRITICAL = [
   '/index-pwa.html',
@@ -230,7 +230,28 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  if (SOURCE_EXTENSIONS.test(url.pathname)) {
+  // ── Workers JS — toujours depuis le réseau, jamais depuis le cache ──────────
+  // iOS Safari rejette les Workers si le MIME type n'est pas application/javascript
+  // Le cache peut contenir une vieille réponse HTML (erreur 404) — on bypasse
+  const WORKER_FILES = ['/fx-worker.js', '/harmony-worker.js', '/recorder-worklet.js', '/rubberband.umd.min.js'];
+  if (WORKER_FILES.includes(url.pathname)) {
+    event.respondWith(
+      fetch(req, { cache: 'no-store' }).then(res => {
+        if (res.ok) {
+          // Mettre à jour le cache avec la bonne réponse
+          caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
+          return res;
+        }
+        // Fallback cache si réseau indisponible
+        return caches.match(req).then(cached => cached || res);
+      }).catch(() => caches.match(req).then(cached => cached ||
+        new Response('// worker offline', { headers: { 'Content-Type': 'application/javascript' } })
+      ))
+    );
+    return;
+  }
+
+
     event.respondWith(
       caches.match(req).then(async cached => {
         if (cached) {
