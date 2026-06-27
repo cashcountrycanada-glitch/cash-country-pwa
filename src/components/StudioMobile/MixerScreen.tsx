@@ -60,13 +60,15 @@ interface Props {
   autoSyncing?:     boolean;
 }
 
-// Définition des harmonies avec info musicale
+// Layers de renforcement style Luke Combs / Irvin Blais / George Hamel
+// Objectif : épaissir et renforcer la voix principale, PAS des harmonies distinctes
+// Max ±4 demi-tons pour rester dans le registre de renforcement
 const HARMONY_DEFS = [
-  { trackIndex: 1, label: 'Double',    pitch:  0,  color: '#f97316', emoji: '🎵', musicNote: 'Unisson',   desc: 'Épaissit la voix' },
-  { trackIndex: 2, label: '+3',        pitch:  3,  color: '#eab308', emoji: '🎶', musicNote: 'Tierce m.', desc: 'Harmonie douce' },
-  { trackIndex: 3, label: '+7',        pitch:  7,  color: '#22c55e', emoji: '🎼', musicNote: 'Quinte',    desc: 'Harmonie forte' },
-  { trackIndex: 4, label: 'Oct ↓',    pitch: -12, color: '#3b82f6', emoji: '🔉', musicNote: 'Octave -1', desc: 'Voix grave' },
-  { trackIndex: 5, label: '+5',        pitch:  5,  color: '#a855f7', emoji: '✨', musicNote: 'Quarte',    desc: 'Harmonie riche' },
+  { trackIndex: 1, label: 'Double',   pitch:  0,  color: '#f97316', emoji: '🎵', musicNote: 'Unisson',    desc: 'Épaissit la voix' },
+  { trackIndex: 2, label: '+3 ST',    pitch:  3,  color: '#eab308', emoji: '🎶', musicNote: 'Tierce m.',  desc: 'Layer doux au-dessus' },
+  { trackIndex: 3, label: '+4 ST',    pitch:  4,  color: '#22c55e', emoji: '🎼', musicNote: 'Tierce M.',  desc: 'Layer brillant' },
+  { trackIndex: 4, label: 'Oct ↓',   pitch: -12, color: '#3b82f6', emoji: '🔉', musicNote: 'Octave -1',  desc: 'Renfort grave profond' },
+  { trackIndex: 5, label: '-3 ST',    pitch: -3,  color: '#a855f7', emoji: '✨', musicNote: 'Tierce m. ↓', desc: 'Layer chaud en dessous' },
 ];
 
 export default function MixerScreen({

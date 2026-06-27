@@ -1600,11 +1600,11 @@ export const studioService = {
     };
 
     const allLayers = [
-      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0, gain: 0.85, pan: -0.3, emoji: '🎵', isDouble: true, suggestedFxId: 'double_epic' },
-      { trackIndex: 2, trackLabel: 'Harmonie +3', pitch: 3, gain: 0.75, pan: 0.4, emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
-      { trackIndex: 3, trackLabel: 'Harmonie +7', pitch: 7, gain: 0.70, pan: -0.4, emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
-      { trackIndex: 4, trackLabel: 'Octave bas', pitch: -12, gain: 0.80, pan: 0.0, emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
-      { trackIndex: 5, trackLabel: 'Harmonie +5', pitch: 5, gain: 0.72, pan: 0.3, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.55, pan: -0.3, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
+      { trackIndex: 2, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.45, pan: 0.4,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 3, trackLabel: 'Layer +4 ST',     pitch: 4,   gain: 0.40, pan: -0.4, emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 4, trackLabel: 'Octave bas',      pitch: -12, gain: 0.30, pan: 0.0,  emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
+      { trackIndex: 5, trackLabel: 'Layer -3 ST',     pitch: -3,  gain: 0.35, pan: 0.3,  emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
     ];
     // Si targetTrackIndex spécifié → générer seulement cette harmonie
     const layers = targetTrackIndex !== undefined
