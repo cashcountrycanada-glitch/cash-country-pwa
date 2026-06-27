@@ -23,7 +23,9 @@ async function getWorkerBlobUrl(path: string): Promise<string> {
       const origin = (typeof self !== 'undefined' ? self.location?.origin : null)
         || (typeof window !== 'undefined' ? window.location.origin : '');
       const bust = `${origin}${path}?_v=${Date.now()}`;
+      console.log('[Worker] fetch:', bust);
       const res = await fetch(bust, { cache: 'no-store' });
+      console.log('[Worker] réponse:', res.status, res.headers.get('content-type'));
       if (!res.ok) throw new Error(`Worker introuvable (${path}) — HTTP ${res.status}`);
 
       // Vérifier le Content-Type header AVANT de lire le corps
@@ -1728,7 +1730,8 @@ export const studioService = {
     return new Promise(async (resolve, reject) => {
       let worker: Worker;
       try { worker = await createSafeWorker('/fx-worker.js'); } catch(e: any) {
-        reject(new Error('FX Worker non disponible : ' + e.message)); return;
+        console.error('[FX] createSafeWorker échoué:', e);
+        reject(new Error('FX Worker création échouée : ' + e.message)); return;
       }
       const id = Date.now();
       const chL = srcBuf.getChannelData(0).slice();
@@ -1786,7 +1789,11 @@ export const studioService = {
           reject(new Error(msg.message));
         }
       };
-      worker.onerror = (e) => { clearTimeout(timeout); worker.terminate(); reject(new Error(e.message)); };
+      worker.onerror = (e) => {
+        clearTimeout(timeout); worker.terminate();
+        console.error('[FX] worker.onerror:', e.message, 'file:', (e as any).filename, 'line:', (e as any).lineno);
+        reject(new Error('Worker onerror: ' + e.message + ' | file:' + ((e as any).filename||'?') + ':' + ((e as any).lineno||'?')));
+      };
       worker.postMessage({ id, channelL: chL, channelR: chR, sampleRate: srcBuf.sampleRate, fx }, [chL.buffer, chR.buffer]);
     });
   },

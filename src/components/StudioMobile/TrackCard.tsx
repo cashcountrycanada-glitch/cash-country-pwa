@@ -253,7 +253,9 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
         // L'événement studio:quotaExceeded sera émis par saveRecordingLocally.
         console.warn('[FX] Quota OPFS/IDB dépassé — FX conservé en mémoire:', e.message);
       } else {
-        alert('Erreur FX : ' + e.message);
+        console.error('[FX] Erreur complète:', e);
+        const detail = [e.message, e.stack ? '\n' + e.stack.split('\n').slice(0,3).join('\n') : ''].join('');
+        alert('Erreur FX : ' + detail);
       }
     } finally {
       setApplyingFx(false); setApplyPct(0);
