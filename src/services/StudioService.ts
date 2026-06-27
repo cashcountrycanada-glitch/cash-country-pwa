@@ -23,9 +23,11 @@ async function getWorkerBlobUrl(path: string): Promise<string> {
       const origin = (typeof self !== 'undefined' ? self.location?.origin : null)
         || (typeof window !== 'undefined' ? window.location.origin : '');
       const bust = `${origin}${path}?_v=${Date.now()}`;
-      console.log('[Worker] fetch:', bust);
+      const addLog = (window as any).__addLog;
+      addLog?.(`[Worker] fetch: ${bust}`);
       const res = await fetch(bust, { cache: 'no-store' });
-      console.log('[Worker] réponse:', res.status, res.headers.get('content-type'));
+      const ct2 = res.headers.get('content-type') || '(none)';
+      addLog?.(`[Worker] réponse: ${res.status} ct=${ct2}`);
       if (!res.ok) throw new Error(`Worker introuvable (${path}) — HTTP ${res.status}`);
 
       // Vérifier le Content-Type header AVANT de lire le corps
@@ -41,7 +43,9 @@ async function getWorkerBlobUrl(path: string): Promise<string> {
       }
 
       const blob = new Blob([code], { type: 'application/javascript' });
-      return URL.createObjectURL(blob);
+      const blobUrl = URL.createObjectURL(blob);
+      (window as any).__addLog?.(`[Worker] blob créé: ${blobUrl.slice(0,40)} codeLen=${code.length}`);
+      return blobUrl;
     })();
   }
   try {
@@ -53,7 +57,10 @@ async function getWorkerBlobUrl(path: string): Promise<string> {
 }
 async function createSafeWorker(path: string): Promise<Worker> {
   const blobUrl = await getWorkerBlobUrl(path);
-  return new Worker(blobUrl);
+  (window as any).__addLog?.(`[Worker] new Worker(${blobUrl.slice(0,30)}...)`);
+  const w = new Worker(blobUrl);
+  (window as any).__addLog?.(`[Worker] créé OK`);
+  return w;
 }
 /**
  * StudioService.ts — Pipeline d'enregistrement mobile v7.6
