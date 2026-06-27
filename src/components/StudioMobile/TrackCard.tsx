@@ -11,6 +11,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, Trash2, VolumeX, Volume2, Zap, Loader2, CheckCircle2 } from 'lucide-react';
 import { MobileRecording, studioService } from '../../services/StudioService';
+import { studioOfflineDB } from '../../services/StudioOfflineDB';
 import { TRACK_PRESETS, FX_PRESETS, FX_PRESET_DEFAULT, TRACK_FX_SUGGESTIONS, FxPreset, formatTime, formatDate } from './studio.types';
 import WaveformBar from './WaveformBar';
 
@@ -199,7 +200,6 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
         sourceDataUrl = (track as any).originalDataUrl || track.dataUrl;
         if (sourceDataUrl.startsWith('blob:') || sourceDataUrl.startsWith('opfs:')) {
           // Chercher le blob brut dans backup_voice_ (jamais écrasé par les FX)
-          const { studioOfflineDB } = await import('../../services/StudioOfflineDB');
           const backupBlob = await studioOfflineDB.getAudio(`backup_voice_${track.id}`).catch(() => null);
           if (backupBlob && backupBlob.size > 100) {
             sourceDataUrl = URL.createObjectURL(backupBlob);

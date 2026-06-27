@@ -468,7 +468,7 @@ export default function MixerScreen({
       } catch {}
       // blob: URL morte — chercher le dernier mix dans IDB
       try {
-        const db = (window as any).__studioOfflineDB || (await import('../../services/StudioOfflineDB')).studioOfflineDB;
+        const db = studioOfflineDB;
         const fromDb = await db.getAudio(`mix_${project.id}`).catch(() => null);
         if (fromDb && fromDb.size > 100) { onMasterize(fromDb, instBlob); return; }
       } catch {}
