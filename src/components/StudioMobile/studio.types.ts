@@ -88,7 +88,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 95,
     lowGain: -1.5, lowMidGain: -4.0, midGain: 4.0, highGain: 1.5, airGain: 2.5,
     compThreshold: -18, compRatio: 3, compAttack: 12, compRelease: 180, compKnee: 8,
-    saturation: 0.10, reverb: 'room', reverbMix: 0.18,
+    saturation: 0.10, reverb: 'room', reverbMix: 0.08,
   },
   {
     // COUNTRY WARM — chaleur Luke Combs / George Hamel
@@ -104,7 +104,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 80,
     lowGain: 0.5, lowMidGain: -3.5, midGain: 3.0, highGain: 1.0, airGain: 1.5,
     compThreshold: -20, compRatio: 3, compAttack: 18, compRelease: 220, compKnee: 10,
-    saturation: 0.18, reverb: 'hall', reverbMix: 0.22,
+    saturation: 0.18, reverb: 'hall', reverbMix: 0.10,
   },
   {
     // PUNCHY — voix qui coupe dans le mix country full band
@@ -120,7 +120,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 100,
     lowGain: -1.0, lowMidGain: -5.0, midGain: 5.0, highGain: 2.0, airGain: 1.5,
     compThreshold: -15, compRatio: 5, compAttack: 4, compRelease: 80, compKnee: 4,
-    saturation: 0.12, reverb: 'room', reverbMix: 0.12,
+    saturation: 0.12, reverb: 'room', reverbMix: 0.06,
   },
   {
     // AIRY & BRIGHT — voix légère Irvin Blais style
@@ -134,7 +134,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 110,
     lowGain: -2.0, lowMidGain: -3.0, midGain: 2.5, highGain: 3.0, airGain: 4.5,
     compThreshold: -20, compRatio: 2.5, compAttack: 20, compRelease: 200, compKnee: 12,
-    saturation: 0.06, reverb: 'plate', reverbMix: 0.28,
+    saturation: 0.06, reverb: 'plate', reverbMix: 0.12,
   },
   {
     // LAYER HARMONY — preset spécifique pour layers de renforcement
@@ -151,7 +151,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 120,
     lowGain: -3.0, lowMidGain: -5.0, midGain: 2.0, highGain: 1.5, airGain: 1.0,
     compThreshold: -24, compRatio: 4, compAttack: 8, compRelease: 120, compKnee: 8,
-    saturation: 0.07, reverb: 'hall', reverbMix: 0.35,
+    saturation: 0.07, reverb: 'hall', reverbMix: 0.18,
   },
   {
     // DOUBLE TRACKING — épaississement voix principale
@@ -165,7 +165,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 100,
     lowGain: 0, lowMidGain: -3.5, midGain: 2.0, highGain: 1.5, airGain: 1.0,
     compThreshold: -16, compRatio: 3.5, compAttack: 6, compRelease: 120, compKnee: 6,
-    saturation: 0.14, reverb: 'room', reverbMix: 0.20,
+    saturation: 0.14, reverb: 'room', reverbMix: 0.10,
   },
   {
     // OCTAVE DEEP — couche octave grave (style basse voix de fond country)
@@ -180,7 +180,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 55,
     lowGain: 4.5, lowMidGain: -1.0, midGain: -2.0, highGain: -2.0, airGain: 0,
     compThreshold: -20, compRatio: 5, compAttack: 10, compRelease: 200, compKnee: 10,
-    saturation: 0.20, reverb: 'room', reverbMix: 0.25,
+    saturation: 0.20, reverb: 'room', reverbMix: 0.12,
   },
   {
     // DIGI COMP — compression agressive pour voix très contrôlée en mix dense
@@ -204,7 +204,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 90,
     lowGain: -1.0, lowMidGain: -3.5, midGain: 3.5, highGain: 1.0, airGain: 2.0,
     compThreshold: -18, compRatio: 2.5, compAttack: 12, compRelease: 160, compKnee: 8,
-    saturation: 0.08, reverb: 'room', reverbMix: 0.20,
+    saturation: 0.08, reverb: 'room', reverbMix: 0.10,
     autotune: 0.35, autotuneSpeed: 'slow',
   },
   {
@@ -217,7 +217,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 85,
     lowGain: 0.5, lowMidGain: -4.0, midGain: 3.5, highGain: 1.0, airGain: 1.5,
     compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 200, compKnee: 10,
-    saturation: 0.14, reverb: 'hall', reverbMix: 0.28,
+    saturation: 0.14, reverb: 'hall', reverbMix: 0.12,
     autotune: 0.45, autotuneSpeed: 'medium',
   },
 ];
