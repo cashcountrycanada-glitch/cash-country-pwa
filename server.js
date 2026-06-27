@@ -70,11 +70,13 @@ app.get('/rubberband.umd.min.js', (req, res) => {
 // ── Routes explicites pour les Web Workers — MIME type garanti application/javascript ──
 // express.static peut retourner text/html sur iOS Safari si le SW intercepte mal
 ['fx-worker.js', 'harmony-worker.js', 'recorder-worklet.js'].forEach(file => {
+  // Route principale + route avec query string (?_v=timestamp cache-buster)
   app.get('/' + file, (req, res) => {
     const filePath = path.join(ROOT, file);
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: file + ' not found' });
     res.setHeader('Content-Type', 'application/javascript');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.sendFile(filePath);
   });
 });

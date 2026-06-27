@@ -16,14 +16,32 @@ const __workerBlobUrlCache: Record<string, Promise<string>> = {};
 async function getWorkerBlobUrl(path: string): Promise<string> {
   if (!__workerBlobUrlCache[path]) {
     __workerBlobUrlCache[path] = (async () => {
-      const res = await fetch(path, { cache: 'no-store' });
+      // ── Bypasse le Service Worker ET le cache HTTP avec un timestamp unique ──
+      // Sur iOS WebKit, le SW peut intercepter la requête et retourner du HTML
+      // (page 404 fallback) même avec cache:'no-store'. L'ajout d'un ?_v=timestamp
+      // garantit une URL que le SW n'a jamais vue et ne peut pas avoir en cache.
+      const bust = `${path}?_v=${Date.now()}`;
+      let res: Response;
+      try {
+        res = await fetch(bust, { cache: 'no-store' });
+      } catch (_fetchErr: any) {
+        // Retry sans cache-buster si erreur réseau
+        res = await fetch(path, { cache: 'no-store' });
+      }
       if (!res.ok) throw new Error(`Worker introuvable (${path}) — HTTP ${res.status}`);
+
+      // Vérifier le Content-Type header AVANT de lire le corps
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('text/html')) {
+        throw new Error(`Worker non disponible (${path}) — Content-Type HTML reçu (${ct})`);
+      }
+
       const code = await res.text();
-      if (code.trim().startsWith('<')) {
-        // Réponse HTML reçue malgré tout — invalider le cache pour réessayer plus tard
-        delete __workerBlobUrlCache[path];
+      // Double vérification sur le contenu (SW vieux qui ignore le Content-Type)
+      if (code.trim().startsWith('<') || code.trim().startsWith('<!')) {
         throw new Error(`Worker non disponible (${path}) — réponse HTML reçue au lieu du script`);
       }
+
       const blob = new Blob([code], { type: 'application/javascript' });
       return URL.createObjectURL(blob);
     })();
