@@ -16,18 +16,14 @@ const __workerBlobUrlCache: Record<string, Promise<string>> = {};
 async function getWorkerBlobUrl(path: string): Promise<string> {
   if (!__workerBlobUrlCache[path]) {
     __workerBlobUrlCache[path] = (async () => {
-      // ── Bypasse le Service Worker ET le cache HTTP avec un timestamp unique ──
-      // Sur iOS WebKit, le SW peut intercepter la requête et retourner du HTML
-      // (page 404 fallback) même avec cache:'no-store'. L'ajout d'un ?_v=timestamp
-      // garantit une URL que le SW n'a jamais vue et ne peut pas avoir en cache.
-      const bust = `${path}?_v=${Date.now()}`;
-      let res: Response;
-      try {
-        res = await fetch(bust, { cache: 'no-store' });
-      } catch (_fetchErr: any) {
-        // Retry sans cache-buster si erreur réseau
-        res = await fetch(path, { cache: 'no-store' });
-      }
+      // ── URL absolue + timestamp pour bypasser complètement le SW ──
+      // Le SW ne peut intercepter que les requêtes same-origin. En utilisant
+      // l'URL absolue avec un timestamp unique, on garantit que même un vieux
+      // SW ne peut pas servir une réponse HTML depuis son cache.
+      const origin = (typeof self !== 'undefined' ? self.location?.origin : null)
+        || (typeof window !== 'undefined' ? window.location.origin : '');
+      const bust = `${origin}${path}?_v=${Date.now()}`;
+      const res = await fetch(bust, { cache: 'no-store' });
       if (!res.ok) throw new Error(`Worker introuvable (${path}) — HTTP ${res.status}`);
 
       // Vérifier le Content-Type header AVANT de lire le corps
@@ -37,7 +33,7 @@ async function getWorkerBlobUrl(path: string): Promise<string> {
       }
 
       const code = await res.text();
-      // Double vérification sur le contenu (SW vieux qui ignore le Content-Type)
+      // Double vérification sur le contenu
       if (code.trim().startsWith('<') || code.trim().startsWith('<!')) {
         throw new Error(`Worker non disponible (${path}) — réponse HTML reçue au lieu du script`);
       }

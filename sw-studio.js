@@ -19,7 +19,7 @@
  * ╚══════════════════════════════════════════════════════════════════╝
  */
 
-const CACHE = 'studio-v379';
+const CACHE = 'studio-v380';
 
 const CRITICAL = [
   '/index-pwa.html',
@@ -134,17 +134,26 @@ self.addEventListener('activate', event => {
         keys.filter(k => k !== CACHE).map(k => caches.delete(k))
       ))
       .then(async () => {
-        // Nettoyer les entrées empoisonnées (text/html) du cache courant
-        // Cause du bug "text/html is not a valid JS MIME type"
+        // ── Purger TOUTES les entrées worker du cache à chaque activation ──
+        // On ne cache jamais les workers — ils sont toujours servis depuis le réseau.
+        // Cela élimine définitivement le bug "text/html is not a valid JS MIME type"
+        // causé par une réponse HTML empoisonnée en cache (peu importe le Content-Type).
         const cache = await caches.open(CACHE);
         const WORKERS = ['/fx-worker.js', '/harmony-worker.js', '/recorder-worklet.js', '/rubberband.umd.min.js'];
         for (const url of WORKERS) {
-          const cached = await cache.match(url);
+          await cache.delete(url).catch(() => {});
+          console.log('[SW] Cache worker purgé:', url);
+        }
+        // Purger aussi toutes les entrées du cache courant dont le body est HTML
+        // (Content-Type peut mentir — Railway sert parfois index.html avec le mauvais CT)
+        const allKeys = await cache.keys();
+        for (const req of allKeys) {
+          const cached = await cache.match(req);
           if (cached) {
             const ct = cached.headers.get('content-type') || '';
             if (ct.includes('text/html')) {
-              await cache.delete(url);
-              console.log('[SW] Cache empoisonné nettoyé:', url);
+              await cache.delete(req).catch(() => {});
+              console.log('[SW] Cache HTML empoisonné supprimé:', req.url);
             }
           }
         }
@@ -250,19 +259,21 @@ self.addEventListener('fetch', event => {
   // iOS Safari rejette les Workers si le MIME type n'est pas application/javascript
   // Le cache peut contenir une vieille réponse HTML (erreur 404) — on bypasse
   const WORKER_FILES = ['/fx-worker.js', '/harmony-worker.js', '/recorder-worklet.js', '/rubberband.umd.min.js'];
-  if (WORKER_FILES.includes(url.pathname)) {
+  if (WORKER_FILES.some(f => url.pathname === f || url.pathname.startsWith(f + '?'))) {
+    // ── JAMAIS de cache pour les workers — toujours réseau direct ──
+    // Ne jamais mettre en cache (une réponse HTML corrompue ne doit pas persister)
+    // Ne jamais lire depuis le cache (peut contenir une vieille réponse HTML)
     event.respondWith(
       fetch(req, { cache: 'no-store' }).then(res => {
-        if (res.ok) {
-          // Mettre à jour le cache avec la bonne réponse
-          caches.open(CACHE).then(c => c.put(req, res.clone())).catch(() => {});
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && !ct.includes('text/html')) {
           return res;
         }
-        // Fallback cache si réseau indisponible
-        return caches.match(req).then(cached => cached || res);
-      }).catch(() => caches.match(req).then(cached => cached ||
-        new Response('// worker offline', { headers: { 'Content-Type': 'application/javascript' } })
-      ))
+        // Réseau OK mais HTML reçu (Railway fallback SPA) → JS vide plutôt que HTML
+        return new Response('// worker indisponible', { status: 200, headers: { 'Content-Type': 'application/javascript' } });
+      }).catch(() =>
+        new Response('// worker offline', { status: 200, headers: { 'Content-Type': 'application/javascript' } })
+      )
     );
     return;
   }
