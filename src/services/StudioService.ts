@@ -3,7 +3,42 @@ import { studioOfflineDB } from './StudioOfflineDB';
 // "'text/html' is not a valid JavaScript MIME type" causées par un cache HTTP/SW périmé
 // qui retournait une vieille réponse cassée pour ces fichiers. Chaque version a une URL
 // unique → impossible que le navigateur ait un vieux cache pour cette URL précise.
-const CACHE_BUST_VERSION = '7.6.281';
+
+// ── createSafeWorker — contourne un bug WebKit/Safari connu ─────────────────
+// Sur iOS (Chrome ET Safari utilisent le moteur WebKit), quand un Service
+// Worker est actif, la création d'un `new Worker(url)` peut se faire
+// mal intercepter et recevoir le HTML de la page au lieu du script demandé
+// (erreur "'text/html' is not a valid JavaScript MIME type"). On télécharge
+// le code via fetch() (qui fonctionne, confirmé), puis on crée le Worker
+// depuis un Blob en mémoire — ça ne touche jamais le réseau/SW pour le
+// script du Worker lui-même, donc le bug ne peut pas se produire.
+const __workerBlobUrlCache: Record<string, Promise<string>> = {};
+async function getWorkerBlobUrl(path: string): Promise<string> {
+  if (!__workerBlobUrlCache[path]) {
+    __workerBlobUrlCache[path] = (async () => {
+      const res = await fetch(path, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Worker introuvable (${path}) — HTTP ${res.status}`);
+      const code = await res.text();
+      if (code.trim().startsWith('<')) {
+        // Réponse HTML reçue malgré tout — invalider le cache pour réessayer plus tard
+        delete __workerBlobUrlCache[path];
+        throw new Error(`Worker non disponible (${path}) — réponse HTML reçue au lieu du script`);
+      }
+      const blob = new Blob([code], { type: 'application/javascript' });
+      return URL.createObjectURL(blob);
+    })();
+  }
+  try {
+    return await __workerBlobUrlCache[path];
+  } catch (e) {
+    delete __workerBlobUrlCache[path];
+    throw e;
+  }
+}
+async function createSafeWorker(path: string): Promise<Worker> {
+  const blobUrl = await getWorkerBlobUrl(path);
+  return new Worker(blobUrl);
+}
 /**
  * StudioService.ts — Pipeline d'enregistrement mobile v7.6
  *
@@ -1329,9 +1364,9 @@ export const studioService = {
       } else {
         // Utiliser le harmony-worker (hors main thread) pour ne pas geler iOS
         try {
-          const workerBlob = await new Promise<Blob>((resolve, reject) => {
+          const workerBlob = await new Promise<Blob>(async (resolve, reject) => {
             let worker: Worker;
-            try { worker = new Worker('/harmony-worker.js?v=' + CACHE_BUST_VERSION); } catch(e: any) { reject(e); return; }
+            try { worker = await createSafeWorker('/harmony-worker.js'); } catch(e: any) { reject(e); return; }
             const id = Date.now();
             const chL = buffer.getChannelData(0).slice();
             const chR = (buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0)).slice();
@@ -1506,10 +1541,9 @@ export const studioService = {
 
     // Helper : envoyer une couche au Web Worker et attendre le résultat WAV
     const processLayerInWorker = (op: string, semitones: number, gain: number, pan: number, trackIndex?: number): Promise<Blob> => {
-      return new Promise((resolve, reject) => {
-        const workerUrl = '/harmony-worker.js?v=' + CACHE_BUST_VERSION;
+      return new Promise(async (resolve, reject) => {
         let worker: Worker;
-        try { worker = new Worker(workerUrl); } catch(e: any) {
+        try { worker = await createSafeWorker('/harmony-worker.js'); } catch(e: any) {
           reject(new Error('Worker non disponible : ' + e.message)); return;
         }
         const id = Date.now();
@@ -1677,9 +1711,9 @@ export const studioService = {
     }
     onProgress?.(20);
     // Envoyer au Worker FX — tout le traitement hors main thread
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       let worker: Worker;
-      try { worker = new Worker('/fx-worker.js?v=' + CACHE_BUST_VERSION); } catch(e: any) {
+      try { worker = await createSafeWorker('/fx-worker.js'); } catch(e: any) {
         reject(new Error('FX Worker non disponible : ' + e.message)); return;
       }
       const id = Date.now();
