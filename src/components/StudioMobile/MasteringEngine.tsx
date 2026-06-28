@@ -797,7 +797,7 @@ Pour le sauvegarder :\
 // Catégories : Distribution, Country, Style vocal, Live
 const PRESET_CATEGORIES: { id: string; label: string; keys: string[] }[] = [
   { id: 'distrib',  label: '🌐 Distribution', keys: ['spotify', 'youtube', 'podcast'] },
-  { id: 'country',  label: '🤠 Country',       keys: ['country', 'country_live', 'country_bright'] },
+  { id: 'country',  label: '🤠 Country',       keys: ['cash_country', 'country', 'country_live', 'country_bright'] },
   { id: 'vocal',    label: '🎤 Vocal',          keys: ['studio_vocal', 'velvet', 'airy'] },
   { id: 'broadcast', label: '📡 Broadcast',      keys: ['broadcast_canada', 'broadcast_ebu', 'broadcast_country'] },
   { id: 'impact',   label: '💥 Impact',         keys: ['radio', 'punchy', 'vintage'] },
@@ -821,10 +821,15 @@ const PRESETS: Record<string, { label: string; emoji: string; description: strin
     settings: { lowGain: -1.0, midGain: 3.0, highGain: 1.5, threshold: -20, ratio: 3, attack: 15, release: 200, ceiling: -1.5, targetLufs: -16 },
   },
   // ── Country ──
+  cash_country: {
+    label: 'Cash Country', emoji: '🖤🤠',
+    description: 'Baryton grave - grain analogique Johnny Cash / Elvis',
+    settings: { lowGain: 1.5, midGain: 1.5, highGain: -0.5, threshold: -22, ratio: 3, attack: 25, release: 300, ceiling: -1.5, targetLufs: -14 },
+  },
   country: {
     label: 'Country Warm', emoji: '🤠',
     description: 'Son chaleureux, graves riches',
-    settings: { lowGain: 3.0, midGain: -1.0, highGain: 0.5, threshold: -20, ratio: 3.5, attack: 15, release: 200, ceiling: -1.5, targetLufs: -14 },
+    settings: { lowGain: 2.0, midGain: 0.5, highGain: 0.5, threshold: -20, ratio: 3.5, attack: 15, release: 200, ceiling: -1.5, targetLufs: -14 },
   },
   country_live: {
     label: 'Country Live', emoji: '🎸',
@@ -894,9 +899,9 @@ export default function MasteringEngine({
   vocalBlob, instBlob, instOffsetMs = 0, songTitle, songId, onBack, onStemReady, isOnline,
 }: MasteringProps) {
 
-  const [preset, setPreset]               = useState('country');
+  const [preset, setPreset]               = useState('cash_country');
   const [activeCategory, setActiveCategory] = useState('country');
-  const [settings, setSettings]           = useState<MasterSettings>(PRESETS.country.settings);
+  const [settings, setSettings]           = useState<MasterSettings>(PRESETS.cash_country.settings);
   const [showAdvanced, setShowAdvanced]   = useState(false);
   const [instGainDb, setInstGainDb]       = useState(-3); // niveau instrumental en dB relatif à la voix
 

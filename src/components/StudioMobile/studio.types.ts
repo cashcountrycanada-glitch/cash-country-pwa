@@ -14,6 +14,7 @@ export interface FxSettings {
   reverb:        'none' | 'room' | 'hall' | 'plate';
   reverbMix:     number; // 0..1
   autotune?:     number;
+  deverbAmount?: number; // 0..1 — réduction reverb habitacle auto
   autotuneSpeed?: 'slow' | 'medium' | 'fast';
 }
 
@@ -59,186 +60,215 @@ export interface FxPreset {
   autotuneSpeed?: 'slow' | 'medium' | 'fast'; // vitesse de correction
 }
 
-// Banque de presets FX — calibrés sur voix baryton country (analyse spectrale réelle)
-// Voix de référence : 64% énergie 200-500Hz, manque présence 2-5kHz, SR 48kHz
-// Références : Luke Combs, Irvin Blais, George Hamel
+// Banque de presets FX — calibrés voix baryton grave
+// Références : Johnny Cash, Elvis Presley, Alan Jackson, Duck Rivera
+// Preset principal : Cash & Elvis (mélange des deux signatures)
+// Profil vocal : baryton 90-200Hz, grain naturel, dynamique naturelle, enregistrement auto
+// Règle : HPF conservateur (garde le grave), lowMid coupé (boîte auto), reverb sèche
 export const FX_PRESETS: FxPreset[] = [
   {
     id: 'clean',
     label: 'Clean',
     emoji: '🎙',
-    description: 'Signal propre sans traitement',
+    description: 'Signal brut sans traitement',
     color: '#71717a',
     hpf: 0, lowGain: 0, lowMidGain: 0, midGain: 0, highGain: 0, airGain: 0,
     compThreshold: 0, compRatio: 1, compAttack: 10, compRelease: 150, compKnee: 6,
     saturation: 0, reverb: 'none', reverbMix: 0,
   },
   {
-    // STUDIO VOCAL — preset principal pour voix country baryton
-    // Analyse : 64% énergie low-mid → coupe agressive à 300Hz (-4dB)
-    // Manque présence → boost fort à 3kHz (+4dB) + air à 12kHz (+2.5dB)
-    // HPF 95Hz : coupe boue sans toucher le corps de la voix (~204Hz fondamentale)
-    // Compression douce 3:1 : contrôle sans écraser la dynamique naturelle (19dB range)
-    // Reverb room très légère 18% : présence studio sans noyade
+    // CASH & ELVIS — mélange des deux signatures
+    // Base grave Cash (HPF 62Hz, lowGain fort, saturation tape)
+    // Chaleur Elvis (midGain présence, slapback plate doux)
+    // C'est le preset principal pour cette voix
+    id: 'cash_elvis',
+    label: 'Cash & Elvis',
+    emoji: '🎸',
+    description: 'Melange Cash et Elvis - grave chaud avec grain analogique',
+    color: '#7c3aed',
+    hpf: 62,
+    lowGain: 3.0, lowMidGain: -3.5, midGain: 2.5, highGain: 0.5, airGain: 0.5,
+    compThreshold: -22, compRatio: 2.5, compAttack: 28, compRelease: 320, compKnee: 12,
+    saturation: 0.28, reverb: 'plate', reverbMix: 0.09, deverbAmount: 0.45,
+  },
+  {
+    // CASH NOIR — Johnny Cash Man in Black
+    // HPF très bas 60Hz : garde le grave profond caractéristique Cash
+    // lowMidGain -3.5 : nettoie la boîte auto sans tuer le corps
+    // midGain +2.5 : clarté vocale sans brillance pop
+    // Saturation 0.22 : grain analogique tape Sun Records
+    // Compression 4:1 lente : dynamique préservée, naturel
+    // Reverb room 6% : salle sèche, pas d'église
+    id: 'cash_noir',
+    label: 'Cash Noir',
+    emoji: '🖤',
+    description: 'Voix grave et sombre - grain analogique Johnny Cash',
+    color: '#1c1917',
+    hpf: 60,
+    lowGain: 2.0, lowMidGain: -3.5, midGain: 2.5, highGain: 0.5, airGain: 0.5,
+    compThreshold: -22, compRatio: 4, compAttack: 25, compRelease: 300, compKnee: 10,
+    saturation: 0.22, reverb: 'room', reverbMix: 0.06, deverbAmount: 0.45,
+  },
+  {
+    // ELVIS SUN — chaleur rockabilly Sun Studio
+    // Saturation haute 0.28 : distorsion douce de bande magnétique
+    // Compression très douce 2:1 : dynamique Elvis naturelle
+    // lowGain +2.5 : corps grave Elvis
+    // Reverb plate 10% : slapback léger (signature Sun Records)
+    id: 'elvis_sun',
+    label: 'Elvis Sun',
+    emoji: '👑',
+    description: 'Chaleur Sun Studio - grain tape rockabilly',
+    color: '#b45309',
+    hpf: 65,
+    lowGain: 3.0, lowMidGain: -3.0, midGain: 2.5, highGain: 0.5, airGain: 0,
+    compThreshold: -24, compRatio: 2, compAttack: 30, compRelease: 350, compKnee: 12,
+    saturation: 0.28, reverb: 'plate', reverbMix: 0.10, deverbAmount: 0.35,
+  },
+  {
+    // ALAN JACKSON — country classique années 90, voix claire et grave
+    // Moins de grain que Cash, plus de clarté
+    // midGain +3 : présence honky-tonk
+    // Compression 3:1 propre
+    id: 'alan_jackson',
+    label: 'Alan Jackson',
+    emoji: '🤠',
+    description: 'Country classique - clair et grave Alan Jackson',
+    color: '#f97316',
+    hpf: 75,
+    lowGain: 1.5, lowMidGain: -4.0, midGain: 3.0, highGain: 1.5, airGain: 1.0,
+    compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 200, compKnee: 8,
+    saturation: 0.14, reverb: 'room', reverbMix: 0.08, deverbAmount: 0.40,
+  },
+  {
+    // STUDIO VOCAL — son radio country pro
+    // HPF 85Hz : garde le bas sans excès de boue
+    // lowMidGain -4.0 : nettoie la résonance auto
+    // midGain +3.5 : présence radio
+    // Saturation légère 0.12
     id: 'studio_vocal',
     label: 'Studio Vocal',
     emoji: '🎤',
     description: 'Voix presente et claire - son radio country pro',
     color: '#ef4444',
-    hpf: 95,
-    lowGain: -1.5, lowMidGain: -4.0, midGain: 4.0, highGain: 1.5, airGain: 2.5,
+    hpf: 85,
+    lowGain: 0.5, lowMidGain: -4.0, midGain: 3.5, highGain: 1.0, airGain: 1.5,
     compThreshold: -18, compRatio: 3, compAttack: 12, compRelease: 180, compKnee: 8,
-    saturation: 0.10, reverb: 'room', reverbMix: 0.08,
+    saturation: 0.12, reverb: 'room', reverbMix: 0.07, deverbAmount: 0.40,
   },
   {
-    // COUNTRY WARM — chaleur Luke Combs / George Hamel
-    // Corps grave conservé (HPF bas à 80Hz), low-mid sculpté proprement
-    // midGain modéré pour garder la chaleur sans agressivité
-    // Saturation 0.18 : chaleur tape analogique, signature country
-    // Reverb hall courte 22% : espace naturel de scène
-    id: 'country_warm',
-    label: 'Country Warm',
-    emoji: '🤠',
-    description: 'Chaleur country - corps grave et presence Luke Combs',
-    color: '#f97316',
-    hpf: 80,
-    lowGain: 0.5, lowMidGain: -3.5, midGain: 3.0, highGain: 1.0, airGain: 1.5,
-    compThreshold: -20, compRatio: 3, compAttack: 18, compRelease: 220, compKnee: 10,
-    saturation: 0.18, reverb: 'hall', reverbMix: 0.10,
-  },
-  {
-    // PUNCHY — voix qui coupe dans le mix country full band
-    // Attack 4ms : laisse passer les consonnes et l'attaque vocale
-    // lowMidGain -5dB : nettoyage agressif de la zone boueuse
-    // midGain +5dB : présence maximale 3kHz
-    // Reverb minime 12% : voix sèche qui coupe
+    // PUNCHY LIVE — voix qui coupe dans un mix full band
+    // Attack 5ms : consonnes et attaque vocale passent
+    // lowMidGain -5 : nettoyage max de la boîte
+    // midGain +4.5 : présence maximale
     id: 'punchy',
-    label: 'Punchy',
+    label: 'Punchy Live',
     emoji: '💥',
     description: 'Voix qui coupe dans le mix - attaque frontale',
     color: '#eab308',
-    hpf: 100,
-    lowGain: -1.0, lowMidGain: -5.0, midGain: 5.0, highGain: 2.0, airGain: 1.5,
-    compThreshold: -15, compRatio: 5, compAttack: 4, compRelease: 80, compKnee: 4,
-    saturation: 0.12, reverb: 'room', reverbMix: 0.06,
+    hpf: 90,
+    lowGain: 0, lowMidGain: -5.0, midGain: 4.5, highGain: 1.5, airGain: 1.0,
+    compThreshold: -15, compRatio: 5, compAttack: 5, compRelease: 80, compKnee: 4,
+    saturation: 0.13, reverb: 'room', reverbMix: 0.05, deverbAmount: 0.35,
   },
   {
-    // AIRY & BRIGHT — voix légère Irvin Blais style
-    // HPF plus haut 110Hz : corps allégé
-    // Moins de saturation, plus d'air
-    id: 'airy',
-    label: 'Airy & Bright',
-    emoji: '✨',
-    description: 'Voix legere et aerienne - style Irvin Blais',
-    color: '#22c55e',
-    hpf: 110,
-    lowGain: -2.0, lowMidGain: -3.0, midGain: 2.5, highGain: 3.0, airGain: 4.5,
-    compThreshold: -20, compRatio: 2.5, compAttack: 20, compRelease: 200, compKnee: 12,
-    saturation: 0.06, reverb: 'plate', reverbMix: 0.12,
-  },
-  {
-    // LAYER HARMONY — preset spécifique pour layers de renforcement
-    // Style Luke Combs / George Hamel : même voix +1 octave ou ±3-4 semi-tons
-    // lowMidGain très coupé : retire la boue de la couche pour ne pas bloquer la voix principale
-    // midGain modéré : présence sans rivaliser avec la principale
-    // Reverb hall 35% : place la couche légèrement derrière dans l'espace
-    // Saturation douce : fond dans le mix sans ressortir
+    // LAYER HARMONY — couche de renforcement derrière la voix principale
+    // Layer harmony Cash/Elvis : grave conservé, saturation tape, fond du mix
+    // lowMid très coupé : ne bloque pas la voix principale
+    // Saturation 0.18 : grain analogique cohérent avec la voix principale
+    // Reverb hall 16% : place la couche derrière sans noyer
     id: 'harmony',
     label: 'Layer Harmony',
     emoji: '🎶',
-    description: 'Layer de renforcement - fusionne derriere la voix principale',
+    description: 'Layer de renforcement - grain Cash/Elvis derriere la voix',
     color: '#a855f7',
-    hpf: 120,
-    lowGain: -3.0, lowMidGain: -5.0, midGain: 2.0, highGain: 1.5, airGain: 1.0,
-    compThreshold: -24, compRatio: 4, compAttack: 8, compRelease: 120, compKnee: 8,
-    saturation: 0.07, reverb: 'hall', reverbMix: 0.18,
+    hpf: 80,
+    lowGain: 1.0, lowMidGain: -5.0, midGain: 1.0, highGain: 0.0, airGain: 0.0,
+    compThreshold: -26, compRatio: 5, compAttack: 10, compRelease: 150, compKnee: 10,
+    saturation: 0.18, reverb: 'hall', reverbMix: 0.16,
   },
   {
-    // DOUBLE TRACKING — épaississement voix principale
-    // Légèrement désaccordé (via saturation harmonique) pour simuler le double tracking
-    // lowMidGain coupé pour que les deux couches ne s'accumulent pas dans la boue
+    // Double Track Cash/Elvis : unisson, grain tape, légèrement plus sombre que la principale
+    // Très peu de highs : la couche s'efface dans les médiums graves
     id: 'double_epic',
     label: 'Double Track',
     emoji: '🎵',
-    description: 'Double tracking - epaissit la voix principale',
+    description: 'Double tracking - epaissit la voix, style Cash/Elvis',
     color: '#3b82f6',
-    hpf: 100,
-    lowGain: 0, lowMidGain: -3.5, midGain: 2.0, highGain: 1.5, airGain: 1.0,
-    compThreshold: -16, compRatio: 3.5, compAttack: 6, compRelease: 120, compKnee: 6,
-    saturation: 0.14, reverb: 'room', reverbMix: 0.10,
+    hpf: 70,
+    lowGain: 2.0, lowMidGain: -3.0, midGain: 1.5, highGain: 0.0, airGain: 0.0,
+    compThreshold: -22, compRatio: 3, compAttack: 20, compRelease: 280, compKnee: 10,
+    saturation: 0.22, reverb: 'room', reverbMix: 0.07,
   },
   {
-    // OCTAVE DEEP — couche octave grave (style basse voix de fond country)
-    // HPF très bas 55Hz : garde le graves profond
-    // lowGain boost fort : renforce le fondamental grave
-    // midGain négatif : retire la présence (voix de fond, pas principale)
+    // OCTAVE DEEP — couche grave de fond, style basse voix country
     id: 'octave_deep',
     label: 'Octave Deep',
     emoji: '🔉',
     description: 'Couche grave de fond - renforce le bas du mix',
     color: '#06b6d4',
-    hpf: 55,
-    lowGain: 4.5, lowMidGain: -1.0, midGain: -2.0, highGain: -2.0, airGain: 0,
+    hpf: 50,
+    lowGain: 5.0, lowMidGain: -1.5, midGain: -2.5, highGain: -2.0, airGain: 0,
     compThreshold: -20, compRatio: 5, compAttack: 10, compRelease: 200, compKnee: 10,
-    saturation: 0.20, reverb: 'room', reverbMix: 0.12,
+    saturation: 0.22, reverb: 'room', reverbMix: 0.10,
   },
   {
-    // DIGI COMP — compression agressive pour voix très contrôlée en mix dense
+    // DIGI COMP — compression broadcast, très contrôlé
     id: 'digi_comp',
     label: 'Digi Comp',
     emoji: '⚡',
-    description: 'Compression agressive - voix tres controlee',
+    description: 'Compression agressive - voix tres controlee broadcast',
     color: '#f43f5e',
-    hpf: 100,
-    lowGain: 0, lowMidGain: -4.0, midGain: 3.5, highGain: 2.0, airGain: 2.0,
+    hpf: 95,
+    lowGain: 0, lowMidGain: -4.5, midGain: 3.5, highGain: 2.0, airGain: 1.5,
     compThreshold: -25, compRatio: 7, compAttack: 1, compRelease: 60, compKnee: 4,
     saturation: 0.15, reverb: 'none', reverbMix: 0,
   },
   {
-    // AUTO-TUNE DOUX — correction transparente, intonation naturelle
+    // AUTO-TUNE DOUX — correction transparente
     id: 'autotune_transparent',
-    label: 'Auto-Tune Doux',
+    label: 'Correction Douce',
     emoji: '🎯',
-    description: 'Correction transparente - intonation naturelle',
+    description: 'Correction intonation transparente - naturelle',
     color: '#10b981',
-    hpf: 90,
-    lowGain: -1.0, lowMidGain: -3.5, midGain: 3.5, highGain: 1.0, airGain: 2.0,
-    compThreshold: -18, compRatio: 2.5, compAttack: 12, compRelease: 160, compKnee: 8,
-    saturation: 0.08, reverb: 'room', reverbMix: 0.10,
-    autotune: 0.35, autotuneSpeed: 'slow',
+    hpf: 80,
+    lowGain: 1.0, lowMidGain: -3.5, midGain: 3.0, highGain: 0.5, airGain: 1.0,
+    compThreshold: -20, compRatio: 2.5, compAttack: 15, compRelease: 200, compKnee: 10,
+    saturation: 0.10, reverb: 'room', reverbMix: 0.07, deverbAmount: 0.40,
+    autotune: 0.30, autotuneSpeed: 'slow',
   },
   {
-    // COUNTRY PITCH — auto-tune country chaleureux
+    // COUNTRY PITCH — auto-tune country, naturel
     id: 'autotune_country',
     label: 'Country Pitch',
     emoji: '🤠🎯',
-    description: 'Auto-Tune country - chaleureux et controle',
+    description: 'Auto-Tune country - chaleureux et naturel',
     color: '#f59e0b',
-    hpf: 85,
-    lowGain: 0.5, lowMidGain: -4.0, midGain: 3.5, highGain: 1.0, airGain: 1.5,
-    compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 200, compKnee: 10,
-    saturation: 0.14, reverb: 'hall', reverbMix: 0.12,
-    autotune: 0.45, autotuneSpeed: 'medium',
+    hpf: 75,
+    lowGain: 1.5, lowMidGain: -4.0, midGain: 3.0, highGain: 0.5, airGain: 1.0,
+    compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 220, compKnee: 10,
+    saturation: 0.16, reverb: 'hall', reverbMix: 0.10, deverbAmount: 0.40,
+    autotune: 0.40, autotuneSpeed: 'medium',
   },
 ];
 export const FX_PRESET_DEFAULT = FX_PRESETS[0]; // Clean
 
+
 export const TRACK_PRESETS: TrackPreset[] = [
   { index: 0, label: 'Voix principale', pitch: 0,   pan: 0,    gain: 1.0,  color: '#ef4444', emoji: '🎤',
     intervalLabel: 'Mélodie principale', singingTip: 'Chante ta mélodie normalement' },
-  { index: 1, label: 'Double tracking', pitch: 0,   pan: -0.3, gain: 0.55, color: '#f97316', emoji: '🎵',
-    intervalLabel: 'Unisson (doublement)', singingTip: 'Rechante la même mélodie — les légères variations naturelles créent l\'épaisseur' },
-  { index: 2, label: 'Layer +3 ST',     pitch: 3,   pan: 0.4,  gain: 0.45, color: '#eab308', emoji: '🎶',
-    intervalLabel: 'Tierce mineure ↑', singingTip: 'Chante 3 demi-tons AU-DESSUS — layer de renforcement doux style Luke Combs' },
-  { index: 3, label: 'Layer +4 ST',     pitch: 4,   pan: -0.4, gain: 0.40, color: '#22c55e', emoji: '🎼',
-    intervalLabel: 'Tierce majeure ↑', singingTip: 'Chante 4 demi-tons AU-DESSUS — layer brillant qui ouvre la voix' },
-  { index: 4, label: 'Octave bas',      pitch: -12, pan: 0,    gain: 0.30, color: '#3b82f6', emoji: '🔉',
-    intervalLabel: 'Octave ↓', singingTip: 'Chante UNE OCTAVE EN DESSOUS — renfort grave style George Hamel, discret dans le mix' },
-  { index: 5, label: 'Layer -3 ST',     pitch: -3,  pan: 0.3,  gain: 0.35, color: '#a855f7', emoji: '✨',
-    intervalLabel: 'Tierce mineure ↓', singingTip: 'Chante 3 demi-tons EN DESSOUS — layer chaud et chaleureux qui soutient' },
+  { index: 1, label: 'Double tracking', pitch: 0,   pan: -0.25, gain: 0.28, color: '#f97316', emoji: '🎵',
+    intervalLabel: 'Unisson', singingTip: 'Rechante la même mélodie — les légères variations naturelles créent l'épaisseur. Style Cash/Elvis classique.' },
+  { index: 2, label: 'Layer +5 ST',     pitch: 5,   pan: 0.35,  gain: 0.22, color: '#eab308', emoji: '🎶',
+    intervalLabel: 'Quarte juste ↑', singingTip: 'Chante 5 demi-tons AU-DESSUS — quarte parfaite, signature Alan Jackson et country classique' },
+  { index: 3, label: 'Octave bas',      pitch: -12, pan: 0,     gain: 0.25, color: '#3b82f6', emoji: '🔉',
+    intervalLabel: 'Octave ↓', singingTip: 'Chante UNE OCTAVE EN DESSOUS — grave profond signature Johnny Cash, très discret dans le mix' },
+  { index: 4, label: 'Layer +3 ST',     pitch: 3,   pan: 0.30,  gain: 0.18, color: '#a855f7', emoji: '✨',
+    intervalLabel: 'Tierce mineure ↑', singingTip: 'Chante 3 demi-tons AU-DESSUS — layer doux de soutien, presque inaudible seul' },
+  { index: 5, label: 'Layer -5 ST',     pitch: -5,  pan: -0.30, gain: 0.18, color: '#22c55e', emoji: '🎼',
+    intervalLabel: 'Quarte juste ↓', singingTip: 'Chante 5 demi-tons EN DESSOUS — quarte grave, chaleur Elvis dans les refrains' },
 ];
 
-// Presets FX recommandés par type de piste
 export const TRACK_FX_SUGGESTIONS: Record<number, string> = {
   0: 'studio_vocal',  // Voix principale → Studio Vocal
   1: 'double_epic',   // Double tracking → Double Epic

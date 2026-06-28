@@ -180,13 +180,13 @@ function ReverbMonitorSlider() {
 // Utilise HTMLAudioElement.playbackRate pour changer le pitch
 // du guide vocal en temps réel (la vitesse change aussi, c'est
 // acceptable pour servir de RÉFÉRENCE de hauteur uniquement).
-// Valeur par défaut : -5 demi-tons (quinte vers le bas)
+// Valeur par défaut : -12 demi-tons (octave bas) — voix baryton Cash/Elvis
 // Range : -12 ST (octave bas) à 0 ST (original)
 // Persisté dans window.__vocalGuidePlaybackRate et localStorage
 // ═══════════════════════════════════════════════════════════════
 function GuideTransposeSlider() {
   const [semitones, setSemitones] = useState<number>(() => {
-    try { const v = parseFloat(localStorage.getItem('guide_transpose_st') || '-5'); return isNaN(v) ? -5 : Math.max(-12, Math.min(0, v)); } catch { return -5; }
+    try { const v = parseFloat(localStorage.getItem('guide_transpose_st') || '-12'); return isNaN(v) ? -12 : Math.max(-12, Math.min(0, v)); } catch { return -12; }
   });
 
   const applyTranspose = (st: number) => {
@@ -212,16 +212,27 @@ function GuideTransposeSlider() {
   const label = semitones === 0 ? 'Original' : semitones === -12 ? '-1 Octave' : `${semitones} ST`;
 
   return (
-    <div className="flex items-center gap-2 mb-1">
-      <span className="text-[9px] text-purple-400 font-black uppercase tracking-widest whitespace-nowrap">🎼 Guide</span>
-      <input type="range" min={-12} max={0} step={1}
-        value={semitones}
-        onChange={e => handleChange(parseInt(e.target.value))}
-        className="flex-1 h-1 accent-purple-500"
-      />
-      <span className="text-[9px] text-purple-400 font-black w-14 text-right whitespace-nowrap">
-        {label}
-      </span>
+    <div className="flex flex-col gap-1 mb-1">
+      <div className="flex items-center gap-2">
+        <span className="text-[9px] text-purple-400 font-black uppercase tracking-widest whitespace-nowrap">🎼 Guide</span>
+        <input type="range" min={-12} max={0} step={1}
+          value={semitones}
+          onChange={e => handleChange(parseInt(e.target.value))}
+          className="flex-1 h-1 accent-purple-500"
+        />
+        <span className="text-[9px] text-purple-400 font-black w-14 text-right whitespace-nowrap">
+          {label}
+        </span>
+      </div>
+      <div className="flex gap-1.5 pl-10">
+        {[-12, -7, -5, 0].map(st => (
+          <button key={st} onClick={() => handleChange(st)}
+            className="text-[8px] font-black px-1.5 py-0.5 rounded"
+            style={{ background: semitones === st ? '#7c3aed' : '#27272a', color: semitones === st ? '#fff' : '#71717a' }}>
+            {st === -12 ? '🔉-8ve' : st === -7 ? '-7ST' : st === -5 ? '-5ST' : 'Orig'}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

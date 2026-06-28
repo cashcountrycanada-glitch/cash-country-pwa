@@ -19,7 +19,7 @@
  * ╚══════════════════════════════════════════════════════════════════╝
  */
 
-const CACHE = 'studio-v386';
+const CACHE = 'studio-v393';
 
 const CRITICAL = [
   '/index-pwa.html',
@@ -139,7 +139,7 @@ self.addEventListener('activate', event => {
         // Cela élimine définitivement le bug "text/html is not a valid JS MIME type"
         // causé par une réponse HTML empoisonnée en cache (peu importe le Content-Type).
         const cache = await caches.open(CACHE);
-        const WORKERS = ['/fx-worker.js', '/harmony-worker.js', '/recorder-worklet.js', '/rubberband.umd.min.js'];
+        const WORKERS = ['/fx-worker.js', '/harmony-worker.js', '/recorder-worklet.js', '/rubberband.umd.min.js', '/rubberband.wasm'];
         for (const url of WORKERS) {
           await cache.delete(url).catch(() => {});
           console.log('[SW] Cache worker purgé:', url);
@@ -258,7 +258,7 @@ self.addEventListener('fetch', event => {
   // ── Workers JS — toujours depuis le réseau, jamais depuis le cache ──────────
   // iOS Safari rejette les Workers si le MIME type n'est pas application/javascript
   // Le cache peut contenir une vieille réponse HTML (erreur 404) — on bypasse
-  const WORKER_FILES = ['/fx-worker.js', '/harmony-worker.js', '/recorder-worklet.js', '/rubberband.umd.min.js'];
+  const WORKER_FILES = ['/fx-worker.js', '/harmony-worker.js', '/recorder-worklet.js', '/rubberband.umd.min.js', '/rubberband.wasm'];
   if (WORKER_FILES.some(f => url.pathname === f || url.pathname.startsWith(f + '?'))) {
     // ── JAMAIS de cache pour les workers — toujours réseau direct ──
     // Ne jamais mettre en cache (une réponse HTML corrompue ne doit pas persister)

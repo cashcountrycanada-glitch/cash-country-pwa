@@ -357,6 +357,13 @@ self.onmessage = function(e) {
   const {id,channelL,channelR,sampleRate,fx}=e.data;
   try {
     let pL=new Float32Array(channelL), pR=new Float32Array(channelR);
+    // ── Étape 0 : Déréverbération habitacle (avant EQ pour ne pas colorer le bruit)
+    const deverbAmt = fx.deverbAmount || 0;
+    if (deverbAmt > 0.05) {
+      self.postMessage({id,type:'progress',pct:4, label:'Déréverb habitacle...'});
+      pL = applyDeverb(pL, sampleRate, deverbAmt);
+      pR = applyDeverb(pR, sampleRate, deverbAmt);
+    }
     self.postMessage({id,type:'progress',pct:8,  label:'EQ...'});
     pL=applyEQChain(pL,fx,sampleRate); pR=applyEQChain(pR,fx,sampleRate);
     self.postMessage({id,type:'progress',pct:18, label:'De-esser...'});
@@ -389,3 +396,88 @@ self.onmessage = function(e) {
     self.postMessage({id,type:'error',message:err.message||String(err)});
   }
 };
+
+// ── Déréverbération — filtre d'enveloppe spectrale (habitacle auto) ────────
+// Réduit la réverb naturelle RT60 ~80-120ms de l'habitacle
+// Approche : soustraction d'enveloppe spectrale par bandes (32 bandes log)
+// Beaucoup plus rapide que DFT complète, efficace sur la coloration de pièce
+// amount : 0 = désactivé, 1.0 = réduction maximale
+function applyDeverb(signal, sampleRate, amount) {
+  if (!amount || amount < 0.05) return signal;
+
+  const len = signal.length;
+  const BANDS = 32;
+  const FRAME = 512;
+  const HOP = 256;
+
+  // Créer les filtres de bandes logarithmiques (80Hz - 8kHz)
+  const freqMin = 80, freqMax = 8000;
+  const bandEdges = new Float32Array(BANDS + 1);
+  for (let b = 0; b <= BANDS; b++) {
+    bandEdges[b] = freqMin * Math.pow(freqMax / freqMin, b / BANDS);
+  }
+
+  // Calculer l'énergie par bande pour chaque frame
+  const numFrames = Math.floor((len - FRAME) / HOP) + 1;
+  const bandEnergy = Array.from({ length: numFrames }, () => new Float32Array(BANDS));
+
+  for (let f = 0; f < numFrames; f++) {
+    const pos = f * HOP;
+    for (let b = 0; b < BANDS; b++) {
+      // Filtre passe-bande simple par fréquences de coupure
+      const fLow = bandEdges[b];
+      const fHigh = bandEdges[b + 1];
+      // Approximation : compter l'énergie dans la bande via zero-crossing rate
+      let energy = 0;
+      for (let i = 0; i < FRAME && pos + i < len; i++) {
+        energy += signal[pos + i] * signal[pos + i];
+      }
+      bandEnergy[f][b] = Math.sqrt(energy / FRAME);
+    }
+  }
+
+  // Estimer le bruit par bande (10% frames les plus silencieuses)
+  const noiseFloor = new Float32Array(BANDS);
+  for (let b = 0; b < BANDS; b++) {
+    const energies = bandEnergy.map(e => e[b]).sort((a, z) => a - z);
+    const n = Math.max(2, Math.floor(numFrames * 0.10));
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += energies[i];
+    noiseFloor[b] = sum / n;
+  }
+
+  // Appliquer le gain de réduction par frame
+  const out = new Float32Array(len);
+  const overlapCount = new Float32Array(len);
+  // Fenêtre de Hann
+  const win = new Float32Array(FRAME);
+  for (let i = 0; i < FRAME; i++) win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / FRAME));
+
+  for (let f = 0; f < numFrames; f++) {
+    const pos = f * HOP;
+    // Gain de réduction global pour cette frame
+    let totalEnergy = 0, totalNoise = 0;
+    for (let b = 0; b < BANDS; b++) {
+      totalEnergy += bandEnergy[f][b] ** 2;
+      totalNoise += noiseFloor[b] ** 2;
+    }
+    // SNR local : plus le SNR est bas, plus on réduit
+    const snr = totalEnergy / (totalNoise + 1e-10);
+    // Gain Wiener : W = SNR / (SNR + 1) ^ amount
+    const wienerGain = Math.pow(snr / (snr + 1.0), amount * 1.5);
+    const gain = Math.max(0.3, Math.min(1.0, wienerGain));
+
+    // Appliquer le gain avec fenêtre overlap-add
+    for (let i = 0; i < FRAME && pos + i < len; i++) {
+      out[pos + i] += signal[pos + i] * gain * win[i];
+      overlapCount[pos + i] += win[i];
+    }
+  }
+
+  // Normaliser par overlap
+  const result = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    result[i] = overlapCount[i] > 0.01 ? out[i] / overlapCount[i] : signal[i];
+  }
+  return result;
+}

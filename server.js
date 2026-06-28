@@ -53,17 +53,17 @@ app.get('/libs/', (req, res) => {
 
 // ── Rubber Band WASM — routes explicites avec bon Content-Type ───────────────
 app.get('/rubberband.wasm', (req, res) => {
-  const filePath = path.join(ROOT, 'public', 'rubberband.wasm');
+  const filePath = path.join(ROOT, 'rubberband.wasm');
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'rubberband.wasm not found' });
   res.setHeader('Content-Type', 'application/wasm');
-  res.setHeader('Cache-Control', 'public, max-age=604800'); // 1 semaine
+  res.setHeader('Cache-Control', 'no-cache, no-store');
   res.sendFile(filePath);
 });
 app.get('/rubberband.umd.min.js', (req, res) => {
-  const filePath = path.join(ROOT, 'public', 'rubberband.umd.min.js');
+  const filePath = path.join(ROOT, 'rubberband.umd.min.js');
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'rubberband.umd.min.js not found' });
   res.setHeader('Content-Type', 'application/javascript');
-  res.setHeader('Cache-Control', 'public, max-age=604800');
+  res.setHeader('Cache-Control', 'no-cache, no-store');
   res.sendFile(filePath);
 });
 

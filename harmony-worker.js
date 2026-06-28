@@ -1,15 +1,7 @@
-// harmony-worker.js v12 — Rubber Band WASM Engine
-// Moteur de pitch shifting : Rubber Band Library (WASM)
-// Remplace le phase vocoder JS maison (v11) qui produisait des artefacts
-// sur les trois intervalles (+3, +5, +7 ST).
-//
-// Architecture :
-//   1. Charger rubberband.wasm depuis /rubberband.wasm au démarrage
-//   2. rbPitchShift() : pitch shift via Rubber Band (offline, FormantPreserved)
-//   3. Pipeline d'effets inchangé : AGC → Saturation → Jitter → Timbre → Timing → Reverb → Chorus → Pan
-//
-// Rubber Band offline mode : deux passes (study + process) → meilleure qualité
-// FormantPreserved activé → voix naturelle même à +7 demi-tons
+// harmony-worker.js v14 — Rubber Band WASM (rubberband-wasm v3.3.0 par daninet)
+// Pitch shift haute qualité avec préservation des formants
+// Fichiers requis sur Railway : /rubberband.umd.min.js + /rubberband.wasm
+// Pipeline : Rubber Band → AGC → Saturation → Jitter → Timbre → Timing → Reverb → Chorus → Pan
 
 // ═══════════════════════════════════════════════════════════════
 // PRNG déterministe — Mulberry32
@@ -25,24 +17,22 @@ function makePRNG(seed) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// RUBBER BAND WASM — initialisation au démarrage du worker
+// RUBBER BAND WASM — Init
 // ═══════════════════════════════════════════════════════════════
 let rbApi = null;
 let rbReady = false;
 
 async function initRubberBand() {
   try {
-    // Charger le JS wrapper via fetch + eval pour éviter les problèmes de SW cache
-    // importScripts() peut échouer silencieusement si le SW sert une mauvaise version
+    // Charger le JS wrapper via fetch + eval (évite importScripts + SW cache)
     const jsResp = await fetch('/rubberband.umd.min.js', { cache: 'no-store' });
     if (!jsResp.ok) throw new Error('rubberband.umd.min.js HTTP ' + jsResp.status);
     const jsText = await jsResp.text();
     // eslint-disable-next-line no-new-func
     (new Function(jsText))();
 
-    // rubberband est maintenant disponible sur self (globalThis dans le worker)
     const rb = self.rubberband || globalThis.rubberband;
-    if (!rb || !rb.RubberBandInterface) throw new Error('rubberband global non disponible après eval');
+    if (!rb || !rb.RubberBandInterface) throw new Error('rubberband global non trouvé après eval');
 
     // Charger et compiler le WASM
     const wasmResp = await fetch('/rubberband.wasm', { cache: 'no-store' });
@@ -52,62 +42,58 @@ async function initRubberBand() {
     rbReady = true;
     console.log('[HarmonyWorker] Rubber Band WASM prêt ✅');
   } catch(e) {
-    console.error('[HarmonyWorker] Rubber Band init failed:', e);
+    console.error('[HarmonyWorker] Rubber Band init failed:', e.message);
     rbReady = false;
   }
 }
 
-// Lancer l'init immédiatement
 const rbInitPromise = initRubberBand();
 
 // ═══════════════════════════════════════════════════════════════
-// RUBBER BAND PITCH SHIFT
-// Basé sur l'API officielle du demo worker.js de rubberband-wasm
-// FormantPreserved (0x01000000) + Offline (0x00000000) + PitchHQ (0x02000000)
+// RUBBER BAND PITCH SHIFT — API officielle rubberband-wasm v3.3.0
+// Options : FormantPreserved (0x01000000) + HighQualityPitch (0x02000000)
+// Deux passes : study (analyse) + process (traitement) → meilleure qualité
 // ═══════════════════════════════════════════════════════════════
 function rbPitchShift(mono, semitones, sampleRate) {
   if (!rbApi) throw new Error('Rubber Band non initialisé');
   if (semitones === 0) return mono.slice();
 
   const pitchScale = Math.pow(2, semitones / 12);
+  const timeRatio = 1.0; // durée inchangée
+
+  // Options : FormantPreserved + HighQualityPitch
+  const RB_OPTION_FORMANT_PRESERVED = 0x01000000;
+  const RB_OPTION_PITCH_HIGH_QUALITY = 0x02000000;
+  const options = RB_OPTION_FORMANT_PRESERVED | RB_OPTION_PITCH_HIGH_QUALITY;
+
   const numChannels = 1;
-  const timeRatio = 1.0;
-
-  // Options : Offline (0) + FormantPreserved + PitchHighQuality
-  const RB_FORMANT_PRESERVED = 0x01000000;
-  const RB_PITCH_HQ          = 0x02000000;
-  const options = RB_FORMANT_PRESERVED | RB_PITCH_HQ;
-
-  const rbState = rbApi.rubberband_new(sampleRate, numChannels, options, timeRatio, 1.0);
+  const rbState = rbApi.rubberband_new(sampleRate, numChannels, options, timeRatio, pitchScale);
   rbApi.rubberband_set_pitch_scale(rbState, pitchScale);
   rbApi.rubberband_set_time_ratio(rbState, timeRatio);
-
-  const samplesRequired = rbApi.rubberband_get_samples_required(rbState) || 1024;
-  // Allouer un buffer plus grand que samplesRequired pour absorber les variations
-  // de taille que RubberBand peut retourner lors du retrieve (évite les artefacts/vents)
-  const bufferSize = Math.max(samplesRequired * 4, 16384);
-  const outputLen = mono.length;
-  const outputBuffer = new Float32Array(outputLen);
-
-  // Allouer : 1 ptr dans le tableau de canaux, + 1 buffer de données sécurisé
-  const channelArrayPtr = rbApi.malloc(numChannels * 4);
-  const channelDataPtr = rbApi.malloc(bufferSize * 4);
-  rbApi.memWritePtr(channelArrayPtr, channelDataPtr);
-
   rbApi.rubberband_set_expected_input_duration(rbState, mono.length);
 
+  const samplesRequired = Math.max(rbApi.rubberband_get_samples_required(rbState) || 1024, 512);
+  const outputSamples = Math.ceil(mono.length * timeRatio) + 8192;
+  const outputBuffer = new Float32Array(outputSamples);
+
+  // Allouer la mémoire WASM
+  const channelArrayPtr = rbApi.malloc(numChannels * 4);
+  const channelDataPtr = rbApi.malloc(samplesRequired * 4);
+  rbApi.memWritePtr(channelArrayPtr, channelDataPtr);
+
   try {
-    // ── PASS 1 : Study ──
+    // ── Passe 1 : Study (analyse du signal complet) ──────────────────
     let read = 0;
     while (read < mono.length) {
-      const remaining = Math.min(bufferSize, mono.length - read);
-      rbApi.memWrite(channelDataPtr, mono.subarray(read, read + remaining));
+      const remaining = Math.min(samplesRequired, mono.length - read);
+      const chunk = mono.subarray(read, read + remaining);
+      rbApi.memWrite(channelDataPtr, chunk);
       const isFinal = (read + remaining >= mono.length) ? 1 : 0;
       rbApi.rubberband_study(rbState, channelArrayPtr, remaining, isFinal);
       read += remaining;
     }
 
-    // ── PASS 2 : Process + Retrieve ──
+    // ── Passe 2 : Process (traitement) ───────────────────────────────
     read = 0;
     let write = 0;
 
@@ -116,27 +102,32 @@ function rbPitchShift(mono, semitones, sampleRate) {
         const available = rbApi.rubberband_available(rbState);
         if (available < 1) break;
         if (!final && available < samplesRequired) break;
-        const toRead = Math.min(bufferSize, available);
+        const toRead = Math.min(samplesRequired, available, outputSamples - write);
+        if (toRead <= 0) break;
         const recv = rbApi.rubberband_retrieve(rbState, channelArrayPtr, toRead);
-        if (recv > 0) {
-          const chunk = rbApi.memReadF32(channelDataPtr, recv);
-          const copyLen = Math.min(recv, outputLen - write);
-          if (copyLen > 0) { outputBuffer.set(chunk.subarray(0, copyLen), write); write += copyLen; }
-        } else { break; }
+        const out = rbApi.memReadF32(channelDataPtr, recv);
+        outputBuffer.set(out.subarray(0, recv), write);
+        write += recv;
       }
     };
 
     while (read < mono.length) {
-      const remaining = Math.min(bufferSize, mono.length - read);
-      rbApi.memWrite(channelDataPtr, mono.subarray(read, read + remaining));
+      const remaining = Math.min(samplesRequired, mono.length - read);
+      const chunk = mono.subarray(read, read + remaining);
+      rbApi.memWrite(channelDataPtr, chunk);
       const isFinal = (read + remaining >= mono.length) ? 1 : 0;
       rbApi.rubberband_process(rbState, channelArrayPtr, remaining, isFinal);
-      read += remaining;
       tryRetrieve(false);
+      read += remaining;
     }
     tryRetrieve(true);
 
-    return outputBuffer;
+    // Ajuster la longueur au signal original
+    const result = write >= mono.length
+      ? outputBuffer.subarray(0, mono.length)
+      : (() => { const p = new Float32Array(mono.length); p.set(outputBuffer.subarray(0, write)); return p; })();
+
+    return result.slice(); // slice pour détacher du buffer WASM
 
   } finally {
     rbApi.free(channelDataPtr);
@@ -442,7 +433,7 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
   const profile = LAYER_PROFILES[trackIndex] || LAYER_PROFILES[2];
   const seed = (trackIndex || 2) * 7919;
 
-  // 1. Pitch shift via Rubber Band (FormantPreserved + HQ offline)
+  // 1. Pitch shift via Rubber Band WASM (FormantPreserved + HQ offline)
   let shifted = rbPitchShift(mono, semitones, sampleRate);
 
   // 2. AGC — égaliser le niveau sur l'original
@@ -509,11 +500,7 @@ self.onmessage = async function(e) {
   try {
     // Attendre que Rubber Band soit prêt
     await rbInitPromise;
-
-    if (!rbReady) {
-      throw new Error('Rubber Band WASM non disponible. Vérifiez /rubberband.wasm et /rubberband.umd.min.js');
-    }
-
+    if (!rbReady) throw new Error('Rubber Band WASM non disponible');
     const len = channelL.length;
     const mono = new Float32Array(len);
     for (let i = 0; i < len; i++) mono[i] = ((channelL[i] || 0) + (channelR[i] || 0)) * 0.5;

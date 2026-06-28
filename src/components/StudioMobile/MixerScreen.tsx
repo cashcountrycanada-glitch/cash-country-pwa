@@ -10,7 +10,7 @@
  * - Waveform du mix final après mixage
  * - Indicateur de niveau par piste dans la vue stack
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ChevronLeft, Plus, Layers, Scissors, Loader2, CheckCircle2,
   Send, Pause, Play, Sparkles, Music2, RefreshCw, BarChart2, Download, Shield, Mic,
@@ -60,15 +60,14 @@ interface Props {
   autoSyncing?:     boolean;
 }
 
-// Layers de renforcement style Luke Combs / Irvin Blais / George Hamel
-// Objectif : épaissir et renforcer la voix principale, PAS des harmonies distinctes
-// Max ±4 demi-tons pour rester dans le registre de renforcement
+// Layers de renforcement style Johnny Cash / Elvis Presley / Alan Jackson
+// Gains discrets : les layers renforcent sans rivaliser avec la voix principale
 const HARMONY_DEFS = [
-  { trackIndex: 1, label: 'Double',   pitch:  0,  color: '#f97316', emoji: '🎵', musicNote: 'Unisson',    desc: 'Épaissit la voix' },
-  { trackIndex: 2, label: '+3 ST',    pitch:  3,  color: '#eab308', emoji: '🎶', musicNote: 'Tierce m.',  desc: 'Layer doux au-dessus' },
-  { trackIndex: 3, label: '+4 ST',    pitch:  4,  color: '#22c55e', emoji: '🎼', musicNote: 'Tierce M.',  desc: 'Layer brillant' },
-  { trackIndex: 4, label: 'Oct ↓',   pitch: -12, color: '#3b82f6', emoji: '🔉', musicNote: 'Octave -1',  desc: 'Renfort grave profond' },
-  { trackIndex: 5, label: '-3 ST',    pitch: -3,  color: '#a855f7', emoji: '✨', musicNote: 'Tierce m. ↓', desc: 'Layer chaud en dessous' },
+  { trackIndex: 1, label: 'Double',   pitch:  0,  color: '#f97316', emoji: '🎵', musicNote: 'Unisson',    desc: 'Épaissit naturellement' },
+  { trackIndex: 2, label: '+5 ST',    pitch:  5,  color: '#eab308', emoji: '🎶', musicNote: 'Quarte ↑',   desc: 'Signature Alan Jackson' },
+  { trackIndex: 3, label: 'Oct ↓',   pitch: -12, color: '#3b82f6', emoji: '🔉', musicNote: 'Octave ↓',   desc: 'Grave profond Cash' },
+  { trackIndex: 4, label: '+3 ST',    pitch:  3,  color: '#a855f7', emoji: '✨', musicNote: 'Tierce m. ↑', desc: 'Douceur en soutien' },
+  { trackIndex: 5, label: '-5 ST',    pitch: -5,  color: '#22c55e', emoji: '🎼', musicNote: 'Quarte ↓',   desc: 'Chaleur grave Elvis' },
 ];
 
 export default function MixerScreen({
@@ -92,6 +91,11 @@ export default function MixerScreen({
   const [mixWaveform, setMixWaveform]         = useState<number[]>([]);
   const [showStack, setShowStack]             = useState(false);
   const [showSections, setShowSections]       = useState(false);
+  // ── Preview mix temps réel ──
+  const [isPreviewing, setIsPreviewing]       = useState(false);
+  const [previewLoading, setPreviewLoading]   = useState(false);
+  const previewCtxRef  = useRef<AudioContext | null>(null);
+  const previewSrcsRef = useRef<AudioBufferSourceNode[]>([]);
   const [sections, setSections]               = useState<SectionMarker[]>(
     (project as any).sections || []
   );
@@ -108,6 +112,83 @@ export default function MixerScreen({
       return next;
     });
   };
+
+  // ── Preview Mix temps réel ─────────────────────────────────────────────────
+  // Joue toutes les pistes en parallèle via Web Audio API sans exporter
+  // Utilise les blobs déjà générés (pitch-shiftés) avec gain/pan actuels
+  const stopPreview = useCallback(() => {
+    previewSrcsRef.current.forEach(s => { try { s.stop(); } catch {} });
+    previewSrcsRef.current = [];
+    try { previewCtxRef.current?.close(); } catch {}
+    previewCtxRef.current = null;
+    setIsPreviewing(false);
+  }, []);
+
+  const startPreview = useCallback(async () => {
+    if (isPreviewing) { stopPreview(); return; }
+    if (tracks.length === 0) return;
+    setPreviewLoading(true);
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx() as AudioContext;
+      previewCtxRef.current = ctx;
+      const srcs: AudioBufferSourceNode[] = [];
+
+      // Charger et jouer chaque piste avec son gain/pan/pre-delay
+      const PRE_DELAYS: Record<number, number> = { 1: 28, 2: 42, 3: 35, 4: 51, 5: 38 };
+
+      for (const track of tracks) {
+        if (track.muted) continue;
+        const dataUrl = (window as any)[`__originalBlob_${track.id}`]
+          ? null : track.dataUrl;
+        let blob: Blob | null = null;
+        // Chercher le blob dans les sources disponibles
+        const origKey = `__originalBlob_${track.id}`;
+        if ((window as any)[origKey]) {
+          blob = (window as any)[origKey];
+        } else {
+          blob = await studioService.resolveBlobAsync(track.dataUrl).catch(() => null);
+        }
+        if (!blob || blob.size < 100) continue;
+
+        try {
+          const ab = await blob.arrayBuffer();
+          const buffer = await ctx.decodeAudioData(ab);
+          const src = ctx.createBufferSource();
+          src.buffer = buffer;
+          const gainNode = ctx.createGain();
+          gainNode.gain.value = Math.min(1.0, track.gain ?? 1.0);
+          const panner = ctx.createStereoPanner();
+          panner.pan.value = track.pan ?? 0;
+          src.connect(gainNode); gainNode.connect(panner); panner.connect(ctx.destination);
+          const tIdx = (track as any).trackIndex ?? 0;
+          const delayMs = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) : 0;
+          src.start(ctx.currentTime + delayMs / 1000);
+          src.onended = () => {
+            // Si toutes les sources sont terminées, arrêter le preview
+            const allDone = srcs.every(s => (s as any).__ended);
+            if (allDone) stopPreview();
+          };
+          (src as any).__ended = false;
+          src.addEventListener('ended', () => { (src as any).__ended = true; });
+          srcs.push(src);
+        } catch (e) {
+          console.warn('[Preview] piste ignorée:', (track as any).trackLabel, e);
+        }
+      }
+
+      previewSrcsRef.current = srcs;
+      setIsPreviewing(true);
+      setPreviewLoading(false);
+
+      // Auto-stop après 4 minutes max
+      setTimeout(() => stopPreview(), 4 * 60 * 1000);
+    } catch (e) {
+      console.error('[Preview] erreur:', e);
+      setPreviewLoading(false);
+      stopPreview();
+    }
+  }, [tracks, isPreviewing, stopPreview]);
 
   const tracks    = project?.tracks || [];
   // mainVoice = la voix du slot actif en priorité, sinon premier non-muté
@@ -1165,6 +1246,22 @@ export default function MixerScreen({
         {/* ── Zone Mix + Export ── */}
         {tracks.length > 0 && (
           <div className="space-y-3 pt-2">
+
+            {/* Bouton Preview Mix temps réel */}
+            <button onClick={startPreview} disabled={previewLoading}
+              className="w-full py-3 rounded-2xl font-black text-[13px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-60"
+              style={{ background: isPreviewing ? '#7c3aed' : '#18181b', border: `2px solid ${isPreviewing ? '#7c3aed' : '#3f3f46'}`, color: isPreviewing ? '#fff' : '#a1a1aa' }}>
+              {previewLoading
+                ? <><Loader2 size={15} className="animate-spin"/> Chargement...</>
+                : isPreviewing
+                ? <><Pause size={15}/> Stop Preview</>
+                : <><Play size={15}/> ▶ Preview Mix (temps réel)</>}
+            </button>
+            {isPreviewing && (
+              <p className="text-center text-[9px] text-purple-400 font-black tracking-widest -mt-1">
+                🎧 TOUTES LES PISTES EN DIRECT — ajuste les volumes et écoute
+              </p>
+            )}
 
             {/* Bouton Mixer */}
             <button onClick={() => onMix([...layerSlots])} disabled={isMixing}

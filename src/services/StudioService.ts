@@ -1426,19 +1426,39 @@ export const studioService = {
       const src = offline.createBufferSource(); src.buffer = buffer;
       const gainNode = offline.createGain();
       // Plafonner le gain à 1.0 dans le mix — évite le clipping
-      // Le CLIP indicator est informatif mais le mix ne doit pas distordre
       gainNode.gain.value = Math.min(1.0, track.gain ?? 1.0);
       const panner = offline.createStereoPanner(); panner.pan.value = track.pan ?? 0;
       src.connect(gainNode); gainNode.connect(panner); panner.connect(offline.destination);
-      // Appliquer l'offset inst : décalage positif = inst démarre plus tard, négatif = plus tôt
-      const isInstTrack = (track as any).isInstrumental || (track as any).trackIndex === -1;
+
+      // ── Pre-delay par layer — style Cash/Elvis ────────────────────────────
+      // Un vrai double tracking humain a des décalages naturels de 20-60ms.
+      // Sans ces décalages, les layers sonnent "MIDI" — parfaitement alignés = artificiel.
+      // Référence : Sun Studio utilisait des délais de bande 30-55ms pour le slapback.
+      const tIdx = (track as any).trackIndex ?? 0;
+      const isInstTrack = (track as any).isInstrumental || tIdx === -1;
+      let preDelayMs = 0;
+      if (!isInstTrack && tIdx > 0) {
+        // Chaque layer a un pre-delay unique et cohérent
+        switch (tIdx) {
+          case 1: preDelayMs = 28;  break; // Double tracking : 28ms — épaisseur naturelle
+          case 2: preDelayMs = 42;  break; // +5 ST : 42ms — légèrement plus loin dans l'espace
+          case 3: preDelayMs = 35;  break; // Octave bas : 35ms — présence sans coller
+          case 4: preDelayMs = 51;  break; // +3 ST : 51ms — fond discret
+          case 5: preDelayMs = 38;  break; // -5 ST : 38ms — chaleur décalée
+          default: preDelayMs = 30; break;
+        }
+      }
+
+      // Appliquer l'offset inst ou le pre-delay layer
       if (isInstTrack && instOffsetMs !== 0) {
         const offsetSec = instOffsetMs / 1000;
         if (offsetSec >= 0) {
-          src.start(offsetSec); // inst démarre après la voix
+          src.start(offsetSec);
         } else {
-          src.start(0, -offsetSec); // inst démarre à un point plus avancé
+          src.start(0, -offsetSec);
         }
+      } else if (preDelayMs > 0) {
+        src.start(preDelayMs / 1000);
       } else {
         src.start(0);
       }
@@ -1600,11 +1620,16 @@ export const studioService = {
     };
 
     const allLayers = [
-      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.55, pan: -0.3, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
-      { trackIndex: 2, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.45, pan: 0.4,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
-      { trackIndex: 3, trackLabel: 'Layer +4 ST',     pitch: 4,   gain: 0.40, pan: -0.4, emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
-      { trackIndex: 4, trackLabel: 'Octave bas',      pitch: -12, gain: 0.30, pan: 0.0,  emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
-      { trackIndex: 5, trackLabel: 'Layer -3 ST',     pitch: -3,  gain: 0.35, pan: 0.3,  emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
+      // Double tracking : unisson, très discret, juste l'épaisseur naturelle
+      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.28, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
+      // +5 ST : quarte juste, signature Alan Jackson / country classique
+      { trackIndex: 2, trackLabel: 'Layer +5 ST',     pitch: 5,   gain: 0.22, pan: 0.35,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
+      // Octave bas : grave profond signature Cash, très discret
+      { trackIndex: 3, trackLabel: 'Octave bas',      pitch: -12, gain: 0.25, pan: 0.0,   emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
+      // +3 ST : tierce mineure douce, quasi-inaudible seul
+      { trackIndex: 4, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.18, pan: 0.30,  emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
+      // -5 ST : quarte grave, chaleur Elvis dans les refrains
+      { trackIndex: 5, trackLabel: 'Layer -5 ST',     pitch: -5,  gain: 0.18, pan: -0.30, emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
     ];
     // Si targetTrackIndex spécifié → générer seulement cette harmonie
     const layers = targetTrackIndex !== undefined
