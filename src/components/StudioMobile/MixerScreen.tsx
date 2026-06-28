@@ -125,44 +125,65 @@ export default function MixerScreen({
     if (isPreviewing) { stopPreview(); return; }
     const currentTracks = project?.tracks || [];
     if (currentTracks.length === 0) return;
-    setIsPreviewing(true);
-    const PRE_DELAYS: Record<number, number> = { 1: 28, 2: 42, 3: 35, 4: 51, 5: 38 };
+
+    // ── iOS : AudioContext DOIT être créé synchroniquement dans le user gesture ──
+    // Tout await après ce point ne pose plus de problème
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    let ctx: AudioContext;
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      const ctx = new AudioCtx() as AudioContext;
-      (window as any).__previewCtx = ctx;
-      const srcs: AudioBufferSourceNode[] = [];
-      for (const track of currentTracks) {
-        if ((track as any).muted) continue;
-        const blob = await studioService.resolveBlobAsync(track.dataUrl).catch(() => null);
-        if (!blob || blob.size < 100) continue;
-        try {
-          const ab = await blob.arrayBuffer();
-          const buffer = await ctx.decodeAudioData(ab);
-          const src = ctx.createBufferSource();
-          src.buffer = buffer;
-          const gain = ctx.createGain();
-          gain.gain.value = Math.min(1.0, (track as any).gain ?? 1.0);
-          const pan = ctx.createStereoPanner();
-          pan.pan.value = (track as any).pan ?? 0;
-          src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
-          const tIdx = (track as any).trackIndex ?? 0;
-          const delay = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) / 1000 : 0;
-          src.start(ctx.currentTime + delay);
-          src.onended = () => {
-            const remaining = ((window as any).__previewSrcs || []).filter((s: any) => !s.__done);
-            if (remaining.length === 0) stopPreview();
-          };
-          (src as any).__done = false;
-          srcs.push(src);
-        } catch {}
-      }
-      (window as any).__previewSrcs = srcs;
-      if (srcs.length === 0) { stopPreview(); return; }
-      setTimeout(() => stopPreview(), 4 * 60 * 1000);
-    } catch {
-      stopPreview();
+      ctx = new AudioCtx() as AudioContext;
+      if (ctx.state === 'suspended') await ctx.resume();
+    } catch (e: any) {
+      alert('Preview non disponible : ' + e.message);
+      return;
     }
+    (window as any).__previewCtx = ctx;
+    setIsPreviewing(true);
+
+    const PRE_DELAYS: Record<number, number> = { 1: 28, 2: 42, 3: 35, 4: 51, 5: 38 };
+    const srcs: AudioBufferSourceNode[] = [];
+
+    for (const track of currentTracks) {
+      if ((track as any).muted) continue;
+      let blob: Blob | null = null;
+      try {
+        blob = await studioService.resolveBlobAsync(track.dataUrl);
+      } catch { continue; }
+      if (!blob || blob.size < 100) continue;
+      try {
+        const ab = await blob.arrayBuffer();
+        const buffer = await ctx.decodeAudioData(ab);
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        const gain = ctx.createGain();
+        gain.gain.value = Math.min(1.0, (track as any).gain ?? 1.0);
+        const pan = ctx.createStereoPanner();
+        pan.pan.value = (track as any).pan ?? 0;
+        src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
+        const tIdx = (track as any).trackIndex ?? 0;
+        const delay = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) / 1000 : 0;
+        src.start(ctx.currentTime + delay);
+        srcs.push(src);
+      } catch (e: any) {
+        console.warn('[Preview] piste ignorée:', e.message);
+      }
+    }
+
+    (window as any).__previewSrcs = srcs;
+
+    if (srcs.length === 0) {
+      stopPreview();
+      alert('Aucune piste audio disponible pour le preview.');
+      return;
+    }
+
+    // Auto-stop quand toutes les sources sont terminées
+    let ended = 0;
+    srcs.forEach(s => {
+      s.onended = () => { ended++; if (ended >= srcs.length) stopPreview(); };
+    });
+    // Sécurité : stop après 4 minutes
+    setTimeout(() => stopPreview(), 4 * 60 * 1000);
   };
 
 
