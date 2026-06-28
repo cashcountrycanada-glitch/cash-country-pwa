@@ -108,11 +108,64 @@ export default function MixerScreen({
     });
   };
 
-  // ── Preview Mix temps réel ─────────────────────────────────────────────────
-  // Joue toutes les pistes en parallèle via Web Audio API sans exporter
-  // Utilise les blobs déjà générés (pitch-shiftés) avec gain/pan actuels
+  const [isPreviewing, setIsPreviewing] = useState(false);
 
   const tracks    = project?.tracks || [];
+
+  const stopPreview = () => {
+    const srcs: AudioBufferSourceNode[] = (window as any).__previewSrcs || [];
+    srcs.forEach(s => { try { s.stop(); } catch {} });
+    (window as any).__previewSrcs = [];
+    try { (window as any).__previewCtx?.close(); } catch {}
+    (window as any).__previewCtx = null;
+    setIsPreviewing(false);
+  };
+
+  const startPreview = async () => {
+    if (isPreviewing) { stopPreview(); return; }
+    const currentTracks = project?.tracks || [];
+    if (currentTracks.length === 0) return;
+    setIsPreviewing(true);
+    const PRE_DELAYS: Record<number, number> = { 1: 28, 2: 42, 3: 35, 4: 51, 5: 38 };
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioCtx() as AudioContext;
+      (window as any).__previewCtx = ctx;
+      const srcs: AudioBufferSourceNode[] = [];
+      for (const track of currentTracks) {
+        if ((track as any).muted) continue;
+        const blob = await studioService.resolveBlobAsync(track.dataUrl).catch(() => null);
+        if (!blob || blob.size < 100) continue;
+        try {
+          const ab = await blob.arrayBuffer();
+          const buffer = await ctx.decodeAudioData(ab);
+          const src = ctx.createBufferSource();
+          src.buffer = buffer;
+          const gain = ctx.createGain();
+          gain.gain.value = Math.min(1.0, (track as any).gain ?? 1.0);
+          const pan = ctx.createStereoPanner();
+          pan.pan.value = (track as any).pan ?? 0;
+          src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
+          const tIdx = (track as any).trackIndex ?? 0;
+          const delay = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) / 1000 : 0;
+          src.start(ctx.currentTime + delay);
+          src.onended = () => {
+            const remaining = ((window as any).__previewSrcs || []).filter((s: any) => !s.__done);
+            if (remaining.length === 0) stopPreview();
+          };
+          (src as any).__done = false;
+          srcs.push(src);
+        } catch {}
+      }
+      (window as any).__previewSrcs = srcs;
+      if (srcs.length === 0) { stopPreview(); return; }
+      setTimeout(() => stopPreview(), 4 * 60 * 1000);
+    } catch {
+      stopPreview();
+    }
+  };
+
+
   // mainVoice = la voix du slot actif en priorité, sinon premier non-muté
   // slotVoices = une prise par slot (dédupliqué — garder la plus récente par takeSlot)
   const slotVoices = React.useMemo(() => {
@@ -1168,6 +1221,13 @@ export default function MixerScreen({
         {/* ── Zone Mix + Export ── */}
         {tracks.length > 0 && (
           <div className="space-y-3 pt-2">
+
+            {/* Bouton Preview Mix */}
+            <button onClick={startPreview}
+              className="w-full py-3 rounded-2xl font-black text-[13px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
+              style={{ background: isPreviewing ? '#7c3aed' : '#18181b', border: `2px solid ${isPreviewing ? '#7c3aed' : '#3f3f46'}`, color: isPreviewing ? '#fff' : '#a1a1aa' }}>
+              {isPreviewing ? <><Pause size={15}/> Stop Preview</> : <><Play size={15}/> ▶ Preview Mix</>}
+            </button>
 
             {/* Bouton Mixer */}
             <button onClick={() => onMix([...layerSlots])} disabled={isMixing}
