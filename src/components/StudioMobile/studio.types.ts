@@ -258,7 +258,7 @@ export const TRACK_PRESETS: TrackPreset[] = [
   { index: 0, label: 'Voix principale', pitch: 0,   pan: 0,    gain: 1.0,  color: '#ef4444', emoji: '🎤',
     intervalLabel: 'Mélodie principale', singingTip: 'Chante ta mélodie normalement' },
   { index: 1, label: 'Double tracking', pitch: 0,   pan: -0.25, gain: 0.28, color: '#f97316', emoji: '🎵',
-    intervalLabel: 'Unisson', singingTip: 'Rechante la même mélodie — les légères variations naturelles créent l'épaisseur. Style Cash/Elvis classique.' },
+    intervalLabel: 'Unisson', singingTip: "Rechante la même mélodie — les légères variations naturelles créent l'épaisseur. Style Cash/Elvis classique." },
   { index: 2, label: 'Layer +5 ST',     pitch: 5,   pan: 0.35,  gain: 0.22, color: '#eab308', emoji: '🎶',
     intervalLabel: 'Quarte juste ↑', singingTip: 'Chante 5 demi-tons AU-DESSUS — quarte parfaite, signature Alan Jackson et country classique' },
   { index: 3, label: 'Octave bas',      pitch: -12, pan: 0,     gain: 0.25, color: '#3b82f6', emoji: '🔉',
