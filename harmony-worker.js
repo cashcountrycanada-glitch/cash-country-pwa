@@ -21,10 +21,12 @@ function makePRNG(seed) {
 // ═══════════════════════════════════════════════════════════════
 let rbApi = null;
 let rbReady = false;
+let rbInitPromise = null; // lazy — initialisé seulement au premier appel
 
 async function initRubberBand() {
+  if (rbInitPromise) return rbInitPromise;
+  rbInitPromise = (async () => {
   try {
-    // Charger le JS wrapper via fetch + eval (évite importScripts + SW cache)
     const jsResp = await fetch('/rubberband.umd.min.js', { cache: 'no-store' });
     if (!jsResp.ok) throw new Error('rubberband.umd.min.js HTTP ' + jsResp.status);
     const jsText = await jsResp.text();
@@ -34,7 +36,6 @@ async function initRubberBand() {
     const rb = self.rubberband || globalThis.rubberband;
     if (!rb || !rb.RubberBandInterface) throw new Error('rubberband global non trouvé après eval');
 
-    // Charger et compiler le WASM
     const wasmResp = await fetch('/rubberband.wasm', { cache: 'no-store' });
     if (!wasmResp.ok) throw new Error('rubberband.wasm HTTP ' + wasmResp.status);
     const wasm = await WebAssembly.compileStreaming(wasmResp);
@@ -45,9 +46,9 @@ async function initRubberBand() {
     console.error('[HarmonyWorker] Rubber Band init failed:', e.message);
     rbReady = false;
   }
+  })();
+  return rbInitPromise;
 }
-
-const rbInitPromise = initRubberBand();
 
 // ═══════════════════════════════════════════════════════════════
 // RUBBER BAND PITCH SHIFT — API officielle rubberband-wasm v3.3.0
@@ -498,8 +499,8 @@ function processChunked(mono, semitones, sampleRate, trackIndex) {
 self.onmessage = async function(e) {
   const { id, op, channelL, channelR, semitones, gain, pan, sampleRate, trackIndex } = e.data;
   try {
-    // Attendre que Rubber Band soit prêt
-    await rbInitPromise;
+    // Init Rubber Band au premier appel seulement (lazy — évite de charger 259KB au démarrage)
+    await initRubberBand();
     if (!rbReady) throw new Error('Rubber Band WASM non disponible');
     const len = channelL.length;
     const mono = new Float32Array(len);

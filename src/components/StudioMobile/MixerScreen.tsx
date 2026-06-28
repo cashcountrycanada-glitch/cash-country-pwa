@@ -126,6 +126,7 @@ export default function MixerScreen({
 
   const startPreview = useCallback(async () => {
     if (isPreviewing) { stopPreview(); return; }
+    const tracks = project?.tracks || [];
     if (tracks.length === 0) return;
     setPreviewLoading(true);
     try {
@@ -188,7 +189,7 @@ export default function MixerScreen({
       setPreviewLoading(false);
       stopPreview();
     }
-  }, [tracks, isPreviewing, stopPreview]);
+  }, [project, isPreviewing, stopPreview]);
 
   const tracks    = project?.tracks || [];
   // mainVoice = la voix du slot actif en priorité, sinon premier non-muté
