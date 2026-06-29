@@ -63,11 +63,11 @@ interface Props {
 // Layers de renforcement style Johnny Cash / Elvis Presley / Alan Jackson
 // Gains discrets : les layers renforcent sans rivaliser avec la voix principale
 const HARMONY_DEFS = [
-  { trackIndex: 1, label: 'Double',   pitch:  0,  color: '#f97316', emoji: '🎵', musicNote: 'Unisson',    desc: 'Épaissit naturellement' },
-  { trackIndex: 2, label: '+5 ST',    pitch:  5,  color: '#eab308', emoji: '🎶', musicNote: 'Quarte ↑',   desc: 'Signature Alan Jackson' },
-  { trackIndex: 3, label: 'Oct ↓',   pitch: -12, color: '#3b82f6', emoji: '🔉', musicNote: 'Octave ↓',   desc: 'Grave profond Cash' },
-  { trackIndex: 4, label: '+3 ST',    pitch:  3,  color: '#a855f7', emoji: '✨', musicNote: 'Tierce m. ↑', desc: 'Douceur en soutien' },
-  { trackIndex: 5, label: '-5 ST',    pitch: -5,  color: '#22c55e', emoji: '🎼', musicNote: 'Quarte ↓',   desc: 'Chaleur grave Elvis' },
+  { trackIndex: 1, label: 'Double',  pitch:  0,  color: '#f97316', emoji: '🎵', musicNote: 'Unisson',   desc: 'Épaissit naturellement' },
+  { trackIndex: 2, label: '+5 ST',   pitch:  5,  color: '#eab308', emoji: '🎶', musicNote: 'Quarte ↑',  desc: 'Signature Alan Jackson' },
+  { trackIndex: 3, label: 'Oct ↓',  pitch: -12, color: '#3b82f6', emoji: '🔉', musicNote: 'Octave ↓',  desc: 'Grave profond Cash' },
+  { trackIndex: 4, label: '+7 ST',   pitch:  7,  color: '#a855f7', emoji: '✨', musicNote: 'Quinte ↑',  desc: 'Puissance Garth Brooks' },
+  { trackIndex: 5, label: '-5 ST',   pitch: -5,  color: '#22c55e', emoji: '🎼', musicNote: 'Quarte ↓',  desc: 'Chaleur grave Elvis' },
 ];
 
 export default function MixerScreen({

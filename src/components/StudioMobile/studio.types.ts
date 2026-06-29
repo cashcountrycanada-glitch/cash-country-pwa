@@ -255,18 +255,18 @@ export const FX_PRESET_DEFAULT = FX_PRESETS[0]; // Clean
 
 
 export const TRACK_PRESETS: TrackPreset[] = [
-  { index: 0, label: 'Voix principale', pitch: 0,   pan: 0,    gain: 1.0,  color: '#ef4444', emoji: '🎤',
+  { index: 0, label: 'Voix principale', pitch: 0,   pan: 0,     gain: 1.0,  color: '#ef4444', emoji: '🎤',
     intervalLabel: 'Mélodie principale', singingTip: 'Chante ta mélodie normalement' },
   { index: 1, label: 'Double tracking', pitch: 0,   pan: -0.25, gain: 0.28, color: '#f97316', emoji: '🎵',
-    intervalLabel: 'Unisson', singingTip: "Rechante la même mélodie — les légères variations naturelles créent l'épaisseur. Style Cash/Elvis classique." },
-  { index: 2, label: 'Layer +5 ST',     pitch: 5,   pan: 0.35,  gain: 0.22, color: '#eab308', emoji: '🎶',
-    intervalLabel: 'Quarte juste ↑', singingTip: 'Chante 5 demi-tons AU-DESSUS — quarte parfaite, signature Alan Jackson et country classique' },
-  { index: 3, label: 'Octave bas',      pitch: -12, pan: 0,     gain: 0.25, color: '#3b82f6', emoji: '🔉',
-    intervalLabel: 'Octave ↓', singingTip: 'Chante UNE OCTAVE EN DESSOUS — grave profond signature Johnny Cash, très discret dans le mix' },
-  { index: 4, label: 'Layer +3 ST',     pitch: 3,   pan: 0.30,  gain: 0.18, color: '#a855f7', emoji: '✨',
-    intervalLabel: 'Tierce mineure ↑', singingTip: 'Chante 3 demi-tons AU-DESSUS — layer doux de soutien, presque inaudible seul' },
-  { index: 5, label: 'Layer -5 ST',     pitch: -5,  pan: -0.30, gain: 0.18, color: '#22c55e', emoji: '🎼',
-    intervalLabel: 'Quarte juste ↓', singingTip: 'Chante 5 demi-tons EN DESSOUS — quarte grave, chaleur Elvis dans les refrains' },
+    intervalLabel: 'Unisson', singingTip: "Rechante la même mélodie — les variations naturelles créent l'épaisseur. Style Cash/Elvis." },
+  { index: 2, label: 'Layer +5 ST',     pitch: 5,   pan: 0.35,  gain: 0.20, color: '#eab308', emoji: '🎶',
+    intervalLabel: 'Quarte juste ↑', singingTip: 'Chante 5 demi-tons AU-DESSUS — signature Alan Jackson et country classique' },
+  { index: 3, label: 'Octave bas',      pitch: -12, pan: 0,     gain: 0.22, color: '#3b82f6', emoji: '🔉',
+    intervalLabel: 'Octave ↓', singingTip: 'Chante UNE OCTAVE EN DESSOUS — grave profond signature Johnny Cash' },
+  { index: 4, label: 'Layer +7 ST',     pitch: 7,   pan: -0.35, gain: 0.15, color: '#a855f7', emoji: '✨',
+    intervalLabel: 'Quinte juste ↑', singingTip: 'Chante 7 demi-tons AU-DESSUS — quinte Garth Brooks, puissance dans les refrains' },
+  { index: 5, label: 'Layer -5 ST',     pitch: -5,  pan: 0.30,  gain: 0.16, color: '#22c55e', emoji: '🎼',
+    intervalLabel: 'Quarte juste ↓', singingTip: 'Chante 5 demi-tons EN DESSOUS — chaleur grave style Elvis et les Jordanaires' },
 ];
 
 export const TRACK_FX_SUGGESTIONS: Record<number, string> = {

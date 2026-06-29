@@ -1583,6 +1583,27 @@ export const studioService = {
     if (hasChordData) progress(`🎵 Analyse harmonique — ${chordMap.length} accords détectés`, 8);
 
     // Helper : envoyer une couche au Web Worker et attendre le résultat WAV
+    // ── Pré-compiler le WASM Rubber Band une seule fois ──────────────────────
+    // Évite de recompiler 259KB × N layers → économise ~800KB par layer
+    let precompiledWasm: WebAssembly.Module | null = null;
+    try {
+      // Décoder le base64 inline depuis le worker blob
+      // On compile ici dans le main thread, on transfère le Module compilé
+      const workerCode = await getWorkerBlobUrl('/harmony-worker.js').then(async blobUrl => {
+        const r = await fetch(blobUrl); return r.text();
+      });
+      const b64Match = workerCode.match(/const __RB_WASM_B64 = "([^"]+)"/);
+      if (b64Match) {
+        const bin = atob(b64Match[1]);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        precompiledWasm = await WebAssembly.compile(bytes.buffer);
+        progress('🔧 Rubber Band WASM compilé', 8);
+      }
+    } catch (wasmErr: any) {
+      console.warn('[generateLayers] WASM pre-compile failed:', wasmErr.message);
+    }
+
     const processLayerInWorker = (op: string, semitones: number, gain: number, pan: number, trackIndex?: number): Promise<Blob> => {
       return new Promise(async (resolve, reject) => {
         let worker: Worker;
@@ -1592,7 +1613,6 @@ export const studioService = {
         const id = Date.now();
         const channelL = srcBuffer.getChannelData(0);
         const channelR = srcBuffer.numberOfChannels > 1 ? srcBuffer.getChannelData(1) : srcBuffer.getChannelData(0);
-        // Copier pour transfert (les buffers originaux ne doivent pas être détachés)
         const transferL = channelL.slice();
         const transferR = channelR.slice();
         const timeout = setTimeout(() => {
@@ -1603,7 +1623,7 @@ export const studioService = {
           const msg = e.data;
           if (msg.id !== id) return;
           if (msg.type === 'progress') {
-            progress(`${msg.label}`, -1); // -1 = pas de changement de %
+            progress(`${msg.label}`, -1);
           } else if (msg.type === 'done') {
             clearTimeout(timeout);
             worker.terminate();
@@ -1615,21 +1635,41 @@ export const studioService = {
           }
         };
         worker.onerror = (e) => { clearTimeout(timeout); worker.terminate(); reject(new Error(e.message)); };
-        worker.postMessage({ id, op, channelL: transferL, channelR: transferR, semitones, gain, pan, sampleRate: srcBuffer.sampleRate, trackIndex: trackIndex ?? 2 }, [transferL.buffer, transferR.buffer]);
+        // Passer le module WASM pré-compilé si disponible — évite recompilation dans le worker
+        worker.postMessage({
+          id, op, channelL: transferL, channelR: transferR,
+          semitones, gain, pan, sampleRate: srcBuffer.sampleRate,
+          trackIndex: trackIndex ?? 2,
+          precompiledWasm: precompiledWasm ?? undefined,
+        }, [transferL.buffer, transferR.buffer]);
       });
     };
 
     const allLayers = [
-      // Double tracking : unisson, très discret, juste l'épaisseur naturelle
+      // ── Style : Cash / Elvis / Alan Jackson / Garth Brooks ────────────────
+      // Principe : renforcement subtil — les layers se fondent dans la voix principale
+      // Gains très discrets : on les sent, on ne les entend pas séparément
+      // Pre-delay Sun Studio (28-51ms) déjà appliqué dans le mix
+
+      // 1. Double tracking — unisson, épaisseur naturelle humaine
+      // Cash et Elvis rechanaient systématiquement leurs propres voix
       { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.28, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
-      // +5 ST : quarte juste, signature Alan Jackson / country classique
-      { trackIndex: 2, trackLabel: 'Layer +5 ST',     pitch: 5,   gain: 0.22, pan: 0.35,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
-      // Octave bas : grave profond signature Cash, très discret
-      { trackIndex: 3, trackLabel: 'Octave bas',      pitch: -12, gain: 0.25, pan: 0.0,   emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
-      // +3 ST : tierce mineure douce, quasi-inaudible seul
-      { trackIndex: 4, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.18, pan: 0.30,  emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
-      // -5 ST : quarte grave, chaleur Elvis dans les refrains
-      { trackIndex: 5, trackLabel: 'Layer -5 ST',     pitch: -5,  gain: 0.18, pan: -0.30, emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
+
+      // 2. +5 ST — quarte juste, signature Alan Jackson et country classique
+      // Aussi utilisé par Garth Brooks dans les couplets
+      { trackIndex: 2, trackLabel: 'Layer +5 ST',     pitch: 5,   gain: 0.20, pan: 0.35,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
+
+      // 3. Octave bas — grave profond Cash, très discret
+      // Johnny Cash l'utilisait pour renforcer le bas sans changer la couleur
+      { trackIndex: 3, trackLabel: 'Octave bas',      pitch: -12, gain: 0.22, pan: 0.0,   emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
+
+      // 4. +7 ST — quinte, signature Garth Brooks dans les refrains puissants
+      // Très discret pour ne pas sonner "chorale"
+      { trackIndex: 4, trackLabel: 'Layer +7 ST',     pitch: 7,   gain: 0.15, pan: -0.35, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
+
+      // 5. -5 ST — quarte grave, chaleur Elvis dans les refrains
+      // Elvis l'utilisait avec les Jordanaires pour le soutien grave
+      { trackIndex: 5, trackLabel: 'Layer -5 ST',     pitch: -5,  gain: 0.16, pan: 0.30,  emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
     ];
     // Si targetTrackIndex spécifié → générer seulement cette harmonie
     const layers = targetTrackIndex !== undefined

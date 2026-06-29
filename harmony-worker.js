@@ -50,19 +50,24 @@ let rbApi = null;
 let rbReady = false;
 let rbInitPromise = null;
 
-async function initRubberBand() {
+async function initRubberBand(precompiledWasm) {
   if (rbInitPromise) return rbInitPromise;
   rbInitPromise = (async () => {
     try {
-      // Le UMD est déjà exécuté inline au chargement du worker — récupérer l'export
       const rb = self.__rb_module;
       if (!rb) throw new Error('rubberband module non trouvé');
       const RBI = rb.RubberBandInterface || rb.default?.RubberBandInterface;
       if (!RBI) throw new Error('RubberBandInterface non trouvé');
 
-      // Décoder le WASM depuis base64 inline — zéro fetch, zéro CSP
-      const wasmBytes = __decodeBase64ToUint8(__RB_WASM_B64);
-      const wasm = await WebAssembly.compile(wasmBytes.buffer);
+      // Utiliser le module WASM pré-compilé si fourni (économise ~800KB de décodage)
+      let wasm;
+      if (precompiledWasm) {
+        wasm = precompiledWasm;
+        console.log('[HarmonyWorker] WASM pré-compilé reçu du main thread ✅');
+      } else {
+        const wasmBytes = __decodeBase64ToUint8(__RB_WASM_B64);
+        wasm = await WebAssembly.compile(wasmBytes.buffer);
+      }
       rbApi = await RBI.initialize(wasm);
       rbReady = true;
       console.log('[HarmonyWorker] Rubber Band WASM prêt ✅ (inline)');
@@ -525,7 +530,7 @@ self.onmessage = async function(e) {
   const { id, op, channelL, channelR, semitones, gain, pan, sampleRate, trackIndex } = e.data;
   try {
     // Init Rubber Band au premier appel (lazy)
-    await initRubberBand();
+    await initRubberBand(e.data.precompiledWasm || null);
     const len = channelL.length;
     const mono = new Float32Array(len);
     for (let i = 0; i < len; i++) mono[i] = ((channelL[i] || 0) + (channelR[i] || 0)) * 0.5;
