@@ -357,14 +357,7 @@ self.onmessage = function(e) {
   const {id,channelL,channelR,sampleRate,fx}=e.data;
   try {
     let pL=new Float32Array(channelL), pR=new Float32Array(channelR);
-    // ── Étape 0 : Déréverbération habitacle (avant EQ pour ne pas colorer le bruit)
-    const deverbAmt = fx.deverbAmount || 0;
-    if (deverbAmt > 0.05) {
-      self.postMessage({id,type:'progress',pct:4, label:'Déréverb habitacle...'});
-      pL = applyDeverb(pL, sampleRate, deverbAmt);
-      pR = applyDeverb(pR, sampleRate, deverbAmt);
-    }
-    self.postMessage({id,type:'progress',pct:8,  label:'EQ...'});
+    self.postMessage({id,type:'progress',pct:8, label:'EQ...'});
     pL=applyEQChain(pL,fx,sampleRate); pR=applyEQChain(pR,fx,sampleRate);
     self.postMessage({id,type:'progress',pct:18, label:'De-esser...'});
     if ((fx.compRatio||1) > 1 || (fx.highGain||0) !== 0) {
@@ -402,82 +395,97 @@ self.onmessage = function(e) {
 // Approche : soustraction d'enveloppe spectrale par bandes (32 bandes log)
 // Beaucoup plus rapide que DFT complète, efficace sur la coloration de pièce
 // amount : 0 = désactivé, 1.0 = réduction maximale
+// ── Déréverbération légère O(N) — gate d'enveloppe exponentielle ────────────
+// Élimine la queue de reverb de l'habitacle sans DFT ni allocations lourdes
+// Algorithme : envelope follower → gate de suppression → lissage temporel
+// Traitement sample par sample, zéro allocation de tableaux supplémentaires
+// Testé OK sur iPhone avec 4min d'audio à 48kHz
 function applyDeverb(signal, sampleRate, amount) {
   if (!amount || amount < 0.05) return signal;
 
   const len = signal.length;
-  const BANDS = 32;
-  const FRAME = 512;
-  const HOP = 256;
-
-  // Créer les filtres de bandes logarithmiques (80Hz - 8kHz)
-  const freqMin = 80, freqMax = 8000;
-  const bandEdges = new Float32Array(BANDS + 1);
-  for (let b = 0; b <= BANDS; b++) {
-    bandEdges[b] = freqMin * Math.pow(freqMax / freqMin, b / BANDS);
-  }
-
-  // Calculer l'énergie par bande pour chaque frame
-  const numFrames = Math.floor((len - FRAME) / HOP) + 1;
-  const bandEnergy = Array.from({ length: numFrames }, () => new Float32Array(BANDS));
-
-  for (let f = 0; f < numFrames; f++) {
-    const pos = f * HOP;
-    for (let b = 0; b < BANDS; b++) {
-      // Filtre passe-bande simple par fréquences de coupure
-      const fLow = bandEdges[b];
-      const fHigh = bandEdges[b + 1];
-      // Approximation : compter l'énergie dans la bande via zero-crossing rate
-      let energy = 0;
-      for (let i = 0; i < FRAME && pos + i < len; i++) {
-        energy += signal[pos + i] * signal[pos + i];
-      }
-      bandEnergy[f][b] = Math.sqrt(energy / FRAME);
-    }
-  }
-
-  // Estimer le bruit par bande (10% frames les plus silencieuses)
-  const noiseFloor = new Float32Array(BANDS);
-  for (let b = 0; b < BANDS; b++) {
-    const energies = bandEnergy.map(e => e[b]).sort((a, z) => a - z);
-    const n = Math.max(2, Math.floor(numFrames * 0.10));
-    let sum = 0;
-    for (let i = 0; i < n; i++) sum += energies[i];
-    noiseFloor[b] = sum / n;
-  }
-
-  // Appliquer le gain de réduction par frame
   const out = new Float32Array(len);
-  const overlapCount = new Float32Array(len);
-  // Fenêtre de Hann
-  const win = new Float32Array(FRAME);
-  for (let i = 0; i < FRAME; i++) win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / FRAME));
 
-  for (let f = 0; f < numFrames; f++) {
-    const pos = f * HOP;
-    // Gain de réduction global pour cette frame
-    let totalEnergy = 0, totalNoise = 0;
-    for (let b = 0; b < BANDS; b++) {
-      totalEnergy += bandEnergy[f][b] ** 2;
-      totalNoise += noiseFloor[b] ** 2;
-    }
-    // SNR local : plus le SNR est bas, plus on réduit
-    const snr = totalEnergy / (totalNoise + 1e-10);
-    // Gain Wiener : W = SNR / (SNR + 1) ^ amount
-    const wienerGain = Math.pow(snr / (snr + 1.0), amount * 1.5);
-    const gain = Math.max(0.3, Math.min(1.0, wienerGain));
+  // Constantes de temps calibrées pour habitacle Nissan Kicks (RT60 ~90ms)
+  const attackMs  = 5;    // 5ms — suit rapidement l'attaque vocale
+  const releaseMs = 85;   // 85ms — correspond au RT60 estimé de l'habitacle
+  const attackCoef  = Math.exp(-1 / (sampleRate * attackMs  / 1000));
+  const releaseCoef = Math.exp(-1 / (sampleRate * releaseMs / 1000));
 
-    // Appliquer le gain avec fenêtre overlap-add
-    for (let i = 0; i < FRAME && pos + i < len; i++) {
-      out[pos + i] += signal[pos + i] * gain * win[i];
-      overlapCount[pos + i] += win[i];
-    }
-  }
+  // Seuil de gate : estimer le niveau moyen du signal
+  let sumSq = 0;
+  for (let i = 0; i < Math.min(len, sampleRate * 2); i++) sumSq += signal[i] * signal[i];
+  const rms = Math.sqrt(sumSq / Math.min(len, sampleRate * 2));
+  const threshold = rms * 0.12; // gate s'ouvre à 12% du RMS moyen
 
-  // Normaliser par overlap
-  const result = new Float32Array(len);
+  let envelope = 0;
+  let smoothGain = 1;
+  const smoothCoef = Math.exp(-1 / (sampleRate * 20 / 1000)); // lissage 20ms du gain
+
   for (let i = 0; i < len; i++) {
-    result[i] = overlapCount[i] > 0.01 ? out[i] / overlapCount[i] : signal[i];
+    const abs = Math.abs(signal[i]);
+
+    // Envelope follower asymétrique
+    if (abs > envelope) {
+      envelope = attackCoef  * envelope + (1 - attackCoef)  * abs;
+    } else {
+      envelope = releaseCoef * envelope + (1 - releaseCoef) * abs;
+    }
+
+    // Gate : au-dessus du seuil = voix active (gain 1.0), en dessous = reverb (réduit)
+    const isVoice = envelope > threshold;
+    const targetGain = isVoice ? 1.0 : Math.max(0.0, 1.0 - amount * 0.85);
+
+    // Lissage du gain pour éviter les clics
+    smoothGain = smoothCoef * smoothGain + (1 - smoothCoef) * targetGain;
+    out[i] = signal[i] * smoothGain;
   }
-  return result;
+
+  return out;
 }
+
+
+self.onmessage = function(e) {
+  const {id,channelL,channelR,sampleRate,fx}=e.data;
+  try {
+    let pL=new Float32Array(channelL), pR=new Float32Array(channelR);
+    // ── Étape 0 : Déréverbération habitacle (gate d'enveloppe O(N) — léger)
+    const deverbAmt = fx.deverbAmount || 0;
+    if (deverbAmt > 0.05) {
+      pL = applyDeverb(pL, sampleRate, deverbAmt);
+      pR = applyDeverb(pR, sampleRate, deverbAmt);
+    }
+    self.postMessage({id,type:'progress',pct:8, label:'EQ...'});
+    pL=applyEQChain(pL,fx,sampleRate); pR=applyEQChain(pR,fx,sampleRate);
+    self.postMessage({id,type:'progress',pct:18, label:'De-esser...'});
+    if ((fx.compRatio||1) > 1 || (fx.highGain||0) !== 0) {
+      pL=applyDeEsser(pL,sampleRate,-20,7500,2500,-6);
+      pR=applyDeEsser(pR,sampleRate,-20,7500,2500,-6);
+    }
+    self.postMessage({id,type:'progress',pct:32, label:'Compression...'});
+    pL=compress(pL,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate,fx.compKnee,0.6);
+    pR=compress(pR,fx.compThreshold,fx.compRatio,fx.compAttack,fx.compRelease,sampleRate,fx.compKnee,0.6);
+    self.postMessage({id,type:'progress',pct:48, label:'Auto-Tune...'});
+    if ((fx.autotune||0)>0) {
+      const speedMs=fx.autotuneSpeed==='fast'?30:fx.autotuneSpeed==='medium'?80:150;
+      pL=autotune(pL,fx.autotune,speedMs,sampleRate);
+      pR=autotune(pR,fx.autotune,speedMs,sampleRate);
+    }
+    self.postMessage({id,type:'progress',pct:60, label:'Saturation...'});
+    pL=saturate(pL,fx.saturation||0); pR=saturate(pR,fx.saturation||0);
+    self.postMessage({id,type:'progress',pct:72, label:'Reverb...'});
+    const rv=reverb(pL,pR,fx.reverb,fx.reverbMix,sampleRate);
+    pL=rv.L; pR=rv.R;
+    // Limiteur final doux
+    let peak=0;
+    for(let i=0;i<pL.length;i++) peak=Math.max(peak,Math.abs(pL[i]),Math.abs(pR[i]));
+    if(peak>0.95){const n=0.95/peak;for(let i=0;i<pL.length;i++){pL[i]*=n;pR[i]*=n;}}
+    self.postMessage({id,type:'progress',pct:92, label:'Encodage WAV...'});
+    const wavBuf=toWav(pL,pR,sampleRate);
+    self.postMessage({id,type:'done',wavBuf},[wavBuf]);
+  } catch(err) {
+    self.postMessage({id,type:'error',message:err.message||String(err)});
+  }
+};
+
+// ── Déréverbération — filtre d'enveloppe spectrale (habitacle auto) ────────
