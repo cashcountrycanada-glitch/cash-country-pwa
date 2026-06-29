@@ -1583,65 +1583,51 @@ export const studioService = {
     if (hasChordData) progress(`🎵 Analyse harmonique — ${chordMap.length} accords détectés`, 8);
 
     // Helper : envoyer une couche au Web Worker et attendre le résultat WAV
-    // ── Pré-compiler le WASM Rubber Band une seule fois ──────────────────────
-    // Évite de recompiler 259KB × N layers → économise ~800KB par layer
-    let precompiledWasm: WebAssembly.Module | null = null;
+    // ── Worker persistant unique — un seul WASM init pour tous les layers ────
+    // iOS Safari tue l'app si on crée/détruit un worker WASM par layer (OOM)
+    // Solution : un seul worker qui reste actif, Rubber Band s'initialise une fois
+    let sharedWorker: Worker | null = null;
     try {
-      // Décoder le base64 inline depuis le worker blob
-      // On compile ici dans le main thread, on transfère le Module compilé
-      const workerCode = await getWorkerBlobUrl('/harmony-worker.js').then(async blobUrl => {
-        const r = await fetch(blobUrl); return r.text();
-      });
-      const b64Match = workerCode.match(/const __RB_WASM_B64 = "([^"]+)"/);
-      if (b64Match) {
-        const bin = atob(b64Match[1]);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        precompiledWasm = await WebAssembly.compile(bytes.buffer);
-        progress('🔧 Rubber Band WASM compilé', 8);
-      }
-    } catch (wasmErr: any) {
-      console.warn('[generateLayers] WASM pre-compile failed:', wasmErr.message);
+      sharedWorker = await createSafeWorker('/harmony-worker.js');
+    } catch(e: any) {
+      throw new Error('Harmony Worker non disponible : ' + (e as any).message);
     }
 
     const processLayerInWorker = (op: string, semitones: number, gain: number, pan: number, trackIndex?: number): Promise<Blob> => {
-      return new Promise(async (resolve, reject) => {
-        let worker: Worker;
-        try { worker = await createSafeWorker('/harmony-worker.js'); } catch(e: any) {
-          reject(new Error('Worker non disponible : ' + e.message)); return;
-        }
+      return new Promise((resolve, reject) => {
+        if (!sharedWorker) { reject(new Error('Worker non disponible')); return; }
         const id = Date.now();
         const channelL = srcBuffer.getChannelData(0);
         const channelR = srcBuffer.numberOfChannels > 1 ? srcBuffer.getChannelData(1) : srcBuffer.getChannelData(0);
         const transferL = channelL.slice();
         const transferR = channelR.slice();
         const timeout = setTimeout(() => {
-          worker.terminate();
           reject(new Error('Worker timeout (>120s)'));
         }, 120000);
-        worker.onmessage = (e) => {
+        sharedWorker!.onmessage = (e) => {
           const msg = e.data;
           if (msg.id !== id) return;
           if (msg.type === 'progress') {
             progress(`${msg.label}`, -1);
           } else if (msg.type === 'done') {
             clearTimeout(timeout);
-            worker.terminate();
             resolve(new Blob([msg.wavBuf], { type: 'audio/wav' }));
           } else if (msg.type === 'error') {
             clearTimeout(timeout);
-            worker.terminate();
             reject(new Error(msg.message));
           }
         };
-        worker.onerror = (e) => { clearTimeout(timeout); worker.terminate(); reject(new Error(e.message)); };
-        // Passer le module WASM pré-compilé si disponible — évite recompilation dans le worker
-        worker.postMessage({
+        sharedWorker!.onerror = (e) => {
+          clearTimeout(timeout);
+          reject(new Error(e.message));
+        };
+        sharedWorker!.postMessage({
           id, op, channelL: transferL, channelR: transferR,
           semitones, gain, pan, sampleRate: srcBuffer.sampleRate,
           trackIndex: trackIndex ?? 2,
-          precompiledWasm: precompiledWasm ?? undefined,
         }, [transferL.buffer, transferR.buffer]);
+      });
+    };
       });
     };
 
@@ -1692,8 +1678,10 @@ export const studioService = {
         );
         progress(`${layer.emoji} ${layer.trackLabel} — OK (${(blob.size/1024).toFixed(0)} Ko)`, pct + 5);
       } catch (workerErr: any) {
-        // Le Worker a échoué — pas de fallback main thread (crasherait iOS)
-        // Loguer et continuer avec les autres harmonies
+        // Si le worker plante, on le recrée pour les layers suivants
+        try { sharedWorker?.terminate(); } catch {}
+        sharedWorker = null;
+        try { sharedWorker = await createSafeWorker('/harmony-worker.js'); } catch {}
         progress(`⚠️ ${layer.trackLabel} échouée : ${workerErr.message}`, pct);
         await yieldToMain();
         continue;
@@ -1750,6 +1738,9 @@ export const studioService = {
       progress(`✅ ${layer.trackLabel} sauvegardée (${i + 1}/${layers.length})`, pct + 6);
       await yieldToMain();
     }
+    // Terminer le worker partagé — libère la mémoire WASM sur iOS
+    try { sharedWorker?.terminate(); } catch {}
+    sharedWorker = null;
     progress('✅ Toutes les harmonies générées', 100); return generated;
   },
   async applyFxToTrack(dataUrl: string, fx: { hpf?: number; lowGain: number; lowMidGain?: number; midGain: number; highGain: number; airGain?: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; autotune?: number; autotuneSpeed?: string; }, onProgress?: (pct: number) => void): Promise<string> {
