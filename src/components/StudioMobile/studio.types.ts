@@ -89,7 +89,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 62,
     lowGain: 3.0, lowMidGain: -3.5, midGain: 2.5, highGain: 0.5, airGain: 0.5,
     compThreshold: -22, compRatio: 2.5, compAttack: 28, compRelease: 320, compKnee: 12,
-    saturation: 0.28, reverb: 'plate', reverbMix: 0.09, deverbAmount: 0.45,
+    saturation: 0.28, reverb: 'plate', reverbMix: 0.20, deverbAmount: 0.45,
   },
   {
     // CASH NOIR — Johnny Cash Man in Black
@@ -107,7 +107,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 60,
     lowGain: 2.0, lowMidGain: -3.5, midGain: 2.5, highGain: 0.5, airGain: 0.5,
     compThreshold: -22, compRatio: 4, compAttack: 25, compRelease: 300, compKnee: 10,
-    saturation: 0.22, reverb: 'room', reverbMix: 0.06, deverbAmount: 0.45,
+    saturation: 0.22, reverb: 'room', reverbMix: 0.14, deverbAmount: 0.45,
   },
   {
     // ELVIS SUN — chaleur rockabilly Sun Studio
@@ -123,7 +123,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 65,
     lowGain: 3.0, lowMidGain: -3.0, midGain: 2.5, highGain: 0.5, airGain: 0,
     compThreshold: -24, compRatio: 2, compAttack: 30, compRelease: 350, compKnee: 12,
-    saturation: 0.28, reverb: 'plate', reverbMix: 0.10, deverbAmount: 0.35,
+    saturation: 0.28, reverb: 'plate', reverbMix: 0.22, deverbAmount: 0.35,
   },
   {
     // ALAN JACKSON — country classique années 90, voix claire et grave
@@ -138,7 +138,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 75,
     lowGain: 1.5, lowMidGain: -4.0, midGain: 3.0, highGain: 1.5, airGain: 1.0,
     compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 200, compKnee: 8,
-    saturation: 0.14, reverb: 'room', reverbMix: 0.08, deverbAmount: 0.40,
+    saturation: 0.14, reverb: 'room', reverbMix: 0.18, deverbAmount: 0.40,
   },
   {
     // STUDIO VOCAL — son radio country pro
@@ -154,7 +154,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 85,
     lowGain: 0.5, lowMidGain: -4.0, midGain: 3.5, highGain: 1.0, airGain: 1.5,
     compThreshold: -18, compRatio: 3, compAttack: 12, compRelease: 180, compKnee: 8,
-    saturation: 0.12, reverb: 'room', reverbMix: 0.07, deverbAmount: 0.40,
+    saturation: 0.12, reverb: 'room', reverbMix: 0.16, deverbAmount: 0.40,
   },
   {
     // PUNCHY LIVE — voix qui coupe dans un mix full band
@@ -169,7 +169,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 90,
     lowGain: 0, lowMidGain: -5.0, midGain: 4.5, highGain: 1.5, airGain: 1.0,
     compThreshold: -15, compRatio: 5, compAttack: 5, compRelease: 80, compKnee: 4,
-    saturation: 0.13, reverb: 'room', reverbMix: 0.05, deverbAmount: 0.35,
+    saturation: 0.13, reverb: 'room', reverbMix: 0.10, deverbAmount: 0.35,
   },
   {
     // LAYER HARMONY — couche de renforcement derrière la voix principale
@@ -234,7 +234,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 80,
     lowGain: 1.0, lowMidGain: -3.5, midGain: 3.0, highGain: 0.5, airGain: 1.0,
     compThreshold: -20, compRatio: 2.5, compAttack: 15, compRelease: 200, compKnee: 10,
-    saturation: 0.10, reverb: 'room', reverbMix: 0.07, deverbAmount: 0.40,
+    saturation: 0.10, reverb: 'room', reverbMix: 0.15, deverbAmount: 0.40,
     autotune: 0.30, autotuneSpeed: 'slow',
   },
   {
@@ -247,7 +247,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 75,
     lowGain: 1.5, lowMidGain: -4.0, midGain: 3.0, highGain: 0.5, airGain: 1.0,
     compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 220, compKnee: 10,
-    saturation: 0.16, reverb: 'hall', reverbMix: 0.10, deverbAmount: 0.40,
+    saturation: 0.16, reverb: 'hall', reverbMix: 0.20, deverbAmount: 0.40,
     autotune: 0.40, autotuneSpeed: 'medium',
   },
 ];
