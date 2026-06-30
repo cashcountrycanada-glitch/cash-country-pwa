@@ -44,31 +44,48 @@ function rbPitchShift(mono, semitones, sampleRate) {
   if (!semitones) return mono;
 
   const pitchScale = Math.pow(2, semitones / 12);
-  const blockSize = 4096;
+  const maxBlock = 4096;
   const channels = 1;
 
   // RubberBandOptionProcessOffline=0 | StretchElastic=0 | FormantPreserved=16777216 | PitchHighQuality=33554432 | EngineFiner=536870912
   const options = 0 | 16777216 | 33554432 | 536870912;
 
   const handle = rbApi.rubberband_new(sampleRate, channels, options, 1.0, pitchScale);
-  if (!handle) throw new Error('rubberband_new a échoué');
+  if (handle === undefined || handle === null) throw new Error('rubberband_new a échoué');
+
+  let inPtr, inPtrsBuf, outPtr, outPtrsBuf;
 
   try {
     rbApi.rubberband_set_pitch_scale(handle, pitchScale);
-    rbApi.rubberband_set_max_process_size(handle, blockSize);
+    rbApi.rubberband_set_max_process_size(handle, maxBlock);
     rbApi.rubberband_set_expected_input_duration(handle, mono.length);
 
-    const inPtr = rbApi.malloc(blockSize * 4);
-    const inPtrsBuf = rbApi.malloc(4);
+    inPtr = rbApi.malloc(maxBlock * 4);
+    inPtrsBuf = rbApi.malloc(4);
     rbApi.memWritePtr(inPtrsBuf, inPtr);
+    outPtr = rbApi.malloc(maxBlock * 4);
+    outPtrsBuf = rbApi.malloc(4);
+    rbApi.memWritePtr(outPtrsBuf, outPtr);
 
-    // ── Phase d'étude (study) — nécessaire en mode offline ──
+    const feedZero = new Float32Array(maxBlock);
+
+    // ── Phase d'étude (study) — respecte rubberband_get_samples_required ──
+    // FIX : alimenter par blocs fixes de 4096 sans consulter samples_required
+    // désynchronisait le buffer interne de Rubber Band et causait des lectures
+    // hors limites côté WASM (crash silencieux du worker → triangle jaune).
     let pos = 0;
+    let safety = 0;
+    const maxIterations = Math.ceil(mono.length / 64) + 10000;
     while (pos < mono.length) {
-      const chunkLen = Math.min(blockSize, mono.length - pos);
+      if (++safety > maxIterations) throw new Error('rbPitchShift: boucle study infinie détectée');
+      let need = rbApi.rubberband_get_samples_required(handle);
+      if (!need || need <= 0) need = maxBlock;
+      need = Math.min(need, maxBlock);
+      const chunkLen = Math.min(need, mono.length - pos);
       const chunk = mono.subarray(pos, pos + chunkLen);
-      const padded = chunkLen < blockSize ? (() => { const z = new Float32Array(blockSize); z.set(chunk); return z; })() : chunk;
-      rbApi.memWrite(inPtr, padded);
+      feedZero.fill(0);
+      feedZero.set(chunk);
+      rbApi.memWrite(inPtr, feedZero);
       const final = (pos + chunkLen >= mono.length) ? 1 : 0;
       rbApi.rubberband_study(handle, inPtrsBuf, chunkLen, final);
       pos += chunkLen;
@@ -76,45 +93,45 @@ function rbPitchShift(mono, semitones, sampleRate) {
 
     // ── Phase de traitement (process) + récupération ──
     const outChunks = [];
-    const outPtr = rbApi.malloc(blockSize * 4);
-    const outPtrsBuf = rbApi.malloc(4);
-    rbApi.memWritePtr(outPtrsBuf, outPtr);
-
     pos = 0;
+    safety = 0;
     while (pos < mono.length) {
-      const chunkLen = Math.min(blockSize, mono.length - pos);
+      if (++safety > maxIterations) throw new Error('rbPitchShift: boucle process infinie détectée');
+      let need = rbApi.rubberband_get_samples_required(handle);
+      if (!need || need <= 0) need = maxBlock;
+      need = Math.min(need, maxBlock);
+      const chunkLen = Math.min(need, mono.length - pos);
       const chunk = mono.subarray(pos, pos + chunkLen);
-      const padded = chunkLen < blockSize ? (() => { const z = new Float32Array(blockSize); z.set(chunk); return z; })() : chunk;
-      rbApi.memWrite(inPtr, padded);
+      feedZero.fill(0);
+      feedZero.set(chunk);
+      rbApi.memWrite(inPtr, feedZero);
       const final = (pos + chunkLen >= mono.length) ? 1 : 0;
       rbApi.rubberband_process(handle, inPtrsBuf, chunkLen, final);
       pos += chunkLen;
 
       let avail = rbApi.rubberband_available(handle);
-      while (avail > 0) {
-        const toRead = Math.min(avail, blockSize);
+      let drainSafety = 0;
+      while (avail > 0 && drainSafety < 10000) {
+        const toRead = Math.min(avail, maxBlock);
         const got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead);
         if (got > 0) outChunks.push(rbApi.memReadF32(outPtr, got).slice());
         avail = rbApi.rubberband_available(handle);
+        drainSafety++;
         if (got <= 0) break;
       }
     }
 
+    // Vidage final — Rubber Band peut retenir quelques blocks en interne
     let avail = rbApi.rubberband_available(handle);
     let drainGuard = 0;
-    while (avail > 0 && drainGuard < 1000) {
-      const toRead = Math.min(avail, blockSize);
+    while (avail > 0 && drainGuard < 10000) {
+      const toRead = Math.min(avail, maxBlock);
       const got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead);
       if (got > 0) outChunks.push(rbApi.memReadF32(outPtr, got).slice());
       avail = rbApi.rubberband_available(handle);
       drainGuard++;
       if (got <= 0) break;
     }
-
-    rbApi.free(inPtr);
-    rbApi.free(inPtrsBuf);
-    rbApi.free(outPtr);
-    rbApi.free(outPtrsBuf);
 
     const totalLen = outChunks.reduce((s, c) => s + c.length, 0);
     const result = new Float32Array(totalLen || mono.length);
@@ -123,7 +140,11 @@ function rbPitchShift(mono, semitones, sampleRate) {
 
     return totalLen > 0 ? result : mono;
   } finally {
-    rbApi.rubberband_delete(handle);
+    try { if (inPtr) rbApi.free(inPtr); } catch {}
+    try { if (inPtrsBuf) rbApi.free(inPtrsBuf); } catch {}
+    try { if (outPtr) rbApi.free(outPtr); } catch {}
+    try { if (outPtrsBuf) rbApi.free(outPtrsBuf); } catch {}
+    try { rbApi.rubberband_delete(handle); } catch {}
   }
 }
 
