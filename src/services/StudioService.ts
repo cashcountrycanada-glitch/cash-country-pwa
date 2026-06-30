@@ -13,6 +13,16 @@ import { studioOfflineDB } from './StudioOfflineDB';
 // depuis un Blob en mémoire — ça ne touche jamais le réseau/SW pour le
 // script du Worker lui-même, donc le bug ne peut pas se produire.
 const __workerBlobUrlCache: Record<string, Promise<string>> = {};
+
+// ── Worker persistant Rubber Band — une seule instance WASM pour toute la session ──
+// iOS tue l'app si on crée/détruit un worker WASM à chaque layer (OOM)
+let __harmonyWorker: Worker | null = null;
+async function getHarmonyWorker(): Promise<Worker> {
+  if (__harmonyWorker) return __harmonyWorker;
+  __harmonyWorker = await createSafeWorker('/harmony-worker.js');
+  __harmonyWorker.addEventListener('error', () => { __harmonyWorker = null; });
+  return __harmonyWorker;
+}
 async function getWorkerBlobUrl(path: string): Promise<string> {
   if (!__workerBlobUrlCache[path]) {
     __workerBlobUrlCache[path] = (async () => {
@@ -1583,12 +1593,11 @@ export const studioService = {
     if (hasChordData) progress(`🎵 Analyse harmonique — ${chordMap.length} accords détectés`, 8);
 
     // Helper : envoyer une couche au Web Worker et attendre le résultat WAV
-    // ── Worker persistant unique — un seul WASM init pour tous les layers ────
-    // iOS Safari tue l'app si on crée/détruit un worker WASM par layer (OOM)
-    // Solution : un seul worker qui reste actif, Rubber Band s'initialise une fois
-    let sharedWorker: Worker | null = null;
+    // ── Worker persistant unique — Rubber Band s'initialise une seule fois ──
+    // Réutilisé entre les appels individuels et les batches
+    let sharedWorker: Worker;
     try {
-      sharedWorker = await createSafeWorker('/harmony-worker.js');
+      sharedWorker = await getHarmonyWorker();
     } catch(e: any) {
       throw new Error('Harmony Worker non disponible : ' + (e as any).message);
     }
@@ -1626,8 +1635,6 @@ export const studioService = {
           semitones, gain, pan, sampleRate: srcBuffer.sampleRate,
           trackIndex: trackIndex ?? 2,
         }, [transferL.buffer, transferR.buffer]);
-      });
-    };
       });
     };
 
@@ -1678,10 +1685,8 @@ export const studioService = {
         );
         progress(`${layer.emoji} ${layer.trackLabel} — OK (${(blob.size/1024).toFixed(0)} Ko)`, pct + 5);
       } catch (workerErr: any) {
-        // Si le worker plante, on le recrée pour les layers suivants
-        try { sharedWorker?.terminate(); } catch {}
-        sharedWorker = null;
-        try { sharedWorker = await createSafeWorker('/harmony-worker.js'); } catch {}
+        // Si le worker plante, on le réinitialise pour le prochain appel
+        __harmonyWorker = null;
         progress(`⚠️ ${layer.trackLabel} échouée : ${workerErr.message}`, pct);
         await yieldToMain();
         continue;
@@ -1738,9 +1743,6 @@ export const studioService = {
       progress(`✅ ${layer.trackLabel} sauvegardée (${i + 1}/${layers.length})`, pct + 6);
       await yieldToMain();
     }
-    // Terminer le worker partagé — libère la mémoire WASM sur iOS
-    try { sharedWorker?.terminate(); } catch {}
-    sharedWorker = null;
     progress('✅ Toutes les harmonies générées', 100); return generated;
   },
   async applyFxToTrack(dataUrl: string, fx: { hpf?: number; lowGain: number; lowMidGain?: number; midGain: number; highGain: number; airGain?: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; autotune?: number; autotuneSpeed?: string; }, onProgress?: (pct: number) => void): Promise<string> {
