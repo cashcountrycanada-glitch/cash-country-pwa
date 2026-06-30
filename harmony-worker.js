@@ -33,6 +33,101 @@ async function initRubberBandFromModule(wasmModule, umdCode) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// RUBBER BAND — Pitch shift offline (FormantPreserved + HighQuality)
+// FIX v16 : cette fonction manquait — chaque appel plantait avec
+// "rbPitchShift is not defined", forçant la réinitialisation complète
+// du worker + recompilation WASM à CHAQUE couche d'harmonie. C'était
+// la cause du gel "de plus en plus rapide".
+// ═══════════════════════════════════════════════════════════════
+function rbPitchShift(mono, semitones, sampleRate) {
+  if (!rbReady || !rbApi) throw new Error('Rubber Band non initialisé');
+  if (!semitones) return mono;
+
+  const pitchScale = Math.pow(2, semitones / 12);
+  const blockSize = 4096;
+  const channels = 1;
+
+  // RubberBandOptionProcessOffline=0 | StretchElastic=0 | FormantPreserved=16777216 | PitchHighQuality=33554432 | EngineFiner=536870912
+  const options = 0 | 16777216 | 33554432 | 536870912;
+
+  const handle = rbApi.rubberband_new(sampleRate, channels, options, 1.0, pitchScale);
+  if (!handle) throw new Error('rubberband_new a échoué');
+
+  try {
+    rbApi.rubberband_set_pitch_scale(handle, pitchScale);
+    rbApi.rubberband_set_max_process_size(handle, blockSize);
+    rbApi.rubberband_set_expected_input_duration(handle, mono.length);
+
+    const inPtr = rbApi.malloc(blockSize * 4);
+    const inPtrsBuf = rbApi.malloc(4);
+    rbApi.memWritePtr(inPtrsBuf, inPtr);
+
+    // ── Phase d'étude (study) — nécessaire en mode offline ──
+    let pos = 0;
+    while (pos < mono.length) {
+      const chunkLen = Math.min(blockSize, mono.length - pos);
+      const chunk = mono.subarray(pos, pos + chunkLen);
+      const padded = chunkLen < blockSize ? (() => { const z = new Float32Array(blockSize); z.set(chunk); return z; })() : chunk;
+      rbApi.memWrite(inPtr, padded);
+      const final = (pos + chunkLen >= mono.length) ? 1 : 0;
+      rbApi.rubberband_study(handle, inPtrsBuf, chunkLen, final);
+      pos += chunkLen;
+    }
+
+    // ── Phase de traitement (process) + récupération ──
+    const outChunks = [];
+    const outPtr = rbApi.malloc(blockSize * 4);
+    const outPtrsBuf = rbApi.malloc(4);
+    rbApi.memWritePtr(outPtrsBuf, outPtr);
+
+    pos = 0;
+    while (pos < mono.length) {
+      const chunkLen = Math.min(blockSize, mono.length - pos);
+      const chunk = mono.subarray(pos, pos + chunkLen);
+      const padded = chunkLen < blockSize ? (() => { const z = new Float32Array(blockSize); z.set(chunk); return z; })() : chunk;
+      rbApi.memWrite(inPtr, padded);
+      const final = (pos + chunkLen >= mono.length) ? 1 : 0;
+      rbApi.rubberband_process(handle, inPtrsBuf, chunkLen, final);
+      pos += chunkLen;
+
+      let avail = rbApi.rubberband_available(handle);
+      while (avail > 0) {
+        const toRead = Math.min(avail, blockSize);
+        const got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead);
+        if (got > 0) outChunks.push(rbApi.memReadF32(outPtr, got).slice());
+        avail = rbApi.rubberband_available(handle);
+        if (got <= 0) break;
+      }
+    }
+
+    let avail = rbApi.rubberband_available(handle);
+    let drainGuard = 0;
+    while (avail > 0 && drainGuard < 1000) {
+      const toRead = Math.min(avail, blockSize);
+      const got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead);
+      if (got > 0) outChunks.push(rbApi.memReadF32(outPtr, got).slice());
+      avail = rbApi.rubberband_available(handle);
+      drainGuard++;
+      if (got <= 0) break;
+    }
+
+    rbApi.free(inPtr);
+    rbApi.free(inPtrsBuf);
+    rbApi.free(outPtr);
+    rbApi.free(outPtrsBuf);
+
+    const totalLen = outChunks.reduce((s, c) => s + c.length, 0);
+    const result = new Float32Array(totalLen || mono.length);
+    let off = 0;
+    for (const c of outChunks) { result.set(c, off); off += c.length; }
+
+    return totalLen > 0 ? result : mono;
+  } finally {
+    rbApi.rubberband_delete(handle);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // AGC — Automatic Gain Control
 // ═══════════════════════════════════════════════════════════════
 function applyAGC(signal, reference) {
