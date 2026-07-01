@@ -1730,7 +1730,9 @@ export const studioService = {
       } catch (workerErr: any) {
         // Si le worker plante, on le réinitialise pour le prochain appel
         __harmonyWorker = null;
-        progress(`⚠️ ${layer.trackLabel} échouée : ${workerErr.message}`, pct);
+        const errMsg = workerErr.message || String(workerErr);
+        (window as any).__addLog?.(`[Harmony] ❌ ${layer.trackLabel} : ${errMsg}`);
+        progress(`⚠️ ${layer.trackLabel} échouée : ${errMsg}`, pct);
         await yieldToMain();
         continue;
       }

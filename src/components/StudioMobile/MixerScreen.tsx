@@ -474,6 +474,7 @@ export default function MixerScreen({
       if (isQuota) {
         console.warn('[Harmonie] Quota dépassé — harmonie conservée en mémoire:', e.message);
       } else {
+        (window as any).__addLog?.(`[Harmony] ❌ Erreur : ${e.message || String(e)}`);
         alert('Erreur génération : ' + e.message);
       }
     } finally {
