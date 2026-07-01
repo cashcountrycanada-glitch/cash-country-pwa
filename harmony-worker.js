@@ -49,8 +49,11 @@ function rbPitchShift(mono, semitones, sampleRate) {
   // ProcessOffline=0 | FormantPreserved=16777216 | PitchHighQuality=33554432 | EngineFiner=536870912
   const options = 0 | 16777216 | 33554432 | 536870912;
 
-  const handle = rbApi.rubberband_new(sampleRate, 1, options, 1.0, pitchScale);
-  if (handle === undefined || handle === null) throw new Error('rubberband_new a échoué');
+  let handle;
+  try {
+    handle = rbApi.rubberband_new(sampleRate, 1, options, 1.0, pitchScale);
+  } catch(e) { throw new Error(`rubberband_new a échoué: ${e.message}`); }
+  if (handle === undefined || handle === null) throw new Error('rubberband_new a retourné null');
 
   let inPtr, inPtrsBuf, outPtr, outPtrsBuf;
 
@@ -59,89 +62,93 @@ function rbPitchShift(mono, semitones, sampleRate) {
     rbApi.rubberband_set_max_process_size(handle, maxBlock);
     rbApi.rubberband_set_expected_input_duration(handle, mono.length);
 
-    // Allouer les buffers WASM
-    inPtr    = rbApi.malloc(maxBlock * 4);  // float32 input
-    inPtrsBuf  = rbApi.malloc(4);           // pointeur vers inPtr (tableau de 1 canal)
+    inPtr     = rbApi.malloc(maxBlock * 4);
+    inPtrsBuf = rbApi.malloc(4);
     rbApi.memWritePtr(inPtrsBuf, inPtr);
-
-    outPtr   = rbApi.malloc(maxBlock * 4);  // float32 output
-    outPtrsBuf = rbApi.malloc(4);           // pointeur vers outPtr
+    outPtr    = rbApi.malloc(maxBlock * 4);
+    outPtrsBuf = rbApi.malloc(4);
     rbApi.memWritePtr(outPtrsBuf, outPtr);
+
+    if (!inPtr || !outPtr) throw new Error(`malloc échoué (inPtr=${inPtr} outPtr=${outPtr})`);
 
     const zeroPad = new Float32Array(maxBlock);
 
-    // ── PHASE 1 : study (mode offline — parcours complet du signal) ──────────
+    // ── PHASE 1 : study ──────────────────────────────────────────────────────
     let pos = 0;
+    let studyCount = 0;
     while (pos < mono.length) {
       const chunkLen = Math.min(maxBlock, mono.length - pos);
       zeroPad.fill(0);
       zeroPad.set(mono.subarray(pos, pos + chunkLen));
-      rbApi.memWrite(inPtr, zeroPad);
+      try { rbApi.memWrite(inPtr, zeroPad); } catch(e) { throw new Error(`memWrite study[${studyCount}] échoué: ${e.message}`); }
       const isFinal = (pos + chunkLen >= mono.length) ? 1 : 0;
-      rbApi.rubberband_study(handle, inPtrsBuf, chunkLen, isFinal);
+      try { rbApi.rubberband_study(handle, inPtrsBuf, chunkLen, isFinal); } catch(e) { throw new Error(`rubberband_study[${studyCount}] échoué: ${e.message}`); }
       pos += chunkLen;
+      studyCount++;
     }
 
-    // ── ÉTAPE CRITIQUE manquante dans les versions précédentes ───────────────
-    // calculate_stretch() est OBLIGATOIRE en mode ProcessOffline entre study et process.
-    // Sans cet appel, rb_get_samples_required retourne des valeurs erronées,
-    // rb_process lit hors bornes de la mémoire WASM → crash silencieux du worker.
-    rbApi.rubberband_calculate_stretch(handle);
+    // ── ÉTAPE CRITIQUE : calculate_stretch() obligatoire entre study et process ──
+    try { rbApi.rubberband_calculate_stretch(handle); } catch(e) { throw new Error(`calculate_stretch échoué: ${e.message}`); }
 
     // ── PHASE 2 : process + retrieve ─────────────────────────────────────────
     const outChunks = [];
     pos = 0;
+    let processCount = 0;
 
     while (pos < mono.length) {
-      // En mode offline post-calculate_stretch(), samples_required est fiable
-      let need = rbApi.rubberband_get_samples_required(handle);
+      let need;
+      try { need = rbApi.rubberband_get_samples_required(handle); } catch(e) { throw new Error(`get_samples_required[${processCount}] échoué: ${e.message}`); }
       if (need <= 0) need = maxBlock;
       need = Math.min(need, maxBlock);
 
       const chunkLen = Math.min(need, mono.length - pos);
       zeroPad.fill(0);
       zeroPad.set(mono.subarray(pos, pos + chunkLen));
-      rbApi.memWrite(inPtr, zeroPad);
+      try { rbApi.memWrite(inPtr, zeroPad); } catch(e) { throw new Error(`memWrite process[${processCount}] échoué: ${e.message}`); }
       const isFinal = (pos + chunkLen >= mono.length) ? 1 : 0;
-      rbApi.rubberband_process(handle, inPtrsBuf, chunkLen, isFinal);
+      try { rbApi.rubberband_process(handle, inPtrsBuf, chunkLen, isFinal); } catch(e) { throw new Error(`rubberband_process[${processCount}] échoué: ${e.message}`); }
       pos += chunkLen;
+      processCount++;
 
-      // Vider tout ce qui est disponible immédiatement
-      let avail = rbApi.rubberband_available(handle);
+      let avail;
+      try { avail = rbApi.rubberband_available(handle); } catch(e) { throw new Error(`rubberband_available[${processCount}] échoué: ${e.message}`); }
       while (avail > 0) {
         const toRead = Math.min(avail, maxBlock);
-        const got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead);
+        let got;
+        try { got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead); } catch(e) { throw new Error(`rubberband_retrieve échoué: ${e.message}`); }
         if (got <= 0) break;
-        outChunks.push(rbApi.memReadF32(outPtr, got).slice());
-        avail = rbApi.rubberband_available(handle);
+        let chunk;
+        try { chunk = rbApi.memReadF32(outPtr, got).slice(); } catch(e) { throw new Error(`memReadF32(${got}) échoué: ${e.message}`); }
+        outChunks.push(chunk);
+        try { avail = rbApi.rubberband_available(handle); } catch { break; }
       }
     }
 
-    // ── Vidage final (Rubber Band retient toujours quelques frames en fin) ───
-    let avail = rbApi.rubberband_available(handle);
+    // ── Vidage final ──────────────────────────────────────────────────────────
+    let avail = 0;
+    try { avail = rbApi.rubberband_available(handle); } catch {}
     let guard = 0;
     while (avail > 0 && guard++ < 512) {
       const toRead = Math.min(avail, maxBlock);
-      const got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead);
+      let got = 0;
+      try { got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead); } catch { break; }
       if (got <= 0) break;
-      outChunks.push(rbApi.memReadF32(outPtr, got).slice());
-      avail = rbApi.rubberband_available(handle);
+      try { outChunks.push(rbApi.memReadF32(outPtr, got).slice()); } catch { break; }
+      try { avail = rbApi.rubberband_available(handle); } catch { break; }
     }
 
-    // Assembler la sortie
     const totalLen = outChunks.reduce((s, c) => s + c.length, 0);
-    if (totalLen === 0) return mono; // safety fallback
-
+    if (totalLen === 0) return mono;
     const result = new Float32Array(totalLen);
     let off = 0;
     for (const c of outChunks) { result.set(c, off); off += c.length; }
     return result;
 
   } finally {
-    try { if (inPtr    !== undefined) rbApi.free(inPtr);    } catch {}
-    try { if (inPtrsBuf !== undefined) rbApi.free(inPtrsBuf); } catch {}
-    try { if (outPtr   !== undefined) rbApi.free(outPtr);   } catch {}
-    try { if (outPtrsBuf !== undefined) rbApi.free(outPtrsBuf); } catch {}
+    try { if (inPtr)     rbApi.free(inPtr);     } catch {}
+    try { if (inPtrsBuf) rbApi.free(inPtrsBuf); } catch {}
+    try { if (outPtr)    rbApi.free(outPtr);    } catch {}
+    try { if (outPtrsBuf) rbApi.free(outPtrsBuf); } catch {}
     try { rbApi.rubberband_delete(handle); } catch {}
   }
 }
