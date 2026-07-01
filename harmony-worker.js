@@ -489,21 +489,26 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
   return shifted;
 }
 
-// Traitement chunked pour les longs enregistrements (>40s)
-// FIX mémoire : subarray (vue sans copie) + assemblage direct dans buffer final
+// Traitement chunked — TOUJOURS utilisé pour les enregistrements > 8s
+// FIX OOM iOS : chunk de 10s max = ~1.76M → ~440K float32 par chunk WASM
+// Au lieu de 40s (1.76M) qui causait un pic mémoire de 80-100 MB côté WASM
+// et faisait tuer le worker par iOS sans message d'erreur.
 function processChunked(mono, semitones, sampleRate, trackIndex) {
-  const chunkSamp = Math.floor(sampleRate * 40);
+  // 10s par chunk = ~440 KB WASM peak au lieu de ~4 MB pour 40s
+  const chunkSamp = Math.floor(sampleRate * 10);
+
   if (mono.length <= chunkSamp) return processSingle(mono, semitones, sampleRate, trackIndex);
 
-  const overlapSamp = Math.floor(sampleRate * 0.4);
-  const final = new Float32Array(mono.length + overlapSamp * 2); // taille max estimée
+  // Overlap court — assez pour éviter les artefacts de jonction
+  const overlapSamp = Math.floor(sampleRate * 0.1);
+  const final = new Float32Array(mono.length + overlapSamp * 4);
   let outOff = 0;
   let pos = 0;
 
   while (pos < mono.length) {
     const end = Math.min(pos + chunkSamp, mono.length);
     const hasMore = end < mono.length;
-    // subarray = vue sans copie (économise ~40 MB pour un vocal de 3 min)
+    // subarray = vue sans copie (zéro allocation supplémentaire)
     const chunkView = mono.subarray(pos, hasMore ? end + overlapSamp : end);
     let processed = processSingle(chunkView, semitones, sampleRate, trackIndex);
     const keepLen = hasMore
@@ -513,7 +518,7 @@ function processChunked(mono, semitones, sampleRate, trackIndex) {
       final.set(processed.subarray(0, keepLen), outOff);
     }
     outOff += keepLen;
-    processed = null; // libère immédiatement
+    processed = null; // libère immédiatement — eligible GC avant prochain chunk
     pos = end;
   }
 
@@ -557,8 +562,11 @@ self.onmessage = async function(e) {
 
     self.postMessage({ id, type: 'progress', label: `Génération harmonie ${semitones > 0 ? '+' : ''}${semitones} ST (Rubber Band)...` });
 
-    // Pipeline principal
-    const shifted = processChunked(mono, semitones, sampleRate, trackIndex);
+    // Pipeline principal — chunked si > 8s pour éviter OOM iOS
+    const USE_CHUNKED_THRESHOLD = sampleRate * 8; // 8s
+    const shifted = mono.length > USE_CHUNKED_THRESHOLD
+      ? processChunked(mono, semitones, sampleRate, trackIndex)
+      : processSingle(mono, semitones, sampleRate, trackIndex);
 
     // Chorus stéréo
     const profile = LAYER_PROFILES[trackIndex] || LAYER_PROFILES[2];
