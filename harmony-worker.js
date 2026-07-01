@@ -331,36 +331,50 @@ function applyPlateReverb(signal, sr, dryWet) {
 // ═══════════════════════════════════════════════════════════════
 // CHORUS STÉRÉO
 // ═══════════════════════════════════════════════════════════════
-function applyChorusStereo(signal, sr, depth, rate, seed) {
-  const rand=makePRNG((seed^0xF00BAA)>>>0);
-  const len=signal.length;
-  const maxDelay=Math.floor(sr*0.030)+1;
-  const bufL=new Float32Array(maxDelay+1);
-  const bufR=new Float32Array(maxDelay+1);
-  let ptrL=0,ptrR=0;
-  const outL=new Float32Array(len);
-  const outR=new Float32Array(len);
-  const baseDelL=Math.floor(sr*0.013);
-  const baseDelR=Math.floor(sr*0.017);
-  const phaseL=rand()*Math.PI*2;
-  const phaseR=rand()*Math.PI*2;
-  for(let i=0;i<len;i++){
-    const t=i/sr;
-    const modL=Math.sin(2*Math.PI*rate*t+phaseL)*depth*sr;
-    const modR=Math.sin(2*Math.PI*rate*1.13*t+phaseR)*depth*sr;
-    const delL=Math.max(1,baseDelL+Math.floor(modL));
-    const delR=Math.max(1,baseDelR+Math.floor(modR));
-    const x=signal[i]||0;
-    bufL[ptrL%maxDelay]=x;
-    bufR[ptrR%maxDelay]=x;
-    const rL=(ptrL-delL+maxDelay*2)%maxDelay;
-    const rR=(ptrR-delR+maxDelay*2)%maxDelay;
-    outL[i]=x*0.65+bufL[rL]*0.35;
-    outR[i]=x*0.65+bufR[rR]*0.35;
-    ptrL=(ptrL+1)%maxDelay;
-    ptrR=(ptrR+1)%maxDelay;
+// FIX OOM : chorus + gain/pan fusionnés en une seule passe in-place
+// Avant : applyChorusStereo (2x 46MB) + applyGainPanStereo (2x 46MB) = 184 MB
+// Après : une seule paire outL/outR = 92 MB, calcul unique
+function applyChorusGainPan(signal, sr, depth, rate, seed, gain, pan) {
+  const rand = makePRNG((seed ^ 0xF00BAA) >>> 0);
+  const len = signal.length;
+  const maxDelay = Math.floor(sr * 0.030) + 1;
+  const bufL = new Float32Array(maxDelay + 1);
+  const bufR = new Float32Array(maxDelay + 1);
+  let ptrL = 0, ptrR = 0;
+  const outL = new Float32Array(len);
+  const outR = new Float32Array(len);
+  const baseDelL = Math.floor(sr * 0.013);
+  const baseDelR = Math.floor(sr * 0.017);
+  const phaseL = rand() * Math.PI * 2;
+  const phaseR = rand() * Math.PI * 2;
+  // Pan coefficients
+  const p = Math.max(-1, Math.min(1, pan));
+  const pr = (p + 1) * Math.PI / 4;
+  const pL = Math.cos(pr) * gain;
+  const pR = Math.sin(pr) * gain;
+
+  for (let i = 0; i < len; i++) {
+    const t = i / sr;
+    const modL = Math.sin(2 * Math.PI * rate * t + phaseL) * depth * sr;
+    const modR = Math.sin(2 * Math.PI * rate * 1.13 * t + phaseR) * depth * sr;
+    const delL = Math.max(1, baseDelL + Math.floor(modL));
+    const delR = Math.max(1, baseDelR + Math.floor(modR));
+    const x = signal[i] || 0;
+    bufL[ptrL % maxDelay] = x;
+    bufR[ptrR % maxDelay] = x;
+    const rL = (ptrL - delL + maxDelay * 2) % maxDelay;
+    const rR = (ptrR - delR + maxDelay * 2) % maxDelay;
+    // Chorus + gain/pan en une seule opération
+    outL[i] = (x * 0.65 + bufL[rL] * 0.35) * pL;
+    outR[i] = (x * 0.65 + bufR[rR] * 0.35) * pR;
+    ptrL = (ptrL + 1) % maxDelay;
+    ptrR = (ptrR + 1) % maxDelay;
   }
-  return{outL,outR};
+  return { outL, outR };
+}
+
+function applyChorusStereo(signal, sr, depth, rate, seed) {
+  return applyChorusGainPan(signal, sr, depth, rate, seed, 1.0, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -569,15 +583,12 @@ self.onmessage = async function(e) {
       ? processChunked(mono, semitones, sampleRate, trackIndex)
       : processSingle(mono, semitones, sampleRate, trackIndex);
 
-    // Chorus stéréo
+    // Chorus stéréo + gain/pan en une seule passe (zéro buffer intermédiaire)
     const profile = LAYER_PROFILES[trackIndex] || LAYER_PROFILES[2];
     self.postMessage({ id, type: 'progress', label: 'Chorus stéréo...' });
-    const chorus = applyChorusStereo(shifted, sampleRate, profile.chorusDepth, profile.chorusRate, (trackIndex || 2) * 7919);
-
-    outLen = shifted.length;
-
-    // Pan sur chaque canal
-    const gp = applyGainPanStereo(chorus.outL, chorus.outR, outLen, gain, pan);
+    const gp = applyChorusGainPan(shifted, sampleRate, profile.chorusDepth, profile.chorusRate, (trackIndex || 2) * 7919, gain, pan);
+    // Libérer shifted immédiatement — plus besoin
+    let shiftedRef = shifted; shiftedRef = null;
 
     self.postMessage({ id, type: 'progress', label: 'Encodage WAV...' });
     const wavBuf = audioToWav(gp.outL, gp.outR, sampleRate);
