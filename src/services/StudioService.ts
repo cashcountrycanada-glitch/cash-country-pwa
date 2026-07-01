@@ -1643,10 +1643,15 @@ export const studioService = {
       return new Promise((resolve, reject) => {
         if (!sharedWorker) { reject(new Error('Worker non disponible')); return; }
         const id = Date.now();
-        const channelL = srcBuffer.getChannelData(0);
-        const channelR = srcBuffer.numberOfChannels > 1 ? srcBuffer.getChannelData(1) : srcBuffer.getChannelData(0);
-        const transferL = channelL.slice();
-        const transferR = channelR.slice();
+
+        // FIX OOM iOS : mixer L+R en mono ici (une seule allocation)
+        // puis transférer zero-copy (Transferable) au lieu de 2x slice() = 84 MB
+        // Résultat : 42 MB transféré au lieu de 84 MB, qualité 44100 Hz intacte
+        const chL = srcBuffer.getChannelData(0);
+        const chR = srcBuffer.numberOfChannels > 1 ? srcBuffer.getChannelData(1) : chL;
+        const monoMix = new Float32Array(chL.length);
+        for (let i = 0; i < chL.length; i++) monoMix[i] = (chL[i] + chR[i]) * 0.5;
+
         const timeout = setTimeout(() => {
           reject(new Error('Worker timeout (>120s)'));
         }, 120000);
@@ -1667,11 +1672,12 @@ export const studioService = {
           clearTimeout(timeout);
           reject(new Error(e.message));
         };
+        // Transfer zero-copy — monoMix.buffer est détaché après postMessage
         sharedWorker!.postMessage({
-          id, op, channelL: transferL, channelR: transferR,
+          id, op, channelL: monoMix, channelR: null,
           semitones, gain, pan, sampleRate: srcBuffer.sampleRate,
           trackIndex: trackIndex ?? 2,
-        }, [transferL.buffer, transferR.buffer]);
+        }, [monoMix.buffer]);
       });
     };
 

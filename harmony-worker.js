@@ -541,11 +541,12 @@ self.onmessage = async function(e) {
   }
   const { id, op, channelL, channelR, semitones, gain, pan, sampleRate, trackIndex } = e.data;
   try {
-    // Rubber Band doit être initialisé via message 'init' avant tout traitement
     if (!rbReady) throw new Error('Rubber Band non prêt — init non reçu');
     const len = channelL.length;
-    const mono = new Float32Array(len);
-    for (let i = 0; i < len; i++) mono[i] = ((channelL[i] || 0) + (channelR[i] || 0)) * 0.5;
+    // channelR peut être null si le main thread envoie déjà un signal mono downsampleé
+    const mono = channelR
+      ? (() => { const m = new Float32Array(len); for (let i=0;i<len;i++) m[i]=(channelL[i]+channelR[i])*0.5; return m; })()
+      : channelL; // déjà mono — pas de copie
 
     let outL, outR, outLen;
 
