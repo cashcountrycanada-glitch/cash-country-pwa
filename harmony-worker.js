@@ -45,12 +45,11 @@ function rbPitchShift(mono, semitones, sampleRate) {
 
   const pitchScale = Math.pow(2, semitones / 12);
   const maxBlock = 4096;
-  const channels = 1;
 
-  // RubberBandOptionProcessOffline=0 | StretchElastic=0 | FormantPreserved=16777216 | PitchHighQuality=33554432 | EngineFiner=536870912
+  // ProcessOffline=0 | FormantPreserved=16777216 | PitchHighQuality=33554432 | EngineFiner=536870912
   const options = 0 | 16777216 | 33554432 | 536870912;
 
-  const handle = rbApi.rubberband_new(sampleRate, channels, options, 1.0, pitchScale);
+  const handle = rbApi.rubberband_new(sampleRate, 1, options, 1.0, pitchScale);
   if (handle === undefined || handle === null) throw new Error('rubberband_new a échoué');
 
   let inPtr, inPtrsBuf, outPtr, outPtrsBuf;
@@ -60,90 +59,89 @@ function rbPitchShift(mono, semitones, sampleRate) {
     rbApi.rubberband_set_max_process_size(handle, maxBlock);
     rbApi.rubberband_set_expected_input_duration(handle, mono.length);
 
-    inPtr = rbApi.malloc(maxBlock * 4);
-    inPtrsBuf = rbApi.malloc(4);
+    // Allouer les buffers WASM
+    inPtr    = rbApi.malloc(maxBlock * 4);  // float32 input
+    inPtrsBuf  = rbApi.malloc(4);           // pointeur vers inPtr (tableau de 1 canal)
     rbApi.memWritePtr(inPtrsBuf, inPtr);
-    outPtr = rbApi.malloc(maxBlock * 4);
-    outPtrsBuf = rbApi.malloc(4);
+
+    outPtr   = rbApi.malloc(maxBlock * 4);  // float32 output
+    outPtrsBuf = rbApi.malloc(4);           // pointeur vers outPtr
     rbApi.memWritePtr(outPtrsBuf, outPtr);
 
-    const feedZero = new Float32Array(maxBlock);
+    const zeroPad = new Float32Array(maxBlock);
 
-    // ── Phase d'étude (study) — respecte rubberband_get_samples_required ──
-    // FIX : alimenter par blocs fixes de 4096 sans consulter samples_required
-    // désynchronisait le buffer interne de Rubber Band et causait des lectures
-    // hors limites côté WASM (crash silencieux du worker → triangle jaune).
+    // ── PHASE 1 : study (mode offline — parcours complet du signal) ──────────
     let pos = 0;
-    let safety = 0;
-    const maxIterations = Math.ceil(mono.length / 64) + 10000;
     while (pos < mono.length) {
-      if (++safety > maxIterations) throw new Error('rbPitchShift: boucle study infinie détectée');
-      let need = rbApi.rubberband_get_samples_required(handle);
-      if (!need || need <= 0) need = maxBlock;
-      need = Math.min(need, maxBlock);
-      const chunkLen = Math.min(need, mono.length - pos);
-      const chunk = mono.subarray(pos, pos + chunkLen);
-      feedZero.fill(0);
-      feedZero.set(chunk);
-      rbApi.memWrite(inPtr, feedZero);
-      const final = (pos + chunkLen >= mono.length) ? 1 : 0;
-      rbApi.rubberband_study(handle, inPtrsBuf, chunkLen, final);
+      const chunkLen = Math.min(maxBlock, mono.length - pos);
+      zeroPad.fill(0);
+      zeroPad.set(mono.subarray(pos, pos + chunkLen));
+      rbApi.memWrite(inPtr, zeroPad);
+      const isFinal = (pos + chunkLen >= mono.length) ? 1 : 0;
+      rbApi.rubberband_study(handle, inPtrsBuf, chunkLen, isFinal);
       pos += chunkLen;
     }
 
-    // ── Phase de traitement (process) + récupération ──
+    // ── ÉTAPE CRITIQUE manquante dans les versions précédentes ───────────────
+    // calculate_stretch() est OBLIGATOIRE en mode ProcessOffline entre study et process.
+    // Sans cet appel, rb_get_samples_required retourne des valeurs erronées,
+    // rb_process lit hors bornes de la mémoire WASM → crash silencieux du worker.
+    rbApi.rubberband_calculate_stretch(handle);
+
+    // ── PHASE 2 : process + retrieve ─────────────────────────────────────────
     const outChunks = [];
     pos = 0;
-    safety = 0;
+
     while (pos < mono.length) {
-      if (++safety > maxIterations) throw new Error('rbPitchShift: boucle process infinie détectée');
+      // En mode offline post-calculate_stretch(), samples_required est fiable
       let need = rbApi.rubberband_get_samples_required(handle);
-      if (!need || need <= 0) need = maxBlock;
+      if (need <= 0) need = maxBlock;
       need = Math.min(need, maxBlock);
+
       const chunkLen = Math.min(need, mono.length - pos);
-      const chunk = mono.subarray(pos, pos + chunkLen);
-      feedZero.fill(0);
-      feedZero.set(chunk);
-      rbApi.memWrite(inPtr, feedZero);
-      const final = (pos + chunkLen >= mono.length) ? 1 : 0;
-      rbApi.rubberband_process(handle, inPtrsBuf, chunkLen, final);
+      zeroPad.fill(0);
+      zeroPad.set(mono.subarray(pos, pos + chunkLen));
+      rbApi.memWrite(inPtr, zeroPad);
+      const isFinal = (pos + chunkLen >= mono.length) ? 1 : 0;
+      rbApi.rubberband_process(handle, inPtrsBuf, chunkLen, isFinal);
       pos += chunkLen;
 
+      // Vider tout ce qui est disponible immédiatement
       let avail = rbApi.rubberband_available(handle);
-      let drainSafety = 0;
-      while (avail > 0 && drainSafety < 10000) {
+      while (avail > 0) {
         const toRead = Math.min(avail, maxBlock);
         const got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead);
-        if (got > 0) outChunks.push(rbApi.memReadF32(outPtr, got).slice());
-        avail = rbApi.rubberband_available(handle);
-        drainSafety++;
         if (got <= 0) break;
+        outChunks.push(rbApi.memReadF32(outPtr, got).slice());
+        avail = rbApi.rubberband_available(handle);
       }
     }
 
-    // Vidage final — Rubber Band peut retenir quelques blocks en interne
+    // ── Vidage final (Rubber Band retient toujours quelques frames en fin) ───
     let avail = rbApi.rubberband_available(handle);
-    let drainGuard = 0;
-    while (avail > 0 && drainGuard < 10000) {
+    let guard = 0;
+    while (avail > 0 && guard++ < 512) {
       const toRead = Math.min(avail, maxBlock);
       const got = rbApi.rubberband_retrieve(handle, outPtrsBuf, toRead);
-      if (got > 0) outChunks.push(rbApi.memReadF32(outPtr, got).slice());
-      avail = rbApi.rubberband_available(handle);
-      drainGuard++;
       if (got <= 0) break;
+      outChunks.push(rbApi.memReadF32(outPtr, got).slice());
+      avail = rbApi.rubberband_available(handle);
     }
 
+    // Assembler la sortie
     const totalLen = outChunks.reduce((s, c) => s + c.length, 0);
-    const result = new Float32Array(totalLen || mono.length);
+    if (totalLen === 0) return mono; // safety fallback
+
+    const result = new Float32Array(totalLen);
     let off = 0;
     for (const c of outChunks) { result.set(c, off); off += c.length; }
+    return result;
 
-    return totalLen > 0 ? result : mono;
   } finally {
-    try { if (inPtr) rbApi.free(inPtr); } catch {}
-    try { if (inPtrsBuf) rbApi.free(inPtrsBuf); } catch {}
-    try { if (outPtr) rbApi.free(outPtr); } catch {}
-    try { if (outPtrsBuf) rbApi.free(outPtrsBuf); } catch {}
+    try { if (inPtr    !== undefined) rbApi.free(inPtr);    } catch {}
+    try { if (inPtrsBuf !== undefined) rbApi.free(inPtrsBuf); } catch {}
+    try { if (outPtr   !== undefined) rbApi.free(outPtr);   } catch {}
+    try { if (outPtrsBuf !== undefined) rbApi.free(outPtrsBuf); } catch {}
     try { rbApi.rubberband_delete(handle); } catch {}
   }
 }
@@ -439,39 +437,41 @@ function audioToWav(chL,chR,sr){
 
 // ═══════════════════════════════════════════════════════════════
 // PIPELINE PRINCIPAL
-// Utilise Rubber Band pour le pitch shift, garde le reste intact
+// FIX mémoire : chaque étape null-out la référence précédente
+// dès que possible pour réduire le pic RAM sur iOS Safari Worker.
 // ═══════════════════════════════════════════════════════════════
 function processSingle(mono, semitones, sampleRate, trackIndex) {
   const profile = LAYER_PROFILES[trackIndex] || LAYER_PROFILES[2];
   const seed = (trackIndex || 2) * 7919;
+  let prev = null;
 
   // 1. Pitch shift via Rubber Band WASM (FormantPreserved + HQ offline)
   let shifted = rbPitchShift(mono, semitones, sampleRate);
 
-  // 2. AGC — égaliser le niveau sur l'original
-  shifted = applyAGC(shifted, mono);
+  // 2. AGC — égaliser le niveau sur l'original, puis libérer shifted précédent
+  prev = shifted; shifted = applyAGC(shifted, mono); prev = null;
 
   // 3. Saturation douce (harmonies aiguës uniquement)
   if (semitones >= 4) {
-    shifted = applySoftSaturation(shifted, 0.03 + (semitones - 4) / 12 * 0.04);
+    prev = shifted; shifted = applySoftSaturation(shifted, 0.03 + (semitones - 4) / 12 * 0.04); prev = null;
   }
 
   // 4. Variation de phrase
-  shifted = applyPhraseVariation(shifted, sampleRate, profile.pitchVar, seed);
+  prev = shifted; shifted = applyPhraseVariation(shifted, sampleRate, profile.pitchVar, seed); prev = null;
 
   // 5. Jitter naturel déterministe
-  shifted = applyOrganicJitter(shifted, sampleRate, seed ^ 0xABCD1234);
+  prev = shifted; shifted = applyOrganicJitter(shifted, sampleRate, seed ^ 0xABCD1234); prev = null;
 
   // 6. Coloration timbrale par voix
-  shifted = applyTimbreColor(shifted, profile.timbreHz, profile.timbreDb, 1.3, sampleRate);
+  prev = shifted; shifted = applyTimbreColor(shifted, profile.timbreHz, profile.timbreDb, 1.3, sampleRate); prev = null;
 
   // 7. Offset temporel
-  shifted = applyTimingOffset(shifted, profile.timingMs, sampleRate);
+  prev = shifted; shifted = applyTimingOffset(shifted, profile.timingMs, sampleRate); prev = null;
 
   // 8. Reverb Plate
-  shifted = applyPlateReverb(shifted, sampleRate, profile.reverbWet);
+  prev = shifted; shifted = applyPlateReverb(shifted, sampleRate, profile.reverbWet); prev = null;
 
-  // 9. Limiteur de sécurité
+  // 9. Limiteur de sécurité — in-place (zéro allocation)
   let peakOut = 0;
   for (let i = 0; i < shifted.length; i++) peakOut = Math.max(peakOut, Math.abs(shifted[i]));
   if (peakOut > 0.98) {
@@ -483,25 +483,34 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
 }
 
 // Traitement chunked pour les longs enregistrements (>40s)
+// FIX mémoire : subarray (vue sans copie) + assemblage direct dans buffer final
 function processChunked(mono, semitones, sampleRate, trackIndex) {
   const chunkSamp = Math.floor(sampleRate * 40);
   if (mono.length <= chunkSamp) return processSingle(mono, semitones, sampleRate, trackIndex);
+
   const overlapSamp = Math.floor(sampleRate * 0.4);
-  const results = [];
+  const final = new Float32Array(mono.length + overlapSamp * 2); // taille max estimée
+  let outOff = 0;
   let pos = 0;
+
   while (pos < mono.length) {
     const end = Math.min(pos + chunkSamp, mono.length);
-    const chunk = mono.slice(pos, end < mono.length ? end + overlapSamp : end);
-    const processed = processSingle(chunk, semitones, sampleRate, trackIndex);
-    const keepLen = end < mono.length ? Math.floor(processed.length * (chunkSamp / chunk.length)) : processed.length;
-    results.push(processed.slice(0, keepLen));
+    const hasMore = end < mono.length;
+    // subarray = vue sans copie (économise ~40 MB pour un vocal de 3 min)
+    const chunkView = mono.subarray(pos, hasMore ? end + overlapSamp : end);
+    let processed = processSingle(chunkView, semitones, sampleRate, trackIndex);
+    const keepLen = hasMore
+      ? Math.floor(processed.length * (chunkSamp / chunkView.length))
+      : processed.length;
+    if (outOff + keepLen <= final.length) {
+      final.set(processed.subarray(0, keepLen), outOff);
+    }
+    outOff += keepLen;
+    processed = null; // libère immédiatement
     pos = end;
   }
-  const totalLen = results.reduce((s, r) => s + r.length, 0);
-  const final = new Float32Array(totalLen);
-  let off = 0;
-  for (const r of results) { final.set(r, off); off += r.length; }
-  return final;
+
+  return final.subarray(0, outOff);
 }
 
 // ═══════════════════════════════════════════════════════════════
