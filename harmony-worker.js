@@ -437,11 +437,16 @@ function doubleTrack(mono,sr){
 // ═══════════════════════════════════════════════════════════════
 // PROFILS PAR HARMONIE (inchangés)
 // ═══════════════════════════════════════════════════════════════
+// LAYER_PROFILES calibrés pour voix baritone ~284Hz, reverb dense 861ms, peak -19.8dBFS
+// pitchVar  : variation de phrase en cents (réduit car reverb longue masque déjà les imperfections)
+// timingMs  : offset temporel (augmenté pour séparer les voix dans la queue de reverb)
+// reverbWet : réduit — le signal a déjà 861ms de reverb naturelle, évite la boue
+// chorusDepth : réduit — idem, la reverb fait déjà le travail de widening
 const LAYER_PROFILES={
-  2:{pitchVar:2.5,timingMs:14,timbreHz:2800,timbreDb:+1.5,pan:-0.30,chorusRate:0.95,chorusDepth:0.004,reverbWet:0.17},
-  3:{pitchVar:4.0,timingMs:25,timbreHz:3400,timbreDb:-1.0,pan:+0.35,chorusRate:1.10,chorusDepth:0.006,reverbWet:0.20},
-  4:{pitchVar:1.8,timingMs:8, timbreHz:250, timbreDb:+2.0,pan:+0.10,chorusRate:0.80,chorusDepth:0.003,reverbWet:0.14},
-  5:{pitchVar:3.5,timingMs:20,timbreHz:1800,timbreDb:+0.8,pan:-0.15,chorusRate:1.25,chorusDepth:0.005,reverbWet:0.19},
+  2:{pitchVar:1.5,timingMs:18,timbreHz:2800,timbreDb:+1.2,pan:-0.30,chorusRate:0.95,chorusDepth:0.003,reverbWet:0.08},
+  3:{pitchVar:2.5,timingMs:32,timbreHz:3400,timbreDb:-0.8,pan:+0.35,chorusRate:1.10,chorusDepth:0.004,reverbWet:0.10},
+  4:{pitchVar:1.2,timingMs:12,timbreHz:250, timbreDb:+1.8,pan:+0.10,chorusRate:0.80,chorusDepth:0.002,reverbWet:0.06},
+  5:{pitchVar:2.0,timingMs:26,timbreHz:1800,timbreDb:+0.6,pan:-0.15,chorusRate:1.25,chorusDepth:0.003,reverbWet:0.09},
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -472,8 +477,26 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
   const profile = LAYER_PROFILES[trackIndex] || LAYER_PROFILES[2];
   const seed = (trackIndex || 2) * 7919;
 
+  // 0. Pré-normalisation avant Rubber Band — CRITIQUE pour ta voix
+  // Ton signal est à -19.8 dBFS (peak 0.103). En dessous de ~-6 dBFS,
+  // Rubber Band amplifie le bruit de fond lors du pitch shift → souffles et artefacts.
+  // On normalise temporairement à -3 dBFS avant RB, puis l'AGC remet le bon niveau.
+  let preGain = 1.0;
+  let prePeak = 0;
+  for (let i = 0; i < mono.length; i++) prePeak = Math.max(prePeak, Math.abs(mono[i]));
+  if (prePeak > 0.001 && prePeak < 0.5) {
+    preGain = 0.707 / prePeak; // cible -3 dBFS
+    for (let i = 0; i < mono.length; i++) mono[i] *= preGain;
+  }
+
   // 1. Pitch shift — seule étape qui crée un nouveau buffer (inévitable)
   let sig = rbPitchShift(mono, semitones, sampleRate);
+
+  // Annuler la pré-normalisation sur mono (restaurer pour l'AGC)
+  if (preGain !== 1.0) {
+    const invGain = 1.0 / preGain;
+    for (let i = 0; i < mono.length; i++) mono[i] *= invGain;
+  }
 
   // 2-9. Toutes les étapes suivantes sont IN-PLACE — zéro allocation
   applyAGC(sig, mono);
