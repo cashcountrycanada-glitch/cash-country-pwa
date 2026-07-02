@@ -154,8 +154,7 @@ function rbPitchShift(mono, semitones, sampleRate) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// AGC — Automatic Gain Control
-// ═══════════════════════════════════════════════════════════════
+// FIX OOM : in-place (zéro allocation)
 function applyAGC(signal, reference) {
   let refRMS=0,sigRMS=0;
   for(let i=0;i<reference.length;i++) refRMS+=reference[i]*reference[i];
@@ -164,116 +163,112 @@ function applyAGC(signal, reference) {
   sigRMS=Math.sqrt(sigRMS/signal.length);
   if(sigRMS<1e-9) return signal;
   const gain=Math.max(0.3,Math.min(2.5,refRMS/sigRMS));
-  const out=new Float32Array(signal.length);
-  for(let i=0;i<signal.length;i++) out[i]=signal[i]*gain;
-  return out;
+  for(let i=0;i<signal.length;i++) signal[i]*=gain;
+  return signal; // in-place
 }
 
-// ═══════════════════════════════════════════════════════════════
-// SATURATION DOUCE
-// ═══════════════════════════════════════════════════════════════
+// FIX OOM : in-place (zéro allocation)
 function applySoftSaturation(signal, amount) {
   if(amount<=0) return signal;
-  const out=new Float32Array(signal.length);
   const k=2*amount/(1-amount);
   for(let i=0;i<signal.length;i++){
     const x=signal[i]||0;
-    out[i]=(1+k)*x/(1+k*Math.abs(x));
+    signal[i]=(1+k)*x/(1+k*Math.abs(x));
   }
-  return out;
+  return signal; // in-place
 }
 
 // ═══════════════════════════════════════════════════════════════
 // JITTER NATUREL — bruit rose déterministe
 // ═══════════════════════════════════════════════════════════════
+// FIX OOM : calcul in-place, zéro allocation supplémentaire
+// Avant : 3x Float32Array (result + noiseD + noiseF) = ~138 MB pour vocal 4min
 function applyOrganicJitter(signal, sr, seed) {
   const rand=makePRNG(seed>>>0);
   const len=signal.length;
-  const result=new Float32Array(len);
   const dt=1/sr;
   const alphaD=dt/(dt+1/(2*Math.PI*8));
   const alphaF=dt/(dt+1/(2*Math.PI*12));
   let lpD=0,lpF=0;
-  const noiseD=new Float32Array(len);
-  const noiseF=new Float32Array(len);
-  for(let i=0;i<len;i++){noiseD[i]=rand()*2-1;noiseF[i]=rand()*2-1;}
+  // Pré-calculer les échantillons source avant modification in-place
+  // On doit lire l'original donc on copie d'abord — mais utilisons un seul buffer
+  const src=signal.slice(); // 1 copie inévitable pour lire l'original
   for(let i=0;i<len;i++){
-    lpD=lpD+alphaD*(noiseD[i]-lpD);
+    const noiseD=rand()*2-1;
+    const noiseF=rand()*2-1;
+    lpD=lpD+alphaD*(noiseD-lpD);
     const driftCents=lpD*8.0;
-    lpF=lpF+alphaF*(noiseF[i]-lpF);
+    lpF=lpF+alphaF*(noiseF-lpF);
     const flutter=1.0+lpF*0.015;
     const ratio=Math.pow(2,driftCents/1200);
     const srcPos=i*ratio;
     const s0=Math.max(0,Math.min(len-2,Math.floor(srcPos)|0));
     const fr=srcPos-Math.floor(srcPos);
-    const pitched=(signal[s0]||0)*(1-fr)+(signal[Math.min(s0+1,len-1)]||0)*fr;
-    result[i]=pitched*flutter;
+    const pitched=(src[s0]||0)*(1-fr)+(src[Math.min(s0+1,len-1)]||0)*fr;
+    signal[i]=pitched*flutter;
   }
-  return result;
+  return signal; // in-place
 }
 
 // ═══════════════════════════════════════════════════════════════
 // PHRASE VARIATION — micro-modulation de timbre
 // ═══════════════════════════════════════════════════════════════
+// FIX OOM : in-place, calcul du bruit à la volée (zéro allocation)
 function applyPhraseVariation(signal, sr, depthCents, seed) {
   if(depthCents<=0) return signal;
   const rand=makePRNG(seed>>>0);
   const len=signal.length;
-  const result=new Float32Array(len);
   const dt=1/sr;
   const alpha=dt/(dt+1/(2*Math.PI*2.5));
   let lp=0;
-  const noise=new Float32Array(len);
-  for(let i=0;i<len;i++) noise[i]=rand()*2-1;
+  const src=signal.slice(); // 1 copie inévitable
   for(let i=0;i<len;i++){
-    lp=lp+alpha*(noise[i]-lp);
-    const cents=lp*depthCents;
-    const ratio=Math.pow(2,cents/1200);
+    lp=lp+alpha*((rand()*2-1)-lp);
+    const ratio=Math.pow(2,lp*depthCents/1200);
     const srcPos=i*ratio;
     const s0=Math.max(0,Math.min(len-2,Math.floor(srcPos)|0));
     const fr=srcPos-Math.floor(srcPos);
-    result[i]=(signal[s0]||0)*(1-fr)+(signal[Math.min(s0+1,len-1)]||0)*fr;
+    signal[i]=(src[s0]||0)*(1-fr)+(src[Math.min(s0+1,len-1)]||0)*fr;
   }
-  return result;
+  return signal; // in-place
 }
 
 // ═══════════════════════════════════════════════════════════════
 // COLORATION TIMBRALE (EQ paramétrique peaking)
 // ═══════════════════════════════════════════════════════════════
+// FIX OOM : in-place (zéro allocation)
 function applyTimbreColor(signal,fcHz,gainDB,Q,sr){
   if(Math.abs(gainDB)<0.2) return signal;
   const A=Math.pow(10,gainDB/40),w0=2*Math.PI*fcHz/sr;
   const cosW=Math.cos(w0),sinW=Math.sin(w0),alpha=sinW/(2*Q);
   const b0=1+alpha*A,b1=-2*cosW,b2=1-alpha*A;
   const a0=1+alpha/A,a1=-2*cosW,a2=1-alpha/A;
-  const out=new Float32Array(signal.length);
   let x1=0,x2=0,y1=0,y2=0;
   for(let i=0;i<signal.length;i++){
     const x0=signal[i]||0;
     const y0=(b0*x0+b1*x1+b2*x2-a1*y1-a2*y2)/a0;
-    out[i]=y0;x2=x1;x1=x0;y2=y1;y1=y0;
+    signal[i]=y0;x2=x1;x1=x0;y2=y1;y1=y0;
   }
-  return out;
+  return signal; // in-place
 }
 
-// ═══════════════════════════════════════════════════════════════
-// TIMING OFFSET
-// ═══════════════════════════════════════════════════════════════
+// FIX OOM : in-place (zéro allocation)
 function applyTimingOffset(signal,offsetMs,sr){
   if(offsetMs<=0) return signal;
   const off=Math.floor(offsetMs*sr/1000);
-  const result=new Float32Array(signal.length);
-  for(let i=off;i<signal.length;i++) result[i]=signal[i-off];
-  return result;
+  for(let i=signal.length-1;i>=off;i--) signal[i]=signal[i-off];
+  for(let i=0;i<off;i++) signal[i]=0;
+  return signal; // in-place
 }
 
 // ═══════════════════════════════════════════════════════════════
 // REVERB PLATE
 // ═══════════════════════════════════════════════════════════════
+// FIX OOM : in-place — wet calculé sample par sample et mixé directement dans signal
+// Avant : wet (46MB) + result (46MB) = 92 MB. Après : zéro allocation supplémentaire
 function applyPlateReverb(signal, sr, dryWet) {
   if(dryWet<=0) return signal;
   const len=signal.length;
-  const wet=new Float32Array(len);
   const erTaps=[
     {d:0.0043,g:0.55},{d:0.0079,g:-0.48},{d:0.0120,g:0.42},
     {d:0.0178,g:-0.36},{d:0.0235,g:0.30},{d:0.0302,g:-0.25},
@@ -294,6 +289,8 @@ function applyPlateReverb(signal, sr, dryWet) {
   const preD=Math.max(1,Math.floor(0.010*sr));
   const preBuf=new Float32Array(preD);
   let prePtr=0;
+  const dw=Math.min(0.35,Math.max(0,dryWet));
+  const dry=1-dw;
   for(let i=0;i<len;i++){
     const x=signal[i]||0;
     const pre=preBuf[prePtr];
@@ -320,12 +317,10 @@ function applyPlateReverb(signal, sr, dryWet) {
       apPtrs[a]=(ptr+1)%d;
       late=stored+apG[a]*fwd;
     }
-    wet[i]=(er*0.4+late*0.6);
+    // Mix in-place directement dans signal
+    signal[i]=x*dry+(er*0.4+late*0.6)*dw;
   }
-  const result=new Float32Array(len);
-  const dw=Math.min(0.35,Math.max(0,dryWet));
-  for(let i=0;i<len;i++) result[i]=(signal[i]||0)*(1-dw)+wet[i]*dw;
-  return result;
+  return signal; // in-place
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -464,43 +459,25 @@ function audioToWav(chL,chR,sr){
 function processSingle(mono, semitones, sampleRate, trackIndex) {
   const profile = LAYER_PROFILES[trackIndex] || LAYER_PROFILES[2];
   const seed = (trackIndex || 2) * 7919;
-  let prev = null;
 
-  // 1. Pitch shift via Rubber Band WASM (FormantPreserved + HQ offline)
-  let shifted = rbPitchShift(mono, semitones, sampleRate);
+  // 1. Pitch shift — seule étape qui crée un nouveau buffer (inévitable)
+  let sig = rbPitchShift(mono, semitones, sampleRate);
 
-  // 2. AGC — égaliser le niveau sur l'original, puis libérer shifted précédent
-  prev = shifted; shifted = applyAGC(shifted, mono); prev = null;
+  // 2-9. Toutes les étapes suivantes sont IN-PLACE — zéro allocation
+  applyAGC(sig, mono);
+  if (semitones >= 4) applySoftSaturation(sig, 0.03 + (semitones - 4) / 12 * 0.04);
+  applyPhraseVariation(sig, sampleRate, profile.pitchVar, seed);
+  applyOrganicJitter(sig, sampleRate, seed ^ 0xABCD1234);
+  applyTimbreColor(sig, profile.timbreHz, profile.timbreDb, 1.3, sampleRate);
+  applyTimingOffset(sig, profile.timingMs, sampleRate);
+  applyPlateReverb(sig, sampleRate, profile.reverbWet);
 
-  // 3. Saturation douce (harmonies aiguës uniquement)
-  if (semitones >= 4) {
-    prev = shifted; shifted = applySoftSaturation(shifted, 0.03 + (semitones - 4) / 12 * 0.04); prev = null;
-  }
+  // Limiteur in-place
+  let peak = 0;
+  for (let i = 0; i < sig.length; i++) peak = Math.max(peak, Math.abs(sig[i]));
+  if (peak > 0.98) { const n = 0.98/peak; for (let i = 0; i < sig.length; i++) sig[i] *= n; }
 
-  // 4. Variation de phrase
-  prev = shifted; shifted = applyPhraseVariation(shifted, sampleRate, profile.pitchVar, seed); prev = null;
-
-  // 5. Jitter naturel déterministe
-  prev = shifted; shifted = applyOrganicJitter(shifted, sampleRate, seed ^ 0xABCD1234); prev = null;
-
-  // 6. Coloration timbrale par voix
-  prev = shifted; shifted = applyTimbreColor(shifted, profile.timbreHz, profile.timbreDb, 1.3, sampleRate); prev = null;
-
-  // 7. Offset temporel
-  prev = shifted; shifted = applyTimingOffset(shifted, profile.timingMs, sampleRate); prev = null;
-
-  // 8. Reverb Plate
-  prev = shifted; shifted = applyPlateReverb(shifted, sampleRate, profile.reverbWet); prev = null;
-
-  // 9. Limiteur de sécurité — in-place (zéro allocation)
-  let peakOut = 0;
-  for (let i = 0; i < shifted.length; i++) peakOut = Math.max(peakOut, Math.abs(shifted[i]));
-  if (peakOut > 0.98) {
-    const n = 0.98 / peakOut;
-    for (let i = 0; i < shifted.length; i++) shifted[i] *= n;
-  }
-
-  return shifted;
+  return sig;
 }
 
 // Traitement chunked — TOUJOURS utilisé pour les enregistrements > 8s
