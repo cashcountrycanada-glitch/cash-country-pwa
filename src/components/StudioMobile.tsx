@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.330';
+const BUILD_VERSION = 'v7.6.332';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -514,76 +514,93 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     // Recharger les dataUrl depuis IDB pour tous les tracks au demarrage
     // blob: URLs meurent au redemarrage iOS -> toujours recrer depuis IDB
     // data: URLs base64 -> conserver (petites harmonies)
+    // FIX OOM : charger seulement le slot actif au démarrage — les autres slots chargent
+    // à la demande quand l'utilisateur clique sur le bouton du slot
     if (proj.tracks.length > 0) {
+      const savedSlot = await studioOfflineDB.getState<string>(`takeSlot_${selected.id}`, 'A').catch(() => 'A');
+      const activeSlotName = (['A','B','C'].includes(savedSlot as string) ? savedSlot : 'A') as string;
+
+      const loadOneTrack = async (track: any) => {
+        // data: URL base64 valide -> conserver
+        if (track.dataUrl && track.dataUrl.startsWith('data:') && track.dataUrl.length > 1000) return track;
+        // blob: URL ou vide -> invalide, on nettoie et recharge depuis IDB
+        const cleanTrack = { ...track, dataUrl: undefined as any };
+        // Cle principale rec_
+        try {
+          const blob = await studioOfflineDB.getAudio(`rec_${track.id}`);
+          if (blob && blob.size > 1000) {
+            // Forcer audio/mp4 sur iOS si type inconnu ou webm (non supporté)
+            const safeBlob = (blob.type === '' || blob.type.includes('webm') || blob.type.includes('ogg'))
+              ? new Blob([blob], { type: 'audio/mp4' }) : blob;
+            const dataUrl = URL.createObjectURL(safeBlob);
+            (window as any)[`__trackBlob_${track.id}`] = safeBlob;
+            addLog(`Slot ${track.takeSlot ?? track.trackIndex} recharge IDB (${(blob.size/1024).toFixed(0)} KB)`);
+            if (track.trackIndex === 0) {
+              blob.arrayBuffer().then(ab => {
+                const tmp = new (window.AudioContext || (window as any).webkitAudioContext)();
+                return tmp.decodeAudioData(ab).then(buf => {
+                  (window as any).__lastRecDecodedBuf = buf;
+                  (window as any).__lastRecDecodedId  = track.id;
+                  tmp.close();
+                }).catch(() => { tmp.close(); });
+              }).catch(() => {});
+            }
+            return { ...cleanTrack, dataUrl };
+          }
+        } catch {}
+        // Cle harmonie generee — la vraie cle est dans dataUrl si sentinelle opfs:
+        if ((track as any).isGenerated) {
+          // Priorite 1: cle exacte depuis la sentinelle opfs: stockee dans dataUrl
+          const opfsKey = track.dataUrl?.startsWith('opfs:') ? track.dataUrl.slice(5) : null;
+          const keysToTry: string[] = [];
+          if (opfsKey) keysToTry.push(opfsKey);
+          // Priorite 2: cle par voiceId extraite de l'opfsKey si disponible
+          // Priorite 3: fallback legacy avec songId (ancienne convention incorrecte)
+          if (track.songId && track.trackIndex != null) {
+            keysToTry.push(`harmony_${track.songId}_t${track.trackIndex}`);
+          }
+          for (const harmKey of keysToTry) {
+            try {
+              const blob = await studioOfflineDB.getAudio(harmKey);
+              if (blob && blob.size > 1000) {
+                const safeHBlob = (blob.type === '' || blob.type.includes('webm') || blob.type.includes('ogg'))
+                  ? new Blob([blob], { type: 'audio/mp4' }) : blob;
+                const dataUrl = URL.createObjectURL(safeHBlob);
+                (window as any)[`__trackBlob_${track.id}`] = safeHBlob;
+                (window as any).__harmonyBlobs = (window as any).__harmonyBlobs || {};
+                (window as any).__harmonyBlobs[harmKey] = safeHBlob;
+                addLog(`Harmonie t${track.trackIndex} rechargee (${harmKey.slice(-20)})`);
+                // Conserver la vraie cle opfs: dans dataUrl pour les prochains rechargements
+                return { ...cleanTrack, dataUrl };
+              }
+            } catch {}
+          }
+        }
+        // Cle backup
+        try {
+          const backup = await studioOfflineDB.getAudio(`backup_voice_${track.id}`);
+          if (backup && backup.size > 1000) {
+            const dataUrl = URL.createObjectURL(backup);
+            (window as any)[`__trackBlob_${track.id}`] = backup;
+            addLog(`Slot ${track.takeSlot ?? track.trackIndex} restaure BACKUP`);
+            return { ...cleanTrack, dataUrl };
+          }
+        } catch {}
+        addLog(`Slot ${track.takeSlot ?? track.trackIndex} — audio non chargé (${track.id.slice(-6)})`);
+        return cleanTrack;
+      };
+
       Promise.all(
         proj.tracks.map(async (track) => {
-          // data: URL base64 valide -> conserver
-          if (track.dataUrl && track.dataUrl.startsWith('data:') && track.dataUrl.length > 1000) return track;
-          // blob: URL ou vide -> invalide, on nettoie et recharge depuis IDB
-          const cleanTrack = { ...track, dataUrl: undefined as any };
-          // Cle principale rec_
-          try {
-            const blob = await studioOfflineDB.getAudio(`rec_${track.id}`);
-            if (blob && blob.size > 1000) {
-              // Forcer audio/mp4 sur iOS si type inconnu ou webm (non supporté)
-              const safeBlob = (blob.type === '' || blob.type.includes('webm') || blob.type.includes('ogg'))
-                ? new Blob([blob], { type: 'audio/mp4' }) : blob;
-              const dataUrl = URL.createObjectURL(safeBlob);
-              (window as any)[`__trackBlob_${track.id}`] = safeBlob;
-              addLog(`Slot ${track.takeSlot ?? track.trackIndex} recharge IDB (${(blob.size/1024).toFixed(0)} KB)`);
-              if (track.trackIndex === 0) {
-                blob.arrayBuffer().then(ab => {
-                  const tmp = new (window.AudioContext || (window as any).webkitAudioContext)();
-                  return tmp.decodeAudioData(ab).then(buf => {
-                    (window as any).__lastRecDecodedBuf = buf;
-                    (window as any).__lastRecDecodedId  = track.id;
-                    tmp.close();
-                  }).catch(() => { tmp.close(); });
-                }).catch(() => {});
-              }
-              return { ...cleanTrack, dataUrl };
-            }
-          } catch {}
-          // Cle harmonie generee — la vraie cle est dans dataUrl si sentinelle opfs:
-          if ((track as any).isGenerated) {
-            // Priorite 1: cle exacte depuis la sentinelle opfs: stockee dans dataUrl
-            const opfsKey = track.dataUrl?.startsWith('opfs:') ? track.dataUrl.slice(5) : null;
-            const keysToTry: string[] = [];
-            if (opfsKey) keysToTry.push(opfsKey);
-            // Priorite 2: cle par voiceId extraite de l'opfsKey si disponible
-            // Priorite 3: fallback legacy avec songId (ancienne convention incorrecte)
-            if (track.songId && track.trackIndex != null) {
-              keysToTry.push(`harmony_${track.songId}_t${track.trackIndex}`);
-            }
-            for (const harmKey of keysToTry) {
-              try {
-                const blob = await studioOfflineDB.getAudio(harmKey);
-                if (blob && blob.size > 1000) {
-                  const safeHBlob = (blob.type === '' || blob.type.includes('webm') || blob.type.includes('ogg'))
-                    ? new Blob([blob], { type: 'audio/mp4' }) : blob;
-                  const dataUrl = URL.createObjectURL(safeHBlob);
-                  (window as any)[`__trackBlob_${track.id}`] = safeHBlob;
-                  (window as any).__harmonyBlobs = (window as any).__harmonyBlobs || {};
-                  (window as any).__harmonyBlobs[harmKey] = safeHBlob;
-                  addLog(`Harmonie t${track.trackIndex} rechargee (${harmKey.slice(-20)})`);
-                  // Conserver la vraie cle opfs: dans dataUrl pour les prochains rechargements
-                  return { ...cleanTrack, dataUrl };
-                }
-              } catch {}
-            }
+          const trackSlot = (track.takeSlot ?? 'A') as string;
+          // Charger immédiatement : slot actif + harmonies générées (légères)
+          if (trackSlot === activeSlotName || (track as any).isGenerated) {
+            return loadOneTrack(track);
           }
-          // Cle backup
-          try {
-            const backup = await studioOfflineDB.getAudio(`backup_voice_${track.id}`);
-            if (backup && backup.size > 1000) {
-              const dataUrl = URL.createObjectURL(backup);
-              (window as any)[`__trackBlob_${track.id}`] = backup;
-              addLog(`Slot ${track.takeSlot ?? track.trackIndex} restaure BACKUP`);
-              return { ...cleanTrack, dataUrl };
-            }
-          } catch {}
-          addLog(`Slot ${track.takeSlot ?? track.trackIndex} — audio non chargé (${track.id.slice(-6)})`);
-          return cleanTrack;
+          // Slots inactifs (B et C si slot actif = A, etc.) : ne pas charger maintenant
+          // Ils seront chargés via handleTakeSlotChange quand l'utilisateur clique
+          addLog(`Slot ${trackSlot} — chargement différé (inactif au démarrage)`);
+          return track; // retourner sans dataUrl — sera chargé à la demande
         })
       ).then(tracksWithData => {
         setProject(prev => prev ? { ...prev, tracks: tracksWithData } : prev);
@@ -822,18 +839,81 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // Reset guide quand on change de slot actif
   const handleTakeSlotChange = (slot: 'A'|'B'|'C') => {
     if (slotGuideActive) {
-      // Couper le guide — l'ancien slot devient peut-être le slot actif
       const el = audio.vocalGuideRef.current;
       if (el) { el.pause(); el.src = ''; }
       setSlotGuideActive(null);
     }
+
+    // Libérer l'ancien slot de la mémoire avant de charger le nouveau
+    if (project && slot !== takeSlot) {
+      const oldSlotTracks = project.tracks.filter(t =>
+        !t.isGenerated && (t.takeSlot ?? 'A') === takeSlot
+      );
+      for (const t of oldSlotTracks) {
+        try { delete (window as any)[`__trackBlob_${t.id}`]; } catch {}
+      }
+      // Libérer aussi le buffer décodé si il appartenait à l'ancien slot
+      const oldId = oldSlotTracks[0]?.id;
+      if (oldId && (window as any).__lastRecDecodedId === oldId) {
+        (window as any).__lastRecDecodedBuf = null;
+        (window as any).__lastRecDecodedId  = null;
+      }
+    }
+
     setTakeSlot(slot);
-    // Persister le slot actif en IDB — survit aux redémarrages et à la pression mémoire iOS
+    // Persister le slot actif en IDB
     if (selected?.id) {
       studioOfflineDB.init().then(() =>
         studioOfflineDB.setState(`takeSlot_${selected.id}`, slot)
       ).catch(() => {});
     }
+
+    // Chargement à la demande : si le slot n'a pas encore son audio, le charger maintenant
+    if (!project) return;
+    const slotTracks = project.tracks.filter(t =>
+      !t.isGenerated && (t.takeSlot ?? 'A') === slot && t.trackIndex === 0
+    );
+    const needsLoad = slotTracks.filter(t =>
+      !t.dataUrl || t.dataUrl.startsWith('blob:') === false && !t.dataUrl.startsWith('data:')
+    );
+    if (needsLoad.length === 0) return;
+
+    addLog(`Slot ${slot} — chargement à la demande...`);
+    Promise.all(needsLoad.map(async (track) => {
+      try {
+        const blob = await studioOfflineDB.getAudio(`rec_${track.id}`);
+        if (blob && blob.size > 1000) {
+          const safeBlob = (blob.type === '' || blob.type.includes('webm') || blob.type.includes('ogg'))
+            ? new Blob([blob], { type: 'audio/mp4' }) : blob;
+          const dataUrl = URL.createObjectURL(safeBlob);
+          (window as any)[`__trackBlob_${track.id}`] = safeBlob;
+          addLog(`Slot ${slot} recharge IDB (${(blob.size/1024).toFixed(0)} KB)`);
+          if (track.trackIndex === 0) {
+            blob.arrayBuffer().then(ab => {
+              const tmp = new (window.AudioContext || (window as any).webkitAudioContext)();
+              return tmp.decodeAudioData(ab).then(buf => {
+                (window as any).__lastRecDecodedBuf = buf;
+                (window as any).__lastRecDecodedId  = track.id;
+                tmp.close();
+              }).catch(() => { tmp.close(); });
+            }).catch(() => {});
+          }
+          return { id: track.id, dataUrl };
+        }
+      } catch {}
+      return null;
+    })).then(results => {
+      const updates = results.filter(Boolean) as { id: string; dataUrl: string }[];
+      if (updates.length > 0) {
+        setProject(prev => prev ? {
+          ...prev,
+          tracks: prev.tracks.map(t => {
+            const u = updates.find(u => u.id === t.id);
+            return u ? { ...t, dataUrl: u.dataUrl } : t;
+          })
+        } : prev);
+      }
+    }).catch(() => {});
   };
 
   const handleMix = async (layerIds: string[] = [], instOffsetMsOverride?: number) => {
