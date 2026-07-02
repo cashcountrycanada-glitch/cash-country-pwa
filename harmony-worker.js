@@ -3,6 +3,18 @@
 // Aucun base64 stocké dans le worker — économise ~350KB de mémoire iOS
 // Pipeline : Rubber Band pitch shift → AGC → Saturation → Jitter → Timbre → Reverb → Chorus → Pan
 
+// ── Générateur pseudo-aléatoire déterministe (Mulberry32) ────────────────────
+// Utilisé par applyOrganicJitter, applyPhraseVariation, applyChorusGainPan
+function makePRNG(seed) {
+  let s = seed >>> 0;
+  return function() {
+    s += 0x6D2B79F5;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // ── Rubber Band — état global du worker ──────────────────────────────────────
 let rbApi = null;
 let rbReady = false;
