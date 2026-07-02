@@ -295,6 +295,22 @@ export default function SongSelector({
   const [loadingAudio, setLoadingAudio]           = useState<string | null>(null); // chargement blob async en cours
   const audioTestRef                              = useRef<HTMLAudioElement | null>(null);
   const stemBlobCache                             = useRef<Record<string, Blob>>({});
+  const stemBlobCacheOrder                        = useRef<string[]>([]); // LRU order par songId
+
+  // FIX OOM : limiter stemBlobCache à 2 chansons max
+  // Chaque stem fait ~5-15 MB — sans limite, 10-15 chansons = 150-200 MB accumulés
+  const evictStemCache = (keepSongId: string) => {
+    const order = stemBlobCacheOrder.current;
+    if (!order.includes(keepSongId)) {
+      order.push(keepSongId);
+    }
+    // Garder seulement les 2 derniers songId
+    while (order.length > 2) {
+      const evicted = order.shift()!;
+      delete stemBlobCache.current[`inst_${evicted}`];
+      delete stemBlobCache.current[`vocal_${evicted}`];
+    }
+  };
 
   const handleFileImport = async (song: Song, type: 'inst' | 'vocal', e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -304,7 +320,7 @@ export default function SongSelector({
       await onImportFile(song, type, file);
       // Pré-charger le blob fraîchement importé
       const fresh = await studioOfflineDB.getAudio(`${type}_${song.id}`).catch(() => null);
-      if (fresh) stemBlobCache.current[`${type}_${song.id}`] = fresh;
+      if (fresh) { stemBlobCache.current[`${type}_${song.id}`] = fresh; evictStemCache(song.id); }
       // Rafraîchir le statut cache après import
       const hasInst  = !!stemBlobCache.current[`inst_${song.id}`]  || await studioOfflineDB.hasAudio(`inst_${song.id}`).catch(() => false);
       const hasVocal = !!stemBlobCache.current[`vocal_${song.id}`] || await studioOfflineDB.hasAudio(`vocal_${song.id}`).catch(() => false);
@@ -320,8 +336,8 @@ export default function SongSelector({
       studioOfflineDB.getAudio(`inst_${songId}`).catch(() => null),
       studioOfflineDB.getAudio(`vocal_${songId}`).catch(() => null),
     ]);
-    if (instBlob)  stemBlobCache.current[`inst_${songId}`]  = instBlob;
-    if (vocalBlob) stemBlobCache.current[`vocal_${songId}`] = vocalBlob;
+    if (instBlob)  { stemBlobCache.current[`inst_${songId}`]  = instBlob;  evictStemCache(songId); }
+    if (vocalBlob) { stemBlobCache.current[`vocal_${songId}`] = vocalBlob; evictStemCache(songId); }
     setStemCacheStatus(prev => ({ ...prev, [songId]: { inst: !!instBlob, vocal: !!vocalBlob } }));
   };
 
@@ -393,6 +409,7 @@ export default function SongSelector({
       .then(b => {
         if (!b) { setLoadingAudio(null); return; }
         stemBlobCache.current[dbKey] = b;
+        evictStemCache(songId);
         // Note: play() ici est async (pas dans le callstack du tap originel).
         // Sur iOS ça peut être bloqué par autoplay. Si bloqué, l'user devra
         // retaper — mais au 2e tap le blob sera en cache et ça jouera synchrone.
@@ -402,7 +419,13 @@ export default function SongSelector({
   };
 
   // Cleanup audio au démontage
-  useEffect(() => { return () => { audioTestRef.current?.pause(); setLoadingAudio(null); }; }, []);
+  useEffect(() => { return () => {
+    audioTestRef.current?.pause();
+    setLoadingAudio(null);
+    // FIX OOM : vider le cache de stems en quittant la liste
+    stemBlobCache.current = {};
+    stemBlobCacheOrder.current = [];
+  }; }, []);
 
   const progressColor = (progress: CacheProgress | null) => {
     if (!progress) return '#22c55e';
