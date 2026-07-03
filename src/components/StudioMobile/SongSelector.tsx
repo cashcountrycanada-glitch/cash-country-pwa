@@ -248,9 +248,13 @@ export default function SongSelector({
   onSelect, onInstall, onCache, onForceRefresh, onImportFile, onUncache, onClearAll,
   onViewRecordings, onClearCacheError, onRepairCache,
 }: Props) {
-  const [confirmUncache, setConfirmUncache]       = useState<string | null>(null);
-  const [showRefreshMenu, setShowRefreshMenu]     = useState<string | null>(null);
-  const [showImport, setShowImport]               = useState<string | null>(null);
+  const [activeItem, setActiveItem] = useState<{ id: string; mode: 'menu'|'import'|'confirm' } | null>(null);
+  const showRefreshMenu = activeItem?.mode === 'menu'    ? activeItem.id : null;
+  const showImport      = activeItem?.mode === 'import'  ? activeItem.id : null;
+  const confirmUncache  = activeItem?.mode === 'confirm' ? activeItem.id : null;
+  const setShowRefreshMenu = (id: string | null) => setActiveItem(id ? { id, mode: 'menu' }    : null);
+  const setShowImport      = (id: string | null) => setActiveItem(id ? { id, mode: 'import' }  : null);
+  const setConfirmUncache  = (id: string | null) => setActiveItem(id ? { id, mode: 'confirm' } : null);
   const [visibleCount, setVisibleCount]           = useState(20); // pagination — 20 items max au départ
 
   // Réinitialiser la pagination quand la liste change (nouvelle recherche, retour à l'écran)

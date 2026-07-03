@@ -265,6 +265,14 @@ export default function CompEditor({ song, takes: initialTakes, onBack, onCompRe
   const [loadingWave, setLoadingWave] = useState<Set<string>>(new Set());
   const audioRef = useRef<HTMLAudioElement>(null);
 
+  // FIX OOM : révoquer la blob URL du comp au démontage
+  useEffect(() => {
+    return () => {
+      if (compUrl) { try { URL.revokeObjectURL(compUrl); } catch {} }
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ''; }
+    };
+  }, [compUrl]);
+
   // Charger waveforms — essayer IndexedDB si dataUrl absent
   useEffect(() => {
     takes.forEach(take => {

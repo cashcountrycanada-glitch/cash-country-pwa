@@ -150,8 +150,19 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
     setLivePreviewPlaying(false);
   }
 
-  // Mettre à jour le mix dry/wet EN TEMPS RÉEL pendant que le slider bouge
-  function updateLivePreviewWet(wetAmount: number) {
+  // FIX OOM : nettoyage au démontage — liveCtxRef et liveBufRef ne sont jamais libérés sans ça
+  useEffect(() => {
+    return () => {
+      try { liveSrcRef.current?.stop(); } catch {}
+      liveSrcRef.current = null;
+      liveBufRef.current = null;
+      liveIrCacheRef.current = {};
+      liveDryRef.current = null;
+      liveWetRef.current = null;
+      try { liveCtxRef.current?.close(); } catch {}
+      liveCtxRef.current = null;
+    };
+  }, []);
     if (!liveDryRef.current || !liveWetRef.current || !liveCtxRef.current) return;
     const ctx = liveCtxRef.current;
     liveDryRef.current.gain.setTargetAtTime(1 - wetAmount, ctx.currentTime, 0.02);

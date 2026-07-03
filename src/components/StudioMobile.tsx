@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.339';
+const BUILD_VERSION = 'v7.6.341';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -656,13 +656,19 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       }
     }
     // Libérer tous les blobs de pistes en mémoire
-    const keys = Object.keys(window).filter(k => k.startsWith('__trackBlob_'));
+    const keys = Object.keys(window).filter(k =>
+      k.startsWith('__trackBlob_') || k.startsWith('__originalBlob_')
+    );
     for (const k of keys) {
       try { delete (window as any)[k]; } catch {}
     }
     // Libérer le buffer vocal décodé (~40 MB pour un vocal 4 min)
     (window as any).__lastRecDecodedBuf = null;
     (window as any).__lastRecDecodedId  = null;
+    // Libérer le dernier blob FX (~40 MB)
+    (window as any).__lastFxBlob = null;
+    (window as any).__lastFxKey  = null;
+    (window as any).__lastFxSourceUrl = null;
     // Libérer le worker harmony s'il existe
     try { (window as any).__harmonyWorker?.terminate(); } catch {}
     (window as any).__harmonyWorker = null;
