@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.332';
+const BUILD_VERSION = 'v7.6.333';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -517,8 +517,8 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     // FIX OOM : charger seulement le slot actif au démarrage — les autres slots chargent
     // à la demande quand l'utilisateur clique sur le bouton du slot
     if (proj.tracks.length > 0) {
-      const savedSlot = await studioOfflineDB.getState<string>(`takeSlot_${selected.id}`, 'A').catch(() => 'A');
-      const activeSlotName = (['A','B','C'].includes(savedSlot as string) ? savedSlot : 'A') as string;
+      // Utiliser le takeSlot déjà chargé plus haut (pas de await ici)
+      const activeSlotName = takeSlot || 'A';
 
       const loadOneTrack = async (track: any) => {
         // data: URL base64 valide -> conserver
