@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.344';
+const BUILD_VERSION = 'v7.6.345';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -177,12 +177,13 @@ class ScreenErrorBoundary extends React.Component<
 export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const [screen, setScreen]     = useState<Screen>('songs');
   const [selected, setSelected] = useState<Song | null>(null);
-  const [didAutoSelect, setDidAutoSelect] = useState(false);
 
-  // Au premier render — aller directement à la dernière chanson utilisée
+  // Au premier chargement — aller directement à la dernière chanson utilisée
+  // songs arrive async donc on attend qu'il soit non-vide avant de tenter
+  const didAutoSelect = useRef(false);
   useEffect(() => {
-    if (didAutoSelect || songs.length === 0) return;
-    setDidAutoSelect(true);
+    if (didAutoSelect.current || songs.length === 0) return;
+    didAutoSelect.current = true;
     try {
       const lastId = localStorage.getItem('cc_last_song_id');
       if (!lastId) return;
@@ -192,7 +193,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         setScreen('record');
       }
     } catch {}
-  }, [songs, didAutoSelect]);
+  }, [songs]);
   const [project, setProject]   = useState<TrackProject | null>(null);
   const [apiSongs, setApiSongs] = useState<Song[]>([]);
   const [recordings, setRecordings] = useState<MobileRecording[]>([]);
