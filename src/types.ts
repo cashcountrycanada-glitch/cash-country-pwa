@@ -149,7 +149,7 @@ export interface Song {
   compatibleDances: string[];
   tempo: number;
   key: string;
-  lyricsWithChords: string;
+  lyricsWithChords?: string; // Optionnel : absent de l'index léger /api/songs/list, chargé à l'ouverture
   versions: SongVersion[];
   posterUrl?: string;
   rating: number;

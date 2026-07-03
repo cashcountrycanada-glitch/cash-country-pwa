@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.347';
+const BUILD_VERSION = 'v7.6.348';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -287,6 +287,10 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const allSongs = propSongs.length > 0 ? propSongs : apiSongs;
   const originals = allSongs.filter(s => s.type === SongType.ORIGINAL || (s as any).type === 'Original');
 
+  // FIX OOM : on ne charge plus jamais /api/songs (11 Mo, tous les champs lourds
+  // — posterUrl, realPartition, lyrics...) au démarrage. On charge l'INDEX LÉGER
+  // (/api/songs/list) pour la liste, et la chanson complète est chargée à la
+  // demande (voir hydrateSelectedSong plus bas), seulement quand on l'ouvre.
   useEffect(() => {
     (async () => {
       try {
@@ -299,8 +303,8 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         // Priorité : Mac local (données fraîches) → Railway (données statiques du repo)
         const macUrl = (window as any).__CC_MAC_URL as string || '';
         const songsUrl = macUrl.startsWith('http')
-          ? `${macUrl}/api/songs`
-          : '/api/songs';
+          ? `${macUrl}/api/songs/list`
+          : '/api/songs/list';
         const res = await fetch(songsUrl, { signal: controller.signal, cache: 'no-store' });
         clearTimeout(timeout);
         if (res.ok) {
@@ -308,13 +312,13 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
           if (Array.isArray(data) && data.length > 0) {
             setApiSongs(data);
             studioOfflineDB.saveSongs(data).catch(() => {});
-            addLog(`✅ Songs chargés depuis ${macUrl ? 'Mac' : 'Railway'}: ${data.length} chansons`);
+            addLog(`✅ Songs chargés depuis ${macUrl ? 'Mac' : 'Railway'}: ${data.length} chansons (index léger)`);
           }
         }
       } catch {
         // Si Mac inaccessible, essayer Railway en fallback
         try {
-          const res2 = await fetch('/api/songs', { cache: 'no-store' });
+          const res2 = await fetch('/api/songs/list', { cache: 'no-store' });
           if (res2.ok) {
             const data2 = await res2.json();
             if (Array.isArray(data2) && data2.length > 0) {
@@ -333,7 +337,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       const macUrl = (window as any).__CC_MAC_URL as string || '';
       if (!macUrl.startsWith('http')) return;
       try {
-        const res = await fetch(`${macUrl}/api/songs`, { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+        const res = await fetch(`${macUrl}/api/songs/list`, { cache: 'no-store', signal: AbortSignal.timeout(4000) });
         if (!res.ok) return;
         const data = await res.json();
         if (!Array.isArray(data) || data.length === 0) return;
@@ -353,29 +357,75 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   useEffect(() => {
     if (!selected || apiSongs.length === 0) return;
     const fresh = apiSongs.find(s => s.id === selected.id);
+    // Fusion superficielle : `fresh` (index léger) n'a pas posterUrl/realPartition/
+    // lyrics — on garde ces champs déjà hydratés sur `selected` intacts, on ne
+    // met à jour que les champs légers (versions, titre, etc).
     if (fresh && JSON.stringify(fresh.versions) !== JSON.stringify(selected.versions)) {
-      setSelected(fresh);
+      setSelected(prev => prev ? { ...prev, ...fresh } : fresh);
       addLog(`🔄 Chanson mise à jour: ${fresh.versions?.length ?? 0} version(s)`);
     }
   }, [apiSongs]);
+
+  // ── Hydratation à la demande de la chanson complète ─────────────────────────
+  // FIX OOM : quand on ouvre une chanson (screen 'record'/'mixer'), on va
+  // chercher les champs lourds (posterUrl, realPartition, lyrics synchro) qui
+  // ne sont plus dans l'index léger. On tente d'abord le cache offline
+  // (chanson déjà ouverte avant → hors-ligne instantané), sinon le réseau.
+  const hydratedSongIds = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!selected) return;
+    if (hydratedSongIds.current.has(selected.id)) return;
+    // Déjà hydratée dans cette session (realPartition présent) → rien à faire
+    if ((selected as any).realPartition !== undefined) {
+      hydratedSongIds.current.add(selected.id);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      // 1) Cache offline (chanson déjà ouverte avant)
+      try {
+        const cachedFull = await studioOfflineDB.getFullSong(selected.id);
+        if (cachedFull && !cancelled) {
+          hydratedSongIds.current.add(selected.id);
+          setSelected(prev => (prev && prev.id === selected.id) ? { ...prev, ...cachedFull } : prev);
+          return;
+        }
+      } catch {}
+      // 2) Réseau (Mac local en priorité, sinon Railway)
+      try {
+        const macUrl = (window as any).__CC_MAC_URL as string || '';
+        const url = macUrl.startsWith('http') ? `${macUrl}/api/songs/${selected.id}` : `/api/songs/${selected.id}`;
+        const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+        if (res.ok) {
+          const full = await res.json();
+          if (full && full.id && !cancelled) {
+            hydratedSongIds.current.add(selected.id);
+            setSelected(prev => (prev && prev.id === selected.id) ? { ...prev, ...full } : prev);
+            studioOfflineDB.saveFullSong(full).catch(() => {});
+          }
+        }
+      } catch (e: any) {
+        addLog(`⚠️ Chanson complète non chargée (hors-ligne ?) : ${e?.message || 'erreur réseau'}`);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selected?.id]);
 
   const handleRefreshSong = async () => {
     if (!selected) return;
     addLog('🔄 Rechargement des données de la chanson...');
     try {
+      // FIX OOM : on ne recharge plus tout le catalogue (11 Mo) pour rafraîchir
+      // une seule chanson — juste /api/songs/:id.
       const macUrl = (window as any).__CC_MAC_URL as string || '';
-      const songsUrl = macUrl.startsWith('http') ? `${macUrl}/api/songs` : '/api/songs';
-      const res = await fetch(songsUrl, { cache: 'no-store' });
+      const url = macUrl.startsWith('http') ? `${macUrl}/api/songs/${selected.id}` : `/api/songs/${selected.id}`;
+      const res = await fetch(url, { cache: 'no-store' });
       if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          setApiSongs(data);
-          studioOfflineDB.saveSongs(data).catch(() => {});
-          const fresh = data.find((s: any) => s.id === selected.id);
-          if (fresh) {
-            setSelected(fresh);
-            addLog(`✅ Stems rechargés depuis ${macUrl ? 'Mac' : 'Railway'}: ${fresh.versions?.length ?? 0} version(s)`);
-          }
+        const fresh = await res.json();
+        if (fresh && fresh.id) {
+          setSelected(prev => (prev && prev.id === fresh.id) ? { ...prev, ...fresh } : fresh);
+          studioOfflineDB.saveFullSong(fresh).catch(() => {});
+          addLog(`✅ Stems rechargés depuis ${macUrl ? 'Mac' : 'Railway'}: ${fresh.versions?.length ?? 0} version(s)`);
         }
       }
     } catch (e: any) {

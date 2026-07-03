@@ -112,6 +112,52 @@ app.get('/api/songs', (req, res) => {
   }
 });
 
+// ── Champs lourds — inutiles pour afficher la liste, seulement utiles une fois
+// la chanson ouverte (paroles synchro, analyse d'accords/beats, pochette). ────
+// FIX OOM : /api/songs (complet, ~11 Mo pour 166 chansons) était chargé au
+// complet au démarrage et gardé en mémoire pendant toute la session, peu
+// importe le mode de liste (Légère/Expert). /api/songs/list retire ces champs
+// pour que le démarrage + la liste restent légers ; /api/songs/:id sert une
+// chanson complète à la demande (au tap).
+const HEAVY_SONG_FIELDS = [
+  'lyricsWithChords', 'realPartition', 'opticTimestamps',
+  'lyricsOCR', 'lrcData', 'lrcDense', 'detectionState', 'posterUrl',
+];
+
+// API songs — index léger (utilisé pour l'écran de sélection)
+app.get('/api/songs/list', (req, res) => {
+  const songsPath = path.join(ROOT, 'cashcountry-data/json/songs.json');
+  if (fs.existsSync(songsPath)) {
+    try {
+      const songs = JSON.parse(fs.readFileSync(songsPath, 'utf8'));
+      const light = songs.map((s) => {
+        const copy = { ...s };
+        for (const f of HEAVY_SONG_FIELDS) delete copy[f];
+        return copy;
+      });
+      res.json(light);
+    } catch (e) {
+      res.json([]);
+    }
+  } else {
+    res.json([]);
+  }
+});
+
+// API songs — une seule chanson complète (chargée au moment où l'utilisateur l'ouvre)
+app.get('/api/songs/:id', (req, res) => {
+  const songsPath = path.join(ROOT, 'cashcountry-data/json/songs.json');
+  if (!fs.existsSync(songsPath)) return res.status(404).json({ error: 'no data' });
+  try {
+    const songs = JSON.parse(fs.readFileSync(songsPath, 'utf8'));
+    const song = songs.find((s) => String(s.id) === String(req.params.id));
+    if (!song) return res.status(404).json({ error: 'not found' });
+    res.json(song);
+  } catch (e) {
+    res.status(500).json({ error: 'parse error' });
+  }
+});
+
 // ── Stems audio — redirige vers GitHub Releases ─────────────────────────────
 // Les FLAC/WAV sont stockés comme assets dans une GitHub Release (tag: stems-v1).
 // Railway ne stocke rien — il redirige simplement vers l'URL GitHub publique.

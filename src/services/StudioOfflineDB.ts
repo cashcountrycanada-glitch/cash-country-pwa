@@ -13,9 +13,11 @@
  */
 
 const DB_NAME    = 'CashCountryStudio';
-const DB_VERSION = 1;
+// v2 : ajout de STORE_SONGS_FULL — voir plus bas (FIX OOM liste chansons)
+const DB_VERSION = 2;
 
-const STORE_SONGS = 'songs';
+const STORE_SONGS      = 'songs';       // index léger (liste chansons) — pas de posterUrl/realPartition/lyrics
+const STORE_SONGS_FULL = 'songsFull';   // chanson complète, mise en cache seulement une fois ouverte
 const STORE_AUDIO = 'audio';
 const STORE_STATE = 'state';
 
@@ -227,6 +229,9 @@ class StudioOfflineDatabase {
         const db = (event.target as IDBOpenDBRequest).result;
         if (!db.objectStoreNames.contains(STORE_SONGS)) {
           db.createObjectStore(STORE_SONGS, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(STORE_SONGS_FULL)) {
+          db.createObjectStore(STORE_SONGS_FULL, { keyPath: 'id' });
         }
         if (!db.objectStoreNames.contains(STORE_AUDIO)) {
           const audioStore = db.createObjectStore(STORE_AUDIO, { keyPath: 'key' });
@@ -573,6 +578,25 @@ class StudioOfflineDatabase {
   async getAllSongs(): Promise<any[]> {
     const store = await this.tx(STORE_SONGS);
     return this.idbOp(store.getAll());
+  }
+
+  // ── Chanson complète (posterUrl, realPartition, lyrics...) ──────────────────
+  // FIX OOM : contrairement à STORE_SONGS (index léger, toutes les chansons),
+  // ce store ne contient que les chansons déjà OUVERTES au moins une fois —
+  // permet de rouvrir une chanson hors-ligne sans re-télécharger les 11 Mo.
+  async saveFullSong(song: any): Promise<void> {
+    try {
+      const store = await this.tx(STORE_SONGS_FULL, 'readwrite');
+      await this.idbOp(store.put(song));
+    } catch {}
+  }
+
+  async getFullSong(id: string): Promise<any | null> {
+    try {
+      const store = await this.tx(STORE_SONGS_FULL);
+      const result = await this.idbOp(store.get(id));
+      return result || null;
+    } catch { return null; }
   }
 
   async listAllAudioKeys(): Promise<string[]> {
