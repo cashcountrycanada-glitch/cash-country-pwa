@@ -1744,9 +1744,15 @@ export const studioService = {
       let dataUrl: string;
       const saveHarmonyBlob = async (b: Blob, trackIdx: number): Promise<string> => {
         const harmKey = `harmony_${mainVoice.id}_t${trackIdx}`;
-        // 1. Garder en mémoire pour la session courante
+        // 1. Garder en mémoire pour la session courante (max 3 entrées — LRU)
         if (!(window as any).__harmonyBlobs) (window as any).__harmonyBlobs = {};
-        (window as any).__harmonyBlobs[harmKey] = b;
+        const hBlobs = (window as any).__harmonyBlobs as Record<string,Blob>;
+        hBlobs[harmKey] = b;
+        // Éviction LRU : garder seulement les 3 dernières harmonies en mémoire
+        const keys = Object.keys(hBlobs);
+        if (keys.length > 3) {
+          delete hBlobs[keys[0]];
+        }
         // 2. Persister en OPFS/IDB pour les sessions futures
         try {
           await db.saveAudio(harmKey, b, { type: 'harmony', trackIndex: trackIdx, voiceId: mainVoice.id });
@@ -1788,7 +1794,14 @@ export const studioService = {
       progress(`✅ ${layer.trackLabel} sauvegardée (${i + 1}/${layers.length})`, pct + 6);
       await yieldToMain();
     }
-    progress('✅ Toutes les harmonies générées', 100); return generated;
+    progress('✅ Toutes les harmonies générées', 100);
+
+    // FIX OOM : libérer les ressources mémoire lourdes après génération
+    // srcBuffer (~40 MB) et __harmonyWorker n'ont plus besoin d'être gardés
+    try { __harmonyWorker?.terminate(); } catch {}
+    __harmonyWorker = null;
+
+    return generated;
   },
   async applyFxToTrack(dataUrl: string, fx: { hpf?: number; lowGain: number; lowMidGain?: number; midGain: number; highGain: number; airGain?: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; autotune?: number; autotuneSpeed?: string; }, onProgress?: (pct: number) => void): Promise<string> {
     onProgress?.(5);
