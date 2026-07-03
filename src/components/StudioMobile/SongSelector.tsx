@@ -255,6 +255,16 @@ export default function SongSelector({
   const setShowRefreshMenu = (id: string | null) => setActiveItem(id ? { id, mode: 'menu' }    : null);
   const setShowImport      = (id: string | null) => setActiveItem(id ? { id, mode: 'import' }  : null);
   const setConfirmUncache  = (id: string | null) => setActiveItem(id ? { id, mode: 'confirm' } : null);
+
+  // Mode liste : Légère (défaut) ou Expert
+  const [listMode, setListMode] = useState<'light'|'expert'>(() => {
+    try { return (localStorage.getItem('cc_list_mode') as 'light'|'expert') || 'light'; } catch { return 'light'; }
+  });
+  const toggleListMode = () => {
+    const next = listMode === 'light' ? 'expert' : 'light';
+    setListMode(next);
+    try { localStorage.setItem('cc_list_mode', next); } catch {}
+  };
   const [visibleCount, setVisibleCount]           = useState(20); // pagination — 20 items max au départ
 
   // Réinitialiser la pagination quand la liste change (nouvelle recherche, retour à l'écran)
@@ -620,9 +630,21 @@ export default function SongSelector({
 
       {/* Liste chansons */}
       <div className="flex-1 overflow-y-auto px-5 pt-5 pb-28" style={{ WebkitOverflowScrolling: 'touch' }}>
-        <p className="text-[10px] text-zinc-600 font-black uppercase tracking-widest mb-4">
-          {songs.length} chanson{songs.length > 1 ? 's' : ''} · {cachedCount} hors-ligne
-        </p>
+        {/* Header liste + toggle mode */}
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-[10px] text-zinc-600 font-black uppercase tracking-widest">
+            {songs.length} chanson{songs.length > 1 ? 's' : ''} · {cachedCount} hors-ligne
+          </p>
+          <button
+            onClick={toggleListMode}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${
+              listMode === 'light'
+                ? 'bg-emerald-900/30 border-emerald-600/30 text-emerald-400'
+                : 'bg-zinc-800 border-zinc-600 text-zinc-400'
+            }`}>
+            {listMode === 'light' ? '⚡ Légère' : '🔧 Expert'}
+          </button>
+        </div>
 
         {songs.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 gap-4 opacity-30">
@@ -642,6 +664,28 @@ export default function SongSelector({
               const visibleSongs = songs.slice(0, visibleCount);
               return visibleSongs.map(s => {
               const hasProject   = projectSongIds.has(s.id);
+
+              // ── MODE LÉGÈRE : item minimal, zéro état audio, zéro menu ──────────
+              if (listMode === 'light') {
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => onSelect(s)}
+                    className="w-full flex items-center gap-3 px-4 py-3 bg-zinc-900/60 border border-zinc-800 rounded-2xl active:scale-95 transition-all text-left">
+                    {/* Indicateur projet */}
+                    <div className={`w-2 h-2 rounded-full shrink-0 ${hasProject ? 'bg-red-500' : 'bg-zinc-700'}`}/>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-black text-[13px] text-white truncate">{s.title}</p>
+                      {s.artist && <p className="text-[11px] text-zinc-500 truncate">{s.artist}</p>}
+                    </div>
+                    {cachedSongs.has(s.id) && (
+                      <span className="text-[9px] text-emerald-500 font-black shrink-0">✓ HORS-LIGNE</span>
+                    )}
+                  </button>
+                );
+              }
+
+              // ── MODE EXPERT : interface complète ─────────────────────────────────
               const isCached     = cachedSongs.has(s.id);
               // Détail du cache pour cette chanson (inst + vocal séparément)
               const cacheDetail  = stemCacheStatus[s.id]; // { inst: bool|null, vocal: bool|null }
