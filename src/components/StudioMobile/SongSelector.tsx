@@ -619,8 +619,16 @@ export default function SongSelector({
           </div>
         ) : (
           <div className="space-y-3">
-            {songs.map(s => {
-              const hasProject   = studioService.getProjects().some(p => p.songId === s.id && p.tracks.length > 0);
+            {(() => {
+              // FIX OOM/perf : getProjects() fait JSON.parse(localStorage) à chaque appel.
+              // Calculer une seule fois avant le .map() au lieu de 166x par render.
+              const projectSongIds = new Set(
+                studioService.getProjects()
+                  .filter(p => p.tracks.length > 0)
+                  .map(p => p.songId)
+              );
+              return songs.map(s => {
+              const hasProject   = projectSongIds.has(s.id);
               const isCached     = cachedSongs.has(s.id);
               // Détail du cache pour cette chanson (inst + vocal séparément)
               const cacheDetail  = stemCacheStatus[s.id]; // { inst: bool|null, vocal: bool|null }
@@ -866,7 +874,9 @@ export default function SongSelector({
                   )}
                 </div>
               );
-            })}
+            }); // fin songs.map
+            })() // fin IIFE
+          }
           </div>
         )}
       </div>
