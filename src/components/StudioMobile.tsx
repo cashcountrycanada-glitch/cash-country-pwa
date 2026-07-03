@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.335';
+const BUILD_VERSION = 'v7.6.337';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -647,6 +647,14 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // sans jamais être libérés lors de la navigation entre chansons.
   // À appeler avant setSelected(null) ou setSelected(newSong).
   const clearSongMemory = () => {
+    // Révoquer toutes les blob URLs du projet courant avant de changer de chanson
+    if (project) {
+      for (const t of project.tracks) {
+        if (t.dataUrl && t.dataUrl.startsWith('blob:')) {
+          try { URL.revokeObjectURL(t.dataUrl); } catch {}
+        }
+      }
+    }
     // Libérer tous les blobs de pistes en mémoire
     const keys = Object.keys(window).filter(k => k.startsWith('__trackBlob_'));
     for (const k of keys) {
@@ -655,9 +663,11 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     // Libérer le buffer vocal décodé (~40 MB pour un vocal 4 min)
     (window as any).__lastRecDecodedBuf = null;
     (window as any).__lastRecDecodedId  = null;
-    // Libérer le worker harmony s'il existe — sera recréé à la prochaine génération
+    // Libérer le worker harmony s'il existe
     try { (window as any).__harmonyWorker?.terminate(); } catch {}
     (window as any).__harmonyWorker = null;
+    // Libérer les blobs d'harmonies
+    (window as any).__harmonyBlobs = {};
   };
 
   const handlePreviewStems = async () => {
@@ -850,6 +860,10 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         !t.isGenerated && (t.takeSlot ?? 'A') === takeSlot
       );
       for (const t of oldSlotTracks) {
+        // Révoquer la blob URL avant de supprimer le blob
+        if (t.dataUrl && t.dataUrl.startsWith('blob:')) {
+          try { URL.revokeObjectURL(t.dataUrl); } catch {}
+        }
         try { delete (window as any)[`__trackBlob_${t.id}`]; } catch {}
       }
       // Libérer aussi le buffer décodé si il appartenait à l'ancien slot

@@ -251,6 +251,14 @@ export default function SongSelector({
   const [confirmUncache, setConfirmUncache]       = useState<string | null>(null);
   const [showRefreshMenu, setShowRefreshMenu]     = useState<string | null>(null);
   const [showImport, setShowImport]               = useState<string | null>(null);
+  const [visibleCount, setVisibleCount]           = useState(20); // pagination — 20 items max au départ
+
+  // Réinitialiser la pagination quand la liste change (nouvelle recherche, retour à l'écran)
+  const prevSongsLen = React.useRef(0);
+  if (songs.length !== prevSongsLen.current) {
+    prevSongsLen.current = songs.length;
+    if (visibleCount !== 20) setVisibleCount(20);
+  }
   const [importing, setImporting]                 = useState<string | null>(null);
   const [importingLrc, setImportingLrc]           = useState<string | null>(null); // songId en cours d'import LRC
 
@@ -627,7 +635,8 @@ export default function SongSelector({
                   .filter(p => p.tracks.length > 0)
                   .map(p => p.songId)
               );
-              return songs.map(s => {
+              const visibleSongs = songs.slice(0, visibleCount);
+              return visibleSongs.map(s => {
               const hasProject   = projectSongIds.has(s.id);
               const isCached     = cachedSongs.has(s.id);
               // Détail du cache pour cette chanson (inst + vocal séparément)
@@ -877,6 +886,14 @@ export default function SongSelector({
             }); // fin songs.map
             })() // fin IIFE
           }
+          {/* Bouton "Voir plus" — pagination */}
+          {songs.length > visibleCount && (
+            <button
+              onClick={() => setVisibleCount(c => c + 20)}
+              className="w-full py-3 mt-2 bg-zinc-900 border border-zinc-700 rounded-2xl font-black text-[12px] uppercase tracking-widest text-zinc-400 active:scale-95 transition-all">
+              Voir plus ({songs.length - visibleCount} restantes)
+            </button>
+          )}
           </div>
         )}
       </div>
