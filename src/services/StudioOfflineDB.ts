@@ -461,11 +461,11 @@ class StudioOfflineDatabase {
       }
     }
 
-    // Fallback IDB
+    // Fallback IDB — utiliser getKey (clé seulement) au lieu de get (charge le blob entier)
     try {
       const store = await this.tx(STORE_AUDIO);
-      const rec   = await this.idbOp(store.get(key));
-      return !!rec && !!rec.buffer && rec.buffer.byteLength > 1000;
+      const key2  = await this.idbOp(store.getKey(key));
+      return !!key2;
     } catch { return false; }
   }
 
