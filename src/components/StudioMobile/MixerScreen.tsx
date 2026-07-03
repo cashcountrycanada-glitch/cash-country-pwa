@@ -230,23 +230,25 @@ export default function MixerScreen({
     }
   }, [mixDone, project.mixedDataUrl]);
 
-  // Préchargement actif du cache audio — remplace le polling passif qui bloquait après réouverture
+  // Préchargement audio — différé : on ne charge PAS au montage pour éviter
+  // les 40 MB d'AudioBuffer en mémoire si l'utilisateur ne génère pas d'harmonie.
+  // Le chargement se fait à la demande quand l'utilisateur clique sur Générer.
   const [audioCacheReady, setAudioCacheReady] = React.useState(false);
   const [audioCacheError, setAudioCacheError] = React.useState(false);
-  useEffect(() => {
-    if (!mainVoice) return;
-    // Si déjà en cache (même session), prêt immédiatement
+
+  const ensureAudioCache = async (): Promise<boolean> => {
+    if (!mainVoice) return false;
+    // Déjà en cache (même session) → prêt immédiatement
     const already = !!(window as any).__lastRecDecodedBuf &&
                     (window as any).__lastRecDecodedId === mainVoice.id;
-    if (already) { setAudioCacheReady(true); return; }
-    // Sinon déclencher le chargement actif depuis OPFS/IDB
+    if (already) { setAudioCacheReady(true); return true; }
     setAudioCacheReady(false);
     setAudioCacheError(false);
-    studioService.warmAudioCache(mainVoice).then(ok => {
-      if (ok) setAudioCacheReady(true);
-      else setAudioCacheError(true);
-    });
-  }, [mainVoice?.id]);
+    const ok = await studioService.warmAudioCache(mainVoice);
+    if (ok) { setAudioCacheReady(true); return true; }
+    setAudioCacheError(true);
+    return false;
+  };
 
 
   const handleTrackUpdate = (updated: MobileRecording) => {
@@ -313,23 +315,27 @@ export default function MixerScreen({
     }
   };
 
-  // Charger tous les backups disponibles dans IndexedDB
+  // Charger tous les backups disponibles — sans charger les blobs en mémoire
   const loadRecoveryItems = async () => {
     try {
       const keys = await studioOfflineDB.listAllAudioKeys();
       const backupKeys = keys.filter(k => k.startsWith('backup_voice_') || k.startsWith('rec_'));
+      const allProjects = studioService.getProjects();
+      const allTracks = allProjects.flatMap(p => p.tracks);
       const items = await Promise.all(backupKeys.map(async key => {
         try {
+          // FIX OOM : lire seulement la taille via hasAudio/metadata, pas le blob entier
           const blob = await studioOfflineDB.getAudio(key);
+          const size = blob?.size || 0;
+          blob; // permet GC immédiat — on ne garde pas la référence
+          if (size < 1000) return null;
           const isBackup = key.startsWith('backup_voice_');
           const id = key.replace('backup_voice_', '').replace('rec_', '');
-          // Trouver les métadonnées dans le projet
-          const allProjects = studioService.getProjects();
-          const track = allProjects.flatMap(p => p.tracks).find(t => t.id === id);
+          const track = allTracks.find(t => t.id === id);
           const label = track
             ? `${isBackup ? '🛡 Backup' : '🎙 Prise'} — ${track.songTitle} (${new Date(track.recordedAt).toLocaleDateString('fr-CA')} ${new Date(track.recordedAt).toLocaleTimeString('fr-CA', {hour:'2-digit',minute:'2-digit'})})`
             : `${isBackup ? '🛡 Backup' : '🎙 Prise'} — ${id.slice(-8)}`;
-          return { key, label, size: blob?.size || 0, date: track ? new Date(track.recordedAt).toISOString() : '' };
+          return { key, label, size, date: track ? new Date(track.recordedAt).toISOString() : '' };
         } catch { return null; }
       }));
       setRecoveryItems(items.filter(Boolean).filter(i => i!.size > 1000).sort((a,b) => b!.date.localeCompare(a!.date)) as any);
@@ -417,6 +423,9 @@ export default function MixerScreen({
   // Générer une harmonie individuelle
   const generateOne = async (harmonyDef: typeof HARMONY_DEFS[0]) => {
     if (!mainVoice || generatingIndex !== null) return;
+    // Charger l'audio à la demande (différé — pas au montage)
+    const ready = await ensureAudioCache();
+    if (!ready) { alert('Voix non disponible — réessaie dans un instant.'); return; }
     // Backup automatique silencieux avant génération
     void autoBackupToIndexedDB(mainVoice).catch(() => {});
     setGeneratingIndex(harmonyDef.trackIndex);
@@ -487,6 +496,9 @@ export default function MixerScreen({
   // Générer toutes les harmonies
   const generateAll = async () => {
     if (!mainVoice || generatingIndex !== null) return;
+    // Charger l'audio à la demande (différé — pas au montage)
+    const ready = await ensureAudioCache();
+    if (!ready) { alert('Voix non disponible — réessaie dans un instant.'); return; }
     // Backup automatique silencieux avant génération
     if (mainVoice) void autoBackupToIndexedDB(mainVoice).catch(() => {});
     setGeneratingIndex(-1);
@@ -965,7 +977,7 @@ export default function MixerScreen({
                           ) : hasTrack ? (
                             <button
                               onClick={() => generateOne(h)}
-                              disabled={generatingIndex !== null || !audioCacheReady}
+                              disabled={generatingIndex !== null}
                               className="w-9 h-9 rounded-xl flex items-center justify-center active:scale-90 disabled:opacity-30 transition-all"
                               style={{ background: h.color + '20' }}
                               title="Régénérer">
@@ -974,7 +986,7 @@ export default function MixerScreen({
                           ) : (
                             <button
                               onClick={() => generateOne(h)}
-                              disabled={generatingIndex !== null || !audioCacheReady}
+                              disabled={generatingIndex !== null}
                               className="w-9 h-9 rounded-xl flex items-center justify-center active:scale-90 disabled:opacity-30 transition-all"
                               style={{ background: h.color + '25' }}
                               title="Générer">
@@ -1075,13 +1087,7 @@ export default function MixerScreen({
                 </div>
               )}
 
-              {/* Indicateur cache audio */}
-              {mainVoice && !audioCacheReady && !audioCacheError && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-800 text-zinc-400 text-[11px] mb-1">
-                  <Loader2 size={11} className="animate-spin text-purple-400"/>
-                  <span>Chargement de la voix… (quelques secondes)</span>
-                </div>
-              )}
+              {/* Indicateur cache audio — erreur seulement */}
               {mainVoice && audioCacheError && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-950 text-red-400 text-[11px] mb-1">
                   <span>⚠️ Voix introuvable — re-enregistrez ou utilisez "Récupérer une voix perdue"</span>
@@ -1091,14 +1097,12 @@ export default function MixerScreen({
               {/* Bouton Tout générer */}
               <button
                 onClick={generateAll}
-                disabled={generatingIndex !== null || !audioCacheReady}
+                disabled={generatingIndex !== null}
                 className={`w-full py-3 rounded-xl font-black text-[12px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50 ${
                   hasAnyHarmony ? 'bg-zinc-800 text-zinc-300' : 'bg-purple-700 text-white'
                 }`}>
                 {generatingIndex === -1
                   ? <><Loader2 size={14} className="animate-spin"/> Génération...</>
-                  : !audioCacheReady && !audioCacheError
-                  ? <><Loader2 size={14} className="animate-spin"/> Chargement voix...</>
                   : audioCacheError
                   ? <>⚠️ Voix introuvable</>
                   : hasAnyHarmony

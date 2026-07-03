@@ -273,6 +273,29 @@ function HarmonyGuide({ preset, vocalGuideUrl, instUrl, isRecording, isSaving, o
   useEffect(() => { if (isRecording) stopListening(); }, [isRecording]);
   useEffect(() => { stopListening(); vBufRef.current = null; iBufRef.current = null; }, [preset.index]);
 
+  // FIX OOM : nettoyage complet au démontage du RecordScreen
+  // ctxRef, vBufRef, iBufRef ne sont jamais libérés sans ça → fuite mémoire à chaque navigation
+  useEffect(() => {
+    return () => {
+      // Arrêter la lecture en cours
+      try { vSrcRef.current?.stop(); } catch {} vSrcRef.current = null;
+      try { iSrcRef.current?.stop(); } catch {} iSrcRef.current = null;
+      // Libérer les AudioBuffers (~40 MB chacun)
+      vBufRef.current = null;
+      iBufRef.current = null;
+      // Fermer l'AudioContext de lecture guide
+      try { ctxRef.current?.close(); } catch {} ctxRef.current = null;
+      // Fermer le contexte de monitoring reverb
+      const monCtx = (window as any).__monitorReverbCtx as AudioContext | undefined;
+      if (monCtx && monCtx.state !== 'closed') {
+        try { monCtx.close(); } catch {}
+      }
+      (window as any).__monitorReverbCtx = null;
+      (window as any).__monitorReverbDry = null;
+      (window as any).__monitorReverbWetGain = null;
+    };
+  }, []);
+
   function stopListening() {
     try { vSrcRef.current?.stop(); } catch {} vSrcRef.current = null;
     try { iSrcRef.current?.stop(); } catch {} iSrcRef.current = null;
