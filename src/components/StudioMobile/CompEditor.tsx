@@ -284,7 +284,7 @@ export default function CompEditor({ song, takes: initialTakes, onBack, onCompRe
           setLoadingWave(prev => { const s = new Set(prev); s.delete(take.recording.id); return s; });
           return;
         }
-        return studioService.analyzeWaveform(dataUrl, 160).then(wf => {
+        return studioService.analyzeWaveform(dataUrl, 160, take.recording.id).then(wf => {
           setTakes(prev => prev.map(t =>
             t.recording.id === take.recording.id ? { ...t, waveformData: wf } : t
           ));

@@ -667,6 +667,7 @@ export default function MixerScreen({
                     <div className="flex-1">
                       <WaveformBar
                         dataUrl={track.dataUrl}
+                        id={track.id}
                         color={preset.color}
                         height={22}
                         points={60}
@@ -924,6 +925,7 @@ export default function MixerScreen({
                             <div className="mt-2">
                               <WaveformBar
                                 dataUrl={existingTrack.dataUrl}
+                                id={existingTrack.id}
                                 color={h.color}
                                 height={20}
                                 points={50}
@@ -936,7 +938,7 @@ export default function MixerScreen({
                             const inMem = !!(window as any).__harmonyBlobs?.[harmKey];
                             return inMem ? (
                               <div className="mt-2">
-                                <WaveformBar dataUrl={existingTrack.dataUrl} color={h.color} height={20} points={50}/>
+                                <WaveformBar dataUrl={existingTrack.dataUrl} id={existingTrack.id} color={h.color} height={20} points={50}/>
                               </div>
                             ) : (
                               <div className="mt-2 h-5 rounded bg-zinc-800 opacity-40"/>

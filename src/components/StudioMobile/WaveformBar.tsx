@@ -10,6 +10,7 @@ import { studioService } from '../../services/StudioService';
 
 interface Props {
   dataUrl?:     string;           // Pour calculer la waveform depuis l'audio
+  id?:          string;           // Clé de cache stable (ex: track.id) — évite de redécoder l'audio complet à chaque montage
   waveform?:    number[];         // Ou fournir directement les données
   color?:       string;           // Couleur des barres
   height?:      number;           // Hauteur en px (défaut 36)
@@ -20,7 +21,7 @@ interface Props {
 }
 
 export default function WaveformBar({
-  dataUrl, waveform: waveformProp, color = '#ef4444',
+  dataUrl, id, waveform: waveformProp, color = '#ef4444',
   height = 36, points = 60, playbackPct, isPlaying, dimmed,
 }: Props) {
   const [waveform, setWaveform] = useState<number[]>(waveformProp || []);
@@ -32,12 +33,12 @@ export default function WaveformBar({
     if (!dataUrl) return;
     cancelRef.current = false;
     setLoading(true);
-    studioService.analyzeWaveform(dataUrl, points)
+    studioService.analyzeWaveform(dataUrl, points, id)
       .then(w => { if (!cancelRef.current) setWaveform(w); })
       .catch(() => {})
       .finally(() => { if (!cancelRef.current) setLoading(false); });
     return () => { cancelRef.current = true; };
-  }, [dataUrl, points]);
+  }, [dataUrl, points, id]);
 
   // Skeleton animé pendant le chargement
   if (loading || waveform.length === 0) {

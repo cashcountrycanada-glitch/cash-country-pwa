@@ -382,7 +382,7 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
             </div>
           </div>
         ) : (
-          <WaveformBar dataUrl={track.dataUrl} color={preset.color} height={28} points={80}
+          <WaveformBar dataUrl={track.dataUrl} id={track.id} color={preset.color} height={28} points={80}
             playbackPct={isPlaying ? playPct : undefined} isPlaying={isPlaying} dimmed={track.muted}/>
         )}
       </div>

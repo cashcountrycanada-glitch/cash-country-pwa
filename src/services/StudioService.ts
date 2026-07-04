@@ -1375,8 +1375,35 @@ export const studioService = {
   },
   // Queue pour analyzeWaveform — iOS limite les AudioContext simultanés à 6
   // On sérialise les analyses pour ne jamais en avoir plus de 2 en parallèle
+  //
+  // FIX MÉMOIRE : sans cache, CHAQUE montage de TrackCard (main + toutes les
+  // harmonies) déclenchait un decodeAudioData() COMPLET du fichier — donc un
+  // AudioBuffer de plusieurs dizaines de Mo par piste — juste pour calculer
+  // ~80 points de forme d'onde. Dès qu'une harmonie était générée, le Mixer
+  // montait 5-6 TrackCard d'un coup → 5-6 décodages complets quasi simultanés
+  // → pic mémoire → crash iOS ("flash blanc"). Et comme rien n'était mis en
+  // cache, ré-ouvrir l'app (même chanson, mêmes pistes déjà générées)
+  // redéclenchait exactement le même pic → crash reproductible après redémarrage.
+  // Le cache ci-dessous stocke le tableau de points (quelques centaines
+  // d'octets, pas l'audio) en mémoire ET dans IndexedDB, indexé par l'id de
+  // piste (stable, contrairement aux dataUrl blob: qui changent de session en
+  // session). Le décodage complet ne se fait donc plus qu'UNE SEULE FOIS par
+  // piste, jamais aux ouvertures suivantes.
+  _waveformMemCache: new Map<string, number[]>() as Map<string, number[]>,
 
-  async analyzeWaveform(dataUrl: string, points = 200): Promise<number[]> {
+  async analyzeWaveform(dataUrl: string, points = 200, cacheKey?: string): Promise<number[]> {
+    const key = cacheKey ? `wf_${cacheKey}_${points}` : null;
+    if (key) {
+      const mem = (this as any)._waveformMemCache.get(key);
+      if (mem) return mem;
+      try {
+        const persisted = await getOfflineDB().getState<number[] | null>(key, null);
+        if (persisted && persisted.length === points) {
+          (this as any)._waveformMemCache.set(key, persisted);
+          return persisted;
+        }
+      } catch {}
+    }
     // Attendre si trop d'analyses en cours
     const MAX_PARALLEL = 2;
     while ((this as any)._waveformActive >= MAX_PARALLEL) {
@@ -1397,7 +1424,12 @@ export const studioService = {
       const audioBuffer = await ctx.decodeAudioData(arrayBuffer); const data = audioBuffer.getChannelData(0);
       const blockSize = Math.floor(data.length / points); const waveform: number[] = [];
       for (let i = 0; i < points; i++) { let sum = 0; for (let j = 0; j < blockSize; j++) sum += Math.abs(data[i * blockSize + j] || 0); waveform.push(sum / blockSize); }
-      const max = Math.max(...waveform, 0.001); return waveform.map(v => v / max);
+      const max = Math.max(...waveform, 0.001); const result = waveform.map(v => v / max);
+      if (key) {
+        (this as any)._waveformMemCache.set(key, result);
+        getOfflineDB().setState(key, result).catch(() => {});
+      }
+      return result;
     } finally {
       if (shouldCloseCtx) ctx.close();
       (this as any)._waveformActive = Math.max(0, ((this as any)._waveformActive || 1) - 1);
@@ -1443,21 +1475,42 @@ export const studioService = {
       if (semitones === 0 || (track as any).isGenerated) {
         shifted.push({ track, buffer });
       } else {
-        // Utiliser le harmony-worker (hors main thread) pour ne pas geler iOS
+        // Utiliser le harmony-worker PARTAGÉ (hors main thread) pour ne pas geler iOS
+        // FIX BUG MÉMOIRE/FONCTIONNEL : ce chemin créait auparavant un `new Worker` jetable
+        // à chaque piste via createSafeWorker(), SANS jamais lui envoyer le message 'init'
+        // (celui qui transfère le module WASM pré-compilé). Résultat : rbReady restait
+        // toujours false dans ce worker frais → rubberband_new plantait immédiatement
+        // avec "Rubber Band non prêt", la piste n'était jamais réellement pitch-shiftée
+        // (fallback silencieux sur `buffer` non modifié), et on payait quand même le coût
+        // de spawn/compile d'un Worker + WASM en pure perte à chaque piste du mixdown.
+        // On réutilise maintenant le worker persistant unique (déjà initialisé une seule
+        // fois avec le WASM Rubber Band), identique à celui utilisé par generateLayers().
         try {
           const workerBlob = await new Promise<Blob>(async (resolve, reject) => {
             let worker: Worker;
-            try { worker = await createSafeWorker('/harmony-worker.js'); } catch(e: any) { reject(e); return; }
+            try { worker = await getHarmonyWorker(); } catch(e: any) { reject(e); return; }
             const id = Date.now();
             const chL = buffer.getChannelData(0).slice();
             const chR = (buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0)).slice();
-            const timeout = setTimeout(() => { worker.terminate(); reject(new Error('pitch timeout')); }, 120000);
+            const timeout = setTimeout(() => {
+              // Worker partagé bloqué : on le termine et on réinitialise la référence
+              // module pour qu'un futur appel en recrée un propre (voir même pattern
+              // utilisé après échec dans generateLayers()).
+              try { worker.terminate(); } catch {}
+              __harmonyWorker = null;
+              reject(new Error('pitch timeout'));
+            }, 120000);
             worker.onmessage = (e) => {
               if (e.data.id !== id) return;
-              if (e.data.type === 'done') { clearTimeout(timeout); worker.terminate(); resolve(new Blob([e.data.wavBuf], { type: 'audio/wav' })); }
-              else if (e.data.type === 'error') { clearTimeout(timeout); worker.terminate(); reject(new Error(e.data.message)); }
+              if (e.data.type === 'done') { clearTimeout(timeout); resolve(new Blob([e.data.wavBuf], { type: 'audio/wav' })); }
+              else if (e.data.type === 'error') { clearTimeout(timeout); reject(new Error(e.data.message)); }
             };
-            worker.onerror = (e) => { clearTimeout(timeout); worker.terminate(); reject(new Error(e.message)); };
+            worker.onerror = (e) => {
+              clearTimeout(timeout);
+              try { worker.terminate(); } catch {}
+              __harmonyWorker = null;
+              reject(new Error(e.message));
+            };
             worker.postMessage({ id, op: 'pitch', channelL: chL, channelR: chR, semitones, gain: 1.0, pan: track.pan ?? 0, sampleRate: buffer.sampleRate, trackIndex: track.trackIndex ?? 2 }, [chL.buffer, chR.buffer]);
           });
           const tmpCtx2 = new (window.AudioContext || (window as any).webkitAudioContext)();
