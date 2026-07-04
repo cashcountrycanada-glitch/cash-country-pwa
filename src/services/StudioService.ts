@@ -736,6 +736,17 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
 
 
 export const studioService = {
+  // FIX FUITE MÉMOIRE : `__harmonyWorker` ici est une variable privée du module
+  // (ligne ~53), distincte de `window.__harmonyWorker`. Le nettoyage fait côté
+  // StudioMobile.tsx (clearSongMemory) essayait de terminer `window.__harmonyWorker`,
+  // qui n'a jamais été le vrai worker — donc si une génération d'harmonie était en
+  // cours ou avait échoué au moment où on change de chanson, le vrai worker (et son
+  // instance WASM RubberBand) restait actif en mémoire indéfiniment. Cette méthode
+  // termine le VRAI worker et est appelée en plus (pas à la place) du nettoyage existant.
+  terminateHarmonyWorker(): void {
+    try { __harmonyWorker?.terminate(); } catch {}
+    __harmonyWorker = null;
+  },
   async saveRecordingLocallyAsync(rec: MobileRecording): Promise<void> {
     // Accepter les sentinelles opfs: (FX gros fichiers stockés dans OPFS directement)
     if (!rec.dataUrl || (rec.dataUrl.length < 100 && !rec.dataUrl.startsWith('opfs:'))) return;
@@ -1729,6 +1740,10 @@ export const studioService = {
         progress(`${layer.emoji} ${layer.trackLabel} — OK (${(blob.size/1024).toFixed(0)} Ko)`, pct + 5);
       } catch (workerErr: any) {
         // Si le worker plante, on le réinitialise pour le prochain appel
+        // FIX FUITE MÉMOIRE : on l'arrête aussi avant de perdre la référence — sinon
+        // le thread du worker (+ son instance WASM RubberBand) restait actif en
+        // arrière-plan sans jamais être libéré.
+        try { __harmonyWorker?.terminate(); } catch {}
         __harmonyWorker = null;
         const errMsg = workerErr.message || String(workerErr);
         (window as any).__addLog?.(`[Harmony] ❌ ${layer.trackLabel} : ${errMsg}`);

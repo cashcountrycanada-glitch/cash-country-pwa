@@ -48,8 +48,11 @@ function StudioMobileWithSongs() {
     } catch {}
   }, []);
 
+  // FIX OOM (v7.6.351) : /api/songs renvoie tout (~11 Mo : lyrics + pochettes
+  // base64 des 166 chansons), et court-circuitait le fix OOM de StudioMobile.tsx
+  // via propSongs (priorité sur apiSongs). On charge désormais l'index léger.
   useEffect(() => {
-    fetch('/api/songs').then(r => r.ok ? r.json() : []).then(s => {
+    fetch('/api/songs/list').then(r => r.ok ? r.json() : []).then(s => {
       if (Array.isArray(s)) setSongs(s);
     }).catch(() => {});
   }, []);

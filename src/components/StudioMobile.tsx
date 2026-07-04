@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.349';
+const BUILD_VERSION = 'v7.6.351';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -722,6 +722,10 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     // Libérer le worker harmony s'il existe
     try { (window as any).__harmonyWorker?.terminate(); } catch {}
     (window as any).__harmonyWorker = null;
+    // FIX FUITE MÉMOIRE : la ligne ci-dessus ne visait jamais le vrai worker (voir
+    // studioService.terminateHarmonyWorker) — on ajoute l'appel qui arrête le vrai,
+    // au cas où une génération d'harmonie tournait encore au moment du changement de chanson.
+    studioService.terminateHarmonyWorker();
     // Libérer les blobs d'harmonies
     (window as any).__harmonyBlobs = {};
   };
