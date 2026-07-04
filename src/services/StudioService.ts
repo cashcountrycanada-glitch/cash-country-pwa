@@ -1943,14 +1943,32 @@ export const studioService = {
             // __lastFxBlob : pour applyFxToTrack
             // __harmonyBlobs : pour resolveBlobAsync (opfs: sentinel)
             // __trackBlob_id : pour le preview dans le mixer
+            //
+            // FIX FUITE MÉMOIRE : ces deux dictionnaires recevaient une nouvelle
+            // entrée (souvent plusieurs Mo de WAV) à CHAQUE application de FX,
+            // sans jamais être plafonnés ni vidés dans la même session — contrairement
+            // à saveHarmonyBlob() (génération d'harmonies) qui, elle, applique une
+            // éviction LRU à 3 entrées. Résultat : générer une deuxième (ou Nième)
+            // harmonie/FX pendant la même session accumulait indéfiniment des blobs
+            // en mémoire (RAM window), d'où les crashs/lenteurs qui n'apparaissaient
+            // qu'après avoir déjà généré des harmonies au moins une fois — un
+            // premier lancement d'app est rapide car ces caches sont encore vides.
+            const evictOldest = (dict: Record<string, Blob>, max: number) => {
+              const keys = Object.keys(dict);
+              while (keys.length > max) {
+                delete dict[keys.shift() as string];
+              }
+            };
             (window as any).__lastFxKey  = fxKey;
             (window as any).__lastFxBlob = resultBlob;
             if (!(window as any).__harmonyBlobs) (window as any).__harmonyBlobs = {};
             (window as any).__harmonyBlobs[fxKey] = resultBlob;
+            evictOldest((window as any).__harmonyBlobs, 3);
             // Stocker aussi sous l'id de la piste pour le preview
             // (on ne connaît pas l'id ici mais on peut stocker sous la clé fx)
             (window as any).__fxResultBlobs = (window as any).__fxResultBlobs || {};
             (window as any).__fxResultBlobs[fxKey] = resultBlob;
+            evictOldest((window as any).__fxResultBlobs, 3);
 
             // Retourner dataUrl seulement si < 5MB, sinon sentinelle opfs:
             // Si blobToDataUrl échoue par quota iOS, fallback automatique vers sentinelle mémoire
