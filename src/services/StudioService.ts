@@ -870,14 +870,20 @@ export const studioService = {
         }
       }
       if (merged.length === 0) return [];
-      // Enrichir chaque prise avec le blob audio depuis OPFS/IDB
-      return Promise.all(merged.map(async (meta: any) => {
-        try {
-          const blob = await db.getAudio(`rec_${meta.id}`);
-          if (blob) return { ...meta, dataUrl: await studioService.blobToDataUrl(blob) };
-        } catch {}
-        return meta;
-      }));
+      // FIX FUITE / LENTEUR AU RELANCEMENT :
+      // Avant, on lisait CHAQUE blob audio (OPFS/IDB) et on le convertissait
+      // en base64 dataUrl pour TOUTES les prises (y compris chaque harmonie
+      // générée) — synchrone, bloquant, dès le démarrage de l'app. Plus tu
+      // génères d'harmonies dans une session, plus la liste devient lourde
+      // à charger à la PROCHAINE ouverture de l'app (RAM + décodage base64
+      // de plusieurs Mo par prise), d'où l'écran blanc et la liste lente
+      // après un redémarrage, même si tout allait bien dans la même session.
+      //
+      // playRecording() et handleUploadRecording() lisent DÉJÀ le blob
+      // directement depuis IndexedDB par id (`rec_${id}`) en priorité — le
+      // dataUrl ici n'était qu'un fallback redondant. On retourne donc juste
+      // les métadonnées ; le blob est résolu à la demande (Play/Upload).
+      return merged;
     } catch {
       return this.getLocalRecordings();
     }
