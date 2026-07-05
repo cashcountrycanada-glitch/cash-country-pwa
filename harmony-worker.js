@@ -455,20 +455,45 @@ function doubleTrack(mono,sr){
   };
   const sL=resample(mono,1/Math.pow(2,0.10/12));
   const sR=resample(mono,1/Math.pow(2,-0.10/12));
-  // FIX v2 "3 voix, écho" : même à 8/17ms, le panning très serré (85/15)
-  // rendait les 2 copies latérales trop détachées de la voix sèche centrale
-  // (perçues comme 2 voix proches entre elles + 1 loin/écho). On resserre
-  // encore le timing et on adoucit le panoramique (moins extrême) pour que
-  // les 3 couches fusionnent en une seule voix "épaisse" au lieu de 3 voix
-  // distinctes.
-  const dL=Math.floor(0.005*sr),dR=Math.floor(0.011*sr);
-  const outLen=len+Math.floor(0.020*sr);
+  // FIX v3 "toujours 3 voix / écho" : réduire un délai FIXE, aussi court
+  // soit-il, ne suffit pas — un délai statique et parfaitement périodique se
+  // lit toujours comme une réflexion numérique (comb filtering), pas comme
+  // une deuxième voix humaine. Une vraie prise de double-tracking humaine a
+  // un timing qui BOUGE légèrement en continu (jamais deux fois le même
+  // écart). On remplace donc le délai fixe par un délai très court MODULÉ
+  // lentement (façon chorus), avec une lecture interpolée, pour casser l'effet
+  // de copie exacte et fusionner les 3 couches en une seule voix épaisse.
+  const readInterp = (src, pos) => {
+    const idx = Math.floor(pos);
+    if (idx < 0 || idx >= src.length - 1) return 0;
+    const frac = pos - idx;
+    return src[idx] + (src[idx + 1] - src[idx]) * frac;
+  };
+  const baseDelayL = 0.0035 * sr, modDepthL = 0.0018 * sr, modRateL = 0.6; // Hz
+  const baseDelayR = 0.0060 * sr, modDepthR = 0.0020 * sr, modRateR = 0.85;
+  const maxDelay = Math.ceil(Math.max(baseDelayL + modDepthL, baseDelayR + modDepthR)) + 2;
+  const outLen = len + maxDelay;
   const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
   for(let i=0;i<len;i++){outL[i]+=mono[i]*0.70;outR[i]+=mono[i]*0.70;}
-  const llLen=Math.min(sL.length,outLen-dL);
-  for(let i=0;i<llLen;i++){const s=sL[i]*0.55;outL[i+dL]+=s*0.72;outR[i+dL]+=s*0.28;}
-  const rrLen=Math.min(sR.length,outLen-dR);
-  for(let i=0;i<rrLen;i++){const s=sR[i]*0.55;outL[i+dR]+=s*0.28;outR[i+dR]+=s*0.72;}
+  for (let i = 0; i < len; i++) {
+    const t = i / sr;
+    const dL = baseDelayL + modDepthL * Math.sin(2 * Math.PI * modRateL * t);
+    const dR = baseDelayR + modDepthR * Math.sin(2 * Math.PI * modRateR * t + 1.7);
+    const sVal = readInterp(sL, i) * 0.55;
+    const rVal = readInterp(sR, i) * 0.55;
+    const idxL = i + dL, idxR = i + dR;
+    const fL = Math.floor(idxL), fR = Math.floor(idxR);
+    if (fL >= 0 && fL + 1 < outLen) {
+      const frac = idxL - fL;
+      outL[fL]   += sVal * 0.72 * (1 - frac); outL[fL+1]   += sVal * 0.72 * frac;
+      outR[fL]   += sVal * 0.28 * (1 - frac); outR[fL+1]   += sVal * 0.28 * frac;
+    }
+    if (fR >= 0 && fR + 1 < outLen) {
+      const frac = idxR - fR;
+      outL[fR]   += rVal * 0.28 * (1 - frac); outL[fR+1]   += rVal * 0.28 * frac;
+      outR[fR]   += rVal * 0.72 * (1 - frac); outR[fR+1]   += rVal * 0.72 * frac;
+    }
+  }
   let peak=0;
   for(let i=0;i<outLen;i++) peak=Math.max(peak,Math.abs(outL[i]),Math.abs(outR[i]));
   if(peak>0.95){const n=0.95/peak;for(let i=0;i<outLen;i++){outL[i]*=n;outR[i]*=n;}}
@@ -583,8 +608,17 @@ function processChunked(mono, semitones, sampleRate, trackIndex) {
 
   if (mono.length <= chunkSamp) return processSingle(mono, semitones, sampleRate, trackIndex);
 
-  // Overlap court — assez pour éviter les artefacts de jonction
+  // FIX "ça grince puis devient clair au milieu d'une phrase" :
+  // Chaque chunk relançait Rubber Band à zéro, sans AUCUN contexte avant le
+  // point de coupe — l'algo (détection de pitch, formants) a besoin d'un
+  // court moment pour se stabiliser. Quand une coupure de chunk tombait au
+  // milieu d'une phrase chantée, le début de cette portion grinçait jusqu'à
+  // stabilisation. On ajoute maintenant un "pré-roll" de contexte AVANT
+  // chaque coupure (sauf le tout premier chunk), qu'on traite mais qu'on jette
+  // ensuite — l'algo se stabilise dans cette zone jetée, invisible à l'oreille,
+  // et seule la portion déjà stable est gardée dans la sortie.
   const overlapSamp = Math.floor(sampleRate * 0.1);
+  const preRollSamp  = Math.floor(sampleRate * 0.75); // 750ms de "chauffe" avant chaque coupure
   const final = new Float32Array(mono.length + overlapSamp * 4);
   let outOff = 0;
   let pos = 0;
@@ -592,14 +626,22 @@ function processChunked(mono, semitones, sampleRate, trackIndex) {
   while (pos < mono.length) {
     const end = Math.min(pos + chunkSamp, mono.length);
     const hasMore = end < mono.length;
+    const preRollStart = Math.max(0, pos - preRollSamp);
+    const actualPreRoll = pos - preRollStart;
     // subarray = vue sans copie (zéro allocation supplémentaire)
-    const chunkView = mono.subarray(pos, hasMore ? end + overlapSamp : end);
+    const chunkView = mono.subarray(preRollStart, hasMore ? end + overlapSamp : end);
     let processed = processSingle(chunkView, semitones, sampleRate, trackIndex);
+    // Portion à sauter au début = le pré-roll (proportionnel, comme pour keepLen)
+    const skipLen = actualPreRoll > 0
+      ? Math.floor(processed.length * (actualPreRoll / chunkView.length))
+      : 0;
+    const usableLen = processed.length - skipLen;
+    const mainSamp  = end - pos; // durée réelle du chunk (sans pré-roll ni overlap)
     const keepLen = hasMore
-      ? Math.floor(processed.length * (chunkSamp / chunkView.length))
-      : processed.length;
+      ? Math.floor(usableLen * (mainSamp / (chunkView.length - actualPreRoll)))
+      : usableLen;
     if (outOff + keepLen <= final.length) {
-      final.set(processed.subarray(0, keepLen), outOff);
+      final.set(processed.subarray(skipLen, skipLen + keepLen), outOff);
     }
     outOff += keepLen;
     processed = null; // libère immédiatement — eligible GC avant prochain chunk
