@@ -179,6 +179,41 @@ function applyAGC(signal, reference) {
   return signal; // in-place
 }
 
+// ═══════════════════════════════════════════════════════════════
+// GATE DE SOUFFLE — atténue le bruit résiduel ENTRE les phrases
+// ═══════════════════════════════════════════════════════════════
+// Même avec le plafonnement du pré-gain, une prise brute très faible garde un
+// souffle/bruit de fond qui reste audible une fois l'harmonie remise au bon
+// niveau. Ce n'est PAS un défaut de Rubber Band lui-même (moteur pro, formant
+// preservation + high quality) — c'est le plancher de bruit d'origine qui
+// ressort par bouts de phrase (surtout entre les mots/respirations, là où le
+// niveau original était déjà très faible/bruité).
+// On suit une enveloppe (attaque rapide, release lente pour ne pas couper les
+// fins de mots) et on atténue doucement (jamais à zéro, pour rester naturel)
+// tout ce qui est sous ~-38dB relatif au pic de CETTE harmonie — donc ça
+// s'adapte automatiquement, aucun réglage manuel nécessaire.
+function applyBreathGate(signal, sampleRate) {
+  let peak = 0;
+  for (let i = 0; i < signal.length; i++) peak = Math.max(peak, Math.abs(signal[i]));
+  if (peak < 1e-6) return signal;
+  const threshold = peak * 0.0126; // ~ -38 dB sous le pic de l'harmonie
+  const attackCoef  = Math.exp(-1 / (0.003 * sampleRate)); // 3ms
+  const releaseCoef = Math.exp(-1 / (0.120 * sampleRate)); // 120ms — ne coupe pas les fins de mots
+  let env = 0;
+  const floorGain = 0.25; // jamais un vrai silence, juste -12dB de moins → reste naturel
+  for (let i = 0; i < signal.length; i++) {
+    const a = Math.abs(signal[i]);
+    env = a > env ? attackCoef * env + (1 - attackCoef) * a
+                  : releaseCoef * env + (1 - releaseCoef) * a;
+    if (env < threshold) {
+      const ratio = env / threshold; // 0..1, knee doux
+      const g = floorGain + (1 - floorGain) * ratio;
+      signal[i] *= g;
+    }
+  }
+  return signal; // in-place
+}
+
 // FIX OOM : in-place (zéro allocation)
 function applySoftSaturation(signal, amount) {
   if(amount<=0) return signal;
@@ -420,18 +455,20 @@ function doubleTrack(mono,sr){
   };
   const sL=resample(mono,1/Math.pow(2,0.10/12));
   const sR=resample(mono,1/Math.pow(2,-0.10/12));
-  // FIX "écho au lieu d'épaisseur" : dR était à 33ms, à la limite du seuil de
-  // Haas (~25-35ms) où l'oreille arrête de fusionner les copies et commence à
-  // entendre un écho distinct au lieu d'une voix doublée/épaissie. On réduit
-  // les deux délais pour rester nettement dans la zone de fusion perceptive.
-  const dL=Math.floor(0.008*sr),dR=Math.floor(0.017*sr);
-  const outLen=len+Math.floor(0.025*sr);
+  // FIX v2 "3 voix, écho" : même à 8/17ms, le panning très serré (85/15)
+  // rendait les 2 copies latérales trop détachées de la voix sèche centrale
+  // (perçues comme 2 voix proches entre elles + 1 loin/écho). On resserre
+  // encore le timing et on adoucit le panoramique (moins extrême) pour que
+  // les 3 couches fusionnent en une seule voix "épaisse" au lieu de 3 voix
+  // distinctes.
+  const dL=Math.floor(0.005*sr),dR=Math.floor(0.011*sr);
+  const outLen=len+Math.floor(0.020*sr);
   const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
   for(let i=0;i<len;i++){outL[i]+=mono[i]*0.70;outR[i]+=mono[i]*0.70;}
   const llLen=Math.min(sL.length,outLen-dL);
-  for(let i=0;i<llLen;i++){const s=sL[i]*0.55;outL[i+dL]+=s*0.85;outR[i+dL]+=s*0.15;}
+  for(let i=0;i<llLen;i++){const s=sL[i]*0.55;outL[i+dL]+=s*0.72;outR[i+dL]+=s*0.28;}
   const rrLen=Math.min(sR.length,outLen-dR);
-  for(let i=0;i<rrLen;i++){const s=sR[i]*0.55;outL[i+dR]+=s*0.15;outR[i+dR]+=s*0.85;}
+  for(let i=0;i<rrLen;i++){const s=sR[i]*0.55;outL[i+dR]+=s*0.28;outR[i+dR]+=s*0.72;}
   let peak=0;
   for(let i=0;i<outLen;i++) peak=Math.max(peak,Math.abs(outL[i]),Math.abs(outR[i]));
   if(peak>0.95){const n=0.95/peak;for(let i=0;i<outLen;i++){outL[i]*=n;outR[i]*=n;}}
@@ -520,6 +557,7 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
 
   // 2-9. Toutes les étapes suivantes sont IN-PLACE — zéro allocation
   applyAGC(sig, mono);
+  applyBreathGate(sig, sampleRate);
   if (semitones >= 4) applySoftSaturation(sig, 0.03 + (semitones - 4) / 12 * 0.04);
   applyPhraseVariation(sig, sampleRate, profile.pitchVar, seed);
   applyOrganicJitter(sig, sampleRate, seed ^ 0xABCD1234);
