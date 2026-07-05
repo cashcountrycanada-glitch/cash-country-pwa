@@ -33,17 +33,31 @@ export default function VUMeter({ analyser, active }: Props) {
       return;
     }
 
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    // FIX MÈTRE MAL CALIBRÉ : l'ancienne version mesurait une énergie
+    // fréquentielle approximative (FFT bins 2-30 × facteur arbitraire 2.5),
+    // sans rapport direct avec le vrai niveau dBFS. Ça pouvait afficher du
+    // rouge/jaune bien avant que le signal ne soit réellement proche du
+    // clipping (et pousser à baisser le gain d'entrée pour rien, donnant des
+    // prises beaucoup trop faibles). On utilise maintenant le vrai signal
+    // temporel (crête réelle) pour calculer un niveau en dBFS et des seuils
+    // de couleur qui correspondent à la réalité :
+    //   vert   : jusqu'à -18 dBFS (zone saine)
+    //   jaune  : -18 à -6 dBFS (fort mais correct)
+    //   rouge  : au-dessus de -6 dBFS (proche du clipping, à surveiller)
+    const timeData = new Uint8Array(analyser.fftSize);
 
     const draw = () => {
-      analyser.getByteFrequencyData(dataArray);
+      analyser.getByteTimeDomainData(timeData);
 
-      // RMS sur les fréquences vocales (bins 2-30 environ sur 44kHz/fftSize 256)
-      let sum = 0;
-      const end = Math.min(30, dataArray.length);
-      for (let i = 2; i < end; i++) sum += dataArray[i] * dataArray[i];
-      const rms   = Math.sqrt(sum / (end - 2)) / 255;
-      const level = Math.min(1, rms * 2.5);
+      // Crête réelle sur la fenêtre courante (valeurs centrées sur 128)
+      let peak = 0;
+      for (let i = 0; i < timeData.length; i++) {
+        const v = Math.abs(timeData[i] - 128) / 128;
+        if (v > peak) peak = v;
+      }
+      const dbfs  = peak > 0.0001 ? 20 * Math.log10(peak) : -80;
+      // Mappe -60dBFS→0 ... 0dBFS→1 pour la hauteur des barres
+      const level = Math.max(0, Math.min(1, (dbfs + 60) / 60));
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const bars = 20;
@@ -52,8 +66,10 @@ export default function VUMeter({ analyser, active }: Props) {
       for (let i = 0; i < bars; i++) {
         const threshold = i / bars;
         const lit       = threshold < level;
-        const isHot     = i > bars * 0.8;
-        const isMid     = i > bars * 0.6;
+        // Seuils en vrai dBFS : jaune à partir de -18dBFS, rouge à partir de -6dBFS
+        const barDb  = (i / bars) * 60 - 60;
+        const isHot  = barDb > -6;
+        const isMid  = barDb > -18;
         ctx.fillStyle   = lit
           ? (isHot ? '#ef4444' : isMid ? '#eab308' : '#22c55e')
           : '#1a1a1a';

@@ -420,8 +420,12 @@ function doubleTrack(mono,sr){
   };
   const sL=resample(mono,1/Math.pow(2,0.10/12));
   const sR=resample(mono,1/Math.pow(2,-0.10/12));
-  const dL=Math.floor(0.016*sr),dR=Math.floor(0.033*sr);
-  const outLen=len+Math.floor(0.040*sr);
+  // FIX "écho au lieu d'épaisseur" : dR était à 33ms, à la limite du seuil de
+  // Haas (~25-35ms) où l'oreille arrête de fusionner les copies et commence à
+  // entendre un écho distinct au lieu d'une voix doublée/épaissie. On réduit
+  // les deux délais pour rester nettement dans la zone de fusion perceptive.
+  const dL=Math.floor(0.008*sr),dR=Math.floor(0.017*sr);
+  const outLen=len+Math.floor(0.025*sr);
   const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
   for(let i=0;i<len;i++){outL[i]+=mono[i]*0.70;outR[i]+=mono[i]*0.70;}
   const llLen=Math.min(sL.length,outLen-dL);
@@ -481,12 +485,28 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
   // Ton signal est à -19.8 dBFS (peak 0.103). En dessous de ~-6 dBFS,
   // Rubber Band amplifie le bruit de fond lors du pitch shift → souffles et artefacts.
   // On normalise temporairement à -3 dBFS avant RB, puis l'AGC remet le bon niveau.
+  //
+  // FIX ARTEFACTS/SOUFFLE : sur une prise TRÈS faible (ex. peak -34 dBFS au lieu
+  // de -19.8 dBFS), la formule 0.707/prePeak sans plafond donnait des gains de
+  // 30+ dB (34x), ce qui amplifie le souffle/bruit de fond dans les MÊMES
+  // proportions que la voix avant que Rubber Band ne pitch-shift le tout — le
+  // souffle amplifié se fait alors traiter comme du signal tonal, d'où les
+  // artefacts. On plafonne le gain à +18 dB max et on atténue doucement le
+  // plancher de bruit (portions très faibles = souffle/silence) avant le boost,
+  // pour ne pas révéler/amplifier le souffle inutilement.
   let preGain = 1.0;
   let prePeak = 0;
   for (let i = 0; i < mono.length; i++) prePeak = Math.max(prePeak, Math.abs(mono[i]));
   if (prePeak > 0.001 && prePeak < 0.5) {
-    preGain = 0.707 / prePeak; // cible -3 dBFS
-    for (let i = 0; i < mono.length; i++) mono[i] *= preGain;
+    preGain = Math.min(0.707 / prePeak, 8.0); // cible -3 dBFS, plafonné à +18 dB
+    // Gate doux : atténue ce qui est sous ~-45 dBFS (souffle/silence entre phrases)
+    // avant le boost, pour éviter de rendre le souffle audible/plus fort que l'original.
+    const gateThresh = 0.0056; // ~ -45 dBFS
+    for (let i = 0; i < mono.length; i++) {
+      const a = Math.abs(mono[i]);
+      const g = a < gateThresh ? (a / gateThresh) * (a / gateThresh) : 1.0; // knee quadratique
+      mono[i] *= preGain * g;
+    }
   }
 
   // 1. Pitch shift — seule étape qui crée un nouveau buffer (inévitable)

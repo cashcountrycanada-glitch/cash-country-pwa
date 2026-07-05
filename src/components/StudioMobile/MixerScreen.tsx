@@ -372,8 +372,13 @@ export default function MixerScreen({
   const backupMainVoice = async () => {
     if (!mainVoice?.dataUrl) return;
     try {
-      const res  = await fetch(mainVoice.dataUrl);
-      const blob = await res.blob();
+      // FIX "Erreur backup : Load failed" — mainVoice.dataUrl peut être une
+      // sentinelle "opfs:xxx" (blob volumineux stocké dans OPFS, pas une vraie
+      // URL fetchable) plutôt qu'un vrai dataUrl base64. fetch("opfs:...")
+      // échoue immédiatement dans Safari avec "Load failed". Il faut passer
+      // par resolveBlobAsync() qui sait lire depuis OPFS/IDB dans ce cas.
+      const blob = await studioService.resolveBlobAsync(mainVoice.dataUrl);
+      if (!blob) { alert('Erreur backup : fichier introuvable en mémoire.'); return; }
       const safeTitle = (mainVoice.songTitle || 'voix').replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
       const ext  = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('mpeg') ? 'mp3' : 'wav';
       const ts   = new Date().toISOString().slice(0,16).replace('T','_').replace(':','h');
@@ -401,8 +406,10 @@ export default function MixerScreen({
     if (!mainVoice?.dataUrl || exportingVoice) return;
     setExportingVoice(true);
     try {
-      const res  = await fetch(mainVoice.dataUrl);
-      const blob = await res.blob();
+      // Même fix que backupMainVoice : passer par resolveBlobAsync() pour
+      // gérer les sentinelles "opfs:" au lieu de fetch() direct.
+      const blob = await studioService.resolveBlobAsync(mainVoice.dataUrl);
+      if (!blob) { alert('Erreur export : fichier introuvable en mémoire.'); return; }
       const safeTitle = (mainVoice.songTitle || 'voix').replace(/[^a-zA-Z0-9]/g, '_');
       const ext  = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('mpeg') ? 'mp3' : 'wav';
       const fileName = `${safeTitle}_VOIX_PRINCIPALE.${ext}`;
