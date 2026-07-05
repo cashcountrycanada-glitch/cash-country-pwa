@@ -484,8 +484,18 @@ function doubleTrack(mono,sr){
     const frac = pos - idx;
     return src[idx] + (src[idx + 1] - src[idx]) * frac;
   };
-  const baseDelayL = 0.0030 * sr, modDepthL = 0.0015 * sr, modRateL = 0.6; // Hz
-  const baseDelayR = 0.0052 * sr, modDepthR = 0.0017 * sr, modRateR = 0.85;
+  // FIX v4 (recherché) : les valeurs précédentes (2-6ms) étaient bien EN
+  // DESSOUS de la zone professionnelle établie pour l'ADT (Automatic Double
+  // Tracking, technique inventée aux studios Abbey Road pour les Beatles) —
+  // qui utilise typiquement 15-35ms de délai. En dessous d'environ 10-15ms,
+  // deux copies quasi identiques d'une même voix entrent en interférence de
+  // phase (filtrage en peigne, son "creux"/métallique) plutôt que de fusionner
+  // naturellement. L'ingrédient clé pour éviter que 15-35ms sonne comme un
+  // écho n'est PAS un délai plus court — c'est une modulation LFO du délai
+  // dans le temps (comme une bande qui varie légèrement en vitesse), qui
+  // empêche le délai d'être parfaitement statique/périodique.
+  const baseDelayL = 0.016 * sr, modDepthL = 0.004 * sr, modRateL = 0.5; // Hz — ~12-20ms
+  const baseDelayR = 0.024 * sr, modDepthR = 0.005 * sr, modRateR = 0.7; // ~19-29ms
   const maxDelay = Math.ceil(Math.max(baseDelayL + modDepthL, baseDelayR + modDepthR)) + 2;
   const outLen = len + maxDelay;
   const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
