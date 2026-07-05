@@ -59,7 +59,22 @@ function rbPitchShift(mono, semitones, sampleRate) {
   const maxBlock = 4096;
 
   // ProcessOffline=0 | FormantPreserved=16777216 | PitchHighQuality=33554432 | EngineFiner=536870912
-  const options = 0 | 16777216 | 33554432 | 536870912;
+  //   | TransientsSmooth=512 | DetectorSoft=2048 | SmoothingOn=8388608 | WindowLong=2097152
+  //
+  // FIX "ça grince au début d'une phrase puis devient clair" : les réglages
+  // précédents utilisaient les valeurs PAR DÉFAUT de Rubber Band pour la
+  // détection des transitoires (TransientsCrisp + DetectorCompound), pensées
+  // pour du contenu percussif/rythmique. Sur du chant soutenu, un souffle ou
+  // une consonne en début de mot peut se faire détecter à tort comme un
+  // "transitoire" façon coup de batterie — ce qui force l'algo à réinitialiser
+  // sa phase d'analyse à cet endroit précis, produisant une brève salve de
+  // grain avant de se stabiliser. On passe à DetectorSoft + TransientsSmooth
+  // (détection pensée pour du matériel non-percussif) + SmoothingOn (lissage
+  // spectral supplémentaire, conçu spécifiquement pour réduire ce type
+  // d'artefact) + WindowLong (meilleure résolution fréquentielle pour du
+  // contenu soutenu comme la voix, au prix d'un peu moins de précision sur
+  // les vrais transitoires — qu'on ne cherche pas à préserver ici).
+  const options = 0 | 16777216 | 33554432 | 536870912 | 512 | 2048 | 8388608 | 2097152;
 
   let handle;
   try {
