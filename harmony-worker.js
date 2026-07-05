@@ -469,8 +469,8 @@ function doubleTrack(mono,sr){
     const frac = pos - idx;
     return src[idx] + (src[idx + 1] - src[idx]) * frac;
   };
-  const baseDelayL = 0.0020 * sr, modDepthL = 0.0012 * sr, modRateL = 0.6; // Hz
-  const baseDelayR = 0.0040 * sr, modDepthR = 0.0014 * sr, modRateR = 0.85;
+  const baseDelayL = 0.0030 * sr, modDepthL = 0.0015 * sr, modRateL = 0.6; // Hz
+  const baseDelayR = 0.0052 * sr, modDepthR = 0.0017 * sr, modRateR = 0.85;
   const maxDelay = Math.ceil(Math.max(baseDelayL + modDepthL, baseDelayR + modDepthR)) + 2;
   const outLen = len + maxDelay;
   const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
@@ -581,7 +581,7 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
   let prePeak = 0;
   for (let i = 0; i < mono.length; i++) prePeak = Math.max(prePeak, Math.abs(mono[i]));
   if (prePeak > 0.001 && prePeak < 0.5) {
-    preGain = Math.min(0.707 / prePeak, 31.6); // cible -3 dBFS, plafonné à +30 dB
+    preGain = Math.min(0.707 / prePeak, 8.0); // cible -3 dBFS, plafonné à +18 dB (retour arrière : +30dB a empiré le résultat)
     // Gate doux : atténue ce qui est sous ~-45 dBFS (souffle/silence entre phrases)
     // avant le boost, pour éviter de rendre le souffle audible/plus fort que l'original.
     const gateThresh = 0.0056; // ~ -45 dBFS

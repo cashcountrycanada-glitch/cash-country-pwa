@@ -9,7 +9,7 @@
  * - Preset FX actif affiché sur la carte
  */
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, Trash2, VolumeX, Volume2, Zap, Loader2, CheckCircle2 } from 'lucide-react';
+import { Play, Pause, Trash2, VolumeX, Volume2, Zap, Loader2, CheckCircle2, Download } from 'lucide-react';
 import { MobileRecording, studioService } from '../../services/StudioService';
 import { studioOfflineDB } from '../../services/StudioOfflineDB';
 import { TRACK_PRESETS, FX_PRESETS, FX_PRESET_DEFAULT, TRACK_FX_SUGGESTIONS, FxPreset, formatTime, formatDate } from './studio.types';
@@ -44,6 +44,29 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
   const [showFxPanel, setShowFxPanel]   = useState(false);
   const [reverbOverrides, setReverbOverrides] = useState<Record<string, number>>({});
   const [applyingFx, setApplyingFx]     = useState(false);
+  const [downloadingTrack, setDownloadingTrack] = useState(false);
+
+  // FIX "pas de bouton d'export pour les harmonies" — Backup/Exporter voix ne
+  // visaient que la voix principale brute. On ajoute ici un export direct par
+  // piste (harmonie ou double tracking), en passant par resolveBlobAsync pour
+  // gérer les sentinelles "opfs:" comme le fix précédent sur backupMainVoice.
+  const handleDownloadTrack = async () => {
+    if (downloadingTrack) return;
+    setDownloadingTrack(true);
+    try {
+      const blob = await studioService.resolveBlobAsync(track.dataUrl);
+      if (!blob) { alert('Fichier introuvable en mémoire pour cette piste.'); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const safeName = (track.trackLabel || 'piste').replace(/[^a-z0-9]+/gi, '_');
+      a.href = url; a.download = `${safeName}_${track.id}.wav`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e: any) {
+      alert('Erreur export : ' + (e?.message || e));
+    } finally {
+      setDownloadingTrack(false);
+    }
+  };
 
   // ── Aperçu live de la reverb ──────────────────────────────────────────────
   // AVANT : le slider ne faisait que stocker une valeur — aucun son ne
@@ -358,6 +381,12 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
             className="w-8 h-8 rounded-xl flex items-center justify-center active:scale-90"
             style={{ background: track.muted ? '#1a1a1a' : '#222' }}>
             {track.muted ? <VolumeX size={13} className="text-zinc-600"/> : <Volume2 size={13} className="text-zinc-300"/>}
+          </button>
+
+          {/* Export brut de cette piste (harmonie/double track/voix) */}
+          <button onClick={handleDownloadTrack} disabled={downloadingTrack}
+            className="w-8 h-8 rounded-xl bg-[#1a1a1a] flex items-center justify-center text-zinc-400 active:text-zinc-200 active:scale-90 transition-all">
+            {downloadingTrack ? <Loader2 size={13} className="animate-spin"/> : <Download size={13}/>}
           </button>
 
           {/* Delete */}
