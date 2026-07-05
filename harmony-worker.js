@@ -469,8 +469,8 @@ function doubleTrack(mono,sr){
     const frac = pos - idx;
     return src[idx] + (src[idx + 1] - src[idx]) * frac;
   };
-  const baseDelayL = 0.0035 * sr, modDepthL = 0.0018 * sr, modRateL = 0.6; // Hz
-  const baseDelayR = 0.0060 * sr, modDepthR = 0.0020 * sr, modRateR = 0.85;
+  const baseDelayL = 0.0020 * sr, modDepthL = 0.0012 * sr, modRateL = 0.6; // Hz
+  const baseDelayR = 0.0040 * sr, modDepthR = 0.0014 * sr, modRateR = 0.85;
   const maxDelay = Math.ceil(Math.max(baseDelayL + modDepthL, baseDelayR + modDepthR)) + 2;
   const outLen = len + maxDelay;
   const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
@@ -543,24 +543,45 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
   const profile = LAYER_PROFILES[trackIndex] || LAYER_PROFILES[2];
   const seed = (trackIndex || 2) * 7919;
 
-  // 0. Pré-normalisation avant Rubber Band — CRITIQUE pour ta voix
+  // 0a. FIX "ça change rien" : le plafond de +18dB posé précédemment,
+  // combiné à une prise très faible, laissait CHAQUE morceau autour de
+  // -18 à -21 dBFS après boost — toujours EN DESSOUS du seuil de -6dBFS où
+  // Rubber Band commence à mal se comporter (voir commentaire ci-dessous).
+  // Le plafond empêchait donc le vrai problème d'être réglé.
+  //
+  // Avant de remonter le gain, on retire d'abord le grondement grave/DC
+  // (sous ~90Hz — bruit de manipulation, ronflement secteur, souffle d'air)
+  // qui ne sert à rien pour la voix mais qui, une fois amplifié en même
+  // temps que tout le reste, ajoute du "sale" que Rubber Band doit aussi
+  // traiter. Filtre passe-haut 1 pôle, en place, avant le calcul du gain.
+  {
+    const cutoffHz = 90;
+    const rc = 1 / (2 * Math.PI * cutoffHz);
+    const dt = 1 / sampleRate;
+    const alpha = rc / (rc + dt);
+    let prevIn = mono[0] || 0, prevOut = 0;
+    for (let i = 0; i < mono.length; i++) {
+      const x = mono[i];
+      const y = alpha * (prevOut + x - prevIn);
+      prevIn = x; prevOut = y;
+      mono[i] = y;
+    }
+  }
+
+  // 0b. Pré-normalisation avant Rubber Band — CRITIQUE pour ta voix
   // Ton signal est à -19.8 dBFS (peak 0.103). En dessous de ~-6 dBFS,
   // Rubber Band amplifie le bruit de fond lors du pitch shift → souffles et artefacts.
   // On normalise temporairement à -3 dBFS avant RB, puis l'AGC remet le bon niveau.
   //
-  // FIX ARTEFACTS/SOUFFLE : sur une prise TRÈS faible (ex. peak -34 dBFS au lieu
-  // de -19.8 dBFS), la formule 0.707/prePeak sans plafond donnait des gains de
-  // 30+ dB (34x), ce qui amplifie le souffle/bruit de fond dans les MÊMES
-  // proportions que la voix avant que Rubber Band ne pitch-shift le tout — le
-  // souffle amplifié se fait alors traiter comme du signal tonal, d'où les
-  // artefacts. On plafonne le gain à +18 dB max et on atténue doucement le
-  // plancher de bruit (portions très faibles = souffle/silence) avant le boost,
-  // pour ne pas révéler/amplifier le souffle inutilement.
+  // Le plafond est maintenant à +30dB (au lieu de +18dB) : avec le filtre
+  // passe-haut ci-dessus et le gate ci-dessous, on peut se permettre un gain
+  // plus généreux pour vraiment sortir le signal de la zone à risque de
+  // Rubber Band, sans réamplifier le grondement grave qui a été retiré.
   let preGain = 1.0;
   let prePeak = 0;
   for (let i = 0; i < mono.length; i++) prePeak = Math.max(prePeak, Math.abs(mono[i]));
   if (prePeak > 0.001 && prePeak < 0.5) {
-    preGain = Math.min(0.707 / prePeak, 8.0); // cible -3 dBFS, plafonné à +18 dB
+    preGain = Math.min(0.707 / prePeak, 31.6); // cible -3 dBFS, plafonné à +30 dB
     // Gate doux : atténue ce qui est sous ~-45 dBFS (souffle/silence entre phrases)
     // avant le boost, pour éviter de rendre le souffle audible/plus fort que l'original.
     const gateThresh = 0.0056; // ~ -45 dBFS
