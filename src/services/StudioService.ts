@@ -1551,13 +1551,22 @@ export const studioService = {
       // Un vrai double tracking humain a des décalages naturels de 20-60ms.
       // Sans ces décalages, les layers sonnent "MIDI" — parfaitement alignés = artificiel.
       // Référence : Sun Studio utilisait des délais de bande 30-55ms pour le slapback.
+      //
+      // FIX "3e voix en écho" : pour le Double Tracking (trackIndex 1),
+      // doubleTrack() dans harmony-worker.js gère DÉJÀ le timing naturel en
+      // interne (micro-délais modulés façon chorus, ~3-8ms). Ajouter ICI un
+      // 2e délai de 28ms sur le bloc ENTIER empilait deux systèmes de délai
+      // indépendants : les 2 voix internes fusionnaient bien, mais le bloc
+      // entier se retrouvait décalé de 28ms par rapport à la voix principale
+      // — perçu comme un écho distinct plutôt qu'une voix épaissie. On retire
+      // donc le pre-delay ici pour ce cas précis (déjà géré en amont).
       const tIdx = (track as any).trackIndex ?? 0;
       const isInstTrack = (track as any).isInstrumental || tIdx === -1;
       let preDelayMs = 0;
       if (!isInstTrack && tIdx > 0) {
         // Chaque layer a un pre-delay unique et cohérent
         switch (tIdx) {
-          case 1: preDelayMs = 28;  break; // Double tracking : 28ms — épaisseur naturelle
+          case 1: preDelayMs = 0;   break; // Double tracking : géré en interne, pas de 2e délai
           case 2: preDelayMs = 42;  break; // +5 ST : 42ms — légèrement plus loin dans l'espace
           case 3: preDelayMs = 35;  break; // Octave bas : 35ms — présence sans coller
           case 4: preDelayMs = 51;  break; // +3 ST : 51ms — fond discret

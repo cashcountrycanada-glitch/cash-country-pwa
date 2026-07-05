@@ -599,12 +599,15 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
 }
 
 // Traitement chunked — TOUJOURS utilisé pour les enregistrements > 8s
-// FIX OOM iOS : chunk de 10s max = ~1.76M → ~440K float32 par chunk WASM
-// Au lieu de 40s (1.76M) qui causait un pic mémoire de 80-100 MB côté WASM
-// et faisait tuer le worker par iOS sans message d'erreur.
+// FIX OOM iOS : chunk de 20s max — historique : 40s (1.76M échantillons)
+// causait un pic mémoire de 80-100 MB côté WASM et faisait tuer le worker
+// par iOS sans message d'erreur. La mémoire WASM du moteur offline/finer
+// semble croître de façon non-linéaire avec la durée (~4x mémoire pour 2x
+// durée), donc 20s reste avec une marge confortable sous le seuil de crash
+// historique tout en divisant par ~2 le nombre de coupures de chunk (donc de
+// points où l'algo doit se "re-stabiliser").
 function processChunked(mono, semitones, sampleRate, trackIndex) {
-  // 10s par chunk = ~440 KB WASM peak au lieu de ~4 MB pour 40s
-  const chunkSamp = Math.floor(sampleRate * 10);
+  const chunkSamp = Math.floor(sampleRate * 20);
 
   if (mono.length <= chunkSamp) return processSingle(mono, semitones, sampleRate, trackIndex);
 
@@ -618,7 +621,7 @@ function processChunked(mono, semitones, sampleRate, trackIndex) {
   // ensuite — l'algo se stabilise dans cette zone jetée, invisible à l'oreille,
   // et seule la portion déjà stable est gardée dans la sortie.
   const overlapSamp = Math.floor(sampleRate * 0.1);
-  const preRollSamp  = Math.floor(sampleRate * 0.75); // 750ms de "chauffe" avant chaque coupure
+  const preRollSamp  = Math.floor(sampleRate * 1.5); // 1.5s de "chauffe" avant chaque coupure
   const final = new Float32Array(mono.length + overlapSamp * 4);
   let outOff = 0;
   let pos = 0;
@@ -627,9 +630,28 @@ function processChunked(mono, semitones, sampleRate, trackIndex) {
     const end = Math.min(pos + chunkSamp, mono.length);
     const hasMore = end < mono.length;
     const preRollStart = Math.max(0, pos - preRollSamp);
-    const actualPreRoll = pos - preRollStart;
+    let actualPreRoll = pos - preRollStart;
     // subarray = vue sans copie (zéro allocation supplémentaire)
-    const chunkView = mono.subarray(preRollStart, hasMore ? end + overlapSamp : end);
+    let chunkView = mono.subarray(preRollStart, hasMore ? end + overlapSamp : end);
+
+    // FIX "début de chanson" : le tout premier chunk (pos===0) n'a AUCUN
+    // vrai audio avant lui pour servir de pré-roll — l'algo démarre donc
+    // toujours à froid pile au début de la chanson, là où c'est le plus
+    // audible. On fabrique un pré-roll artificiel en "miroir" (les toutes
+    // premières ms jouées à l'envers) : ça donne à l'algo un signal réaliste
+    // à digérer avant le vrai début, sans avoir besoin d'audio qui n'existe
+    // pas. On jette ensuite cette portion miroir comme n'importe quel pré-roll.
+    if (pos === 0) {
+      const mirrorLen = Math.min(preRollSamp, mono.length - 1);
+      const mirror = new Float32Array(mirrorLen);
+      for (let i = 0; i < mirrorLen; i++) mirror[i] = mono[mirrorLen - 1 - i];
+      const combined = new Float32Array(mirrorLen + chunkView.length);
+      combined.set(mirror, 0);
+      combined.set(chunkView, mirrorLen);
+      chunkView = combined;
+      actualPreRoll = mirrorLen;
+    }
+
     let processed = processSingle(chunkView, semitones, sampleRate, trackIndex);
     // Portion à sauter au début = le pré-roll (proportionnel, comme pour keepLen)
     const skipLen = actualPreRoll > 0
