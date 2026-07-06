@@ -255,7 +255,7 @@ export default function MixerScreen({
       if ((track as any).muted) continue;
       let blob: Blob | null = null;
       try {
-        blob = await studioService.resolveBlobAsync(track.dataUrl);
+        blob = await studioService.resolveBlobAsync(track.dataUrl, track.id);
       } catch { continue; }
       if (!blob || blob.size < 100) continue;
       try {

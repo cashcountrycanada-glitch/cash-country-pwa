@@ -1257,8 +1257,24 @@ export const studioService = {
    * Version async de resolveBlob — charge depuis OPFS/IDB si pas en mémoire.
    * À utiliser dans mixProject et analyzeWaveform.
    */
-  async resolveBlobAsync(dataUrl: string): Promise<Blob | null> {
-    if (!dataUrl) return null;
+  async resolveBlobAsync(dataUrl: string, fallbackRecId?: string): Promise<Blob | null> {
+    // FIX "voix absente du Preview/Mixdown après reload" : depuis le passage en
+    // chargement à la demande (getLocalRecordingsAsync ne renvoie plus de dataUrl
+    // pour économiser la mémoire au démarrage), track.dataUrl peut être vide même
+    // pour une piste dont l'audio existe bien en IDB (rec_<id>). Preview Mix et
+    // mixProject() ne lisaient QUE dataUrl et abandonnaient silencieusement la
+    // piste si vide — d'où un mix où seul l'instrumental (chargé séparément par
+    // clé fixe) restait audible. On retombe maintenant sur l'IDB par id de piste.
+    const tryFallback = async (): Promise<Blob | null> => {
+      if (!fallbackRecId) return null;
+      try {
+        const db = getOfflineDB();
+        const blob = await db.getAudio(`rec_${fallbackRecId}`);
+        if (blob && blob.size > 100) return blob;
+      } catch (e) { console.warn('[resolveBlobAsync] Fallback rec_ échoué:', fallbackRecId, e); }
+      return null;
+    };
+    if (!dataUrl) return tryFallback();
     // Essai synchrone d'abord
     const sync = this.resolveBlob(dataUrl);
     if (sync) return sync;
@@ -1276,7 +1292,7 @@ export const studioService = {
       } catch (e) {
         console.warn('[resolveBlobAsync] OPFS load error:', key, e);
       }
-      return null;
+      return tryFallback();
     }
     if (dataUrl.startsWith('blob:')) {
       // Chercher dans les blobs de pistes stockés en mémoire
@@ -1285,9 +1301,9 @@ export const studioService = {
         .map(k => (window as any)[k] as Blob);
       // Essayer fetch d'abord (rapide si l'URL est encore valide)
       try { return await fetch(dataUrl).then(r => r.blob()); } catch {}
-      return null;
+      return tryFallback();
     }
-    return null;
+    return tryFallback();
   },
   getProjects(): TrackProject[] { try { const data = localStorage.getItem('cash_studio_projects'); return data ? JSON.parse(data) : []; } catch { return []; } },
   saveProject(project: TrackProject): void {
@@ -1447,7 +1463,7 @@ export const studioService = {
     instOffsetMs: number = 0
   ): Promise<Blob> {
     const yield_ = () => new Promise<void>(r => setTimeout(r, 40));
-    const activeTracks = project.tracks.filter(t => !t.muted && t.dataUrl);
+    const activeTracks = project.tracks.filter(t => !t.muted && (t.dataUrl || t.id));
     if (activeTracks.length === 0) throw new Error('Aucune piste valide à mixer');
 
     onProgress?.('Décodage des pistes…', 10);
@@ -1460,7 +1476,7 @@ export const studioService = {
       onProgress?.(`Décodage piste ${i + 1}/${activeTracks.length}…`, 10 + Math.round((i / activeTracks.length) * 25));
       await yield_();
       try {
-        const blob = await this.resolveBlobAsync(track.dataUrl!);
+        const blob = await this.resolveBlobAsync(track.dataUrl || '', track.id);
         if (!blob) { console.warn(`[Studio] Blob introuvable pour "${track.trackLabel}" — ignoré`); continue; }
         const arrayBuffer = await blob.arrayBuffer();
         const buffer = await tmpCtx.decodeAudioData(arrayBuffer);
