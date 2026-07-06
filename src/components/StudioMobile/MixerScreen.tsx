@@ -50,12 +50,12 @@ interface Props {
   onGoComp:        (takes: Take[]) => void;
   onProjectUpdate: (project: TrackProject) => void;
   instBlob:         Blob | null;
+  hasInst?:         boolean;
+  instOffsetMs?:    number;
   takeSlot:         'A' | 'B' | 'C';
   previewInstVol:   number;
   onPreviewInstVol: (v: number) => void;
   onInstOffset:     (ms: number) => void;
-  onAutoSync?:      () => void;
-  autoSyncing?:     boolean;
   onAutoSync?:      () => void;
   autoSyncing?:     boolean;
 }
@@ -183,7 +183,7 @@ export default function MixerScreen({
   uploading, uploadDone, playRef,
   onBack, onGoSongs, onAddTrack, onPlay, onMute, onSolo, onVolume, onPan,
   onDelete, onMix, onPlayMix, onMasterize, onUploadMix, onGoComp,
-  onProjectUpdate, instBlob, takeSlot, previewInstVol, onPreviewInstVol, onInstOffset, onAutoSync, autoSyncing,
+  onProjectUpdate, instBlob, hasInst, instOffsetMs = 0, takeSlot, previewInstVol, onPreviewInstVol, onInstOffset, onAutoSync, autoSyncing,
 }: Props) {
   const [generatingIndex, setGeneratingIndex] = useState<number | null>(null);
   const [backupDone, setBackupDone]           = useState(false);
@@ -274,6 +274,29 @@ export default function MixerScreen({
         srcs.push(src);
       } catch (e: any) {
         console.warn('[Preview] piste ignorée:', e.message);
+      }
+    }
+
+    // ── Ajouter l'instrumental au preview (auparavant absent : le preview ne jouait
+    // que voix + harmonies, jamais la musique, ce qui donnait l'impression d'un bug) ──
+    if (hasInst && selected) {
+      try {
+        const instBlobForPreview = await studioOfflineDB.getAudio(`inst_${selected.id}`);
+        if (instBlobForPreview && instBlobForPreview.size > 100) {
+          const ab = await instBlobForPreview.arrayBuffer();
+          const buffer = await ctx.decodeAudioData(ab);
+          const src = ctx.createBufferSource();
+          src.buffer = buffer;
+          const gain = ctx.createGain();
+          gain.gain.value = previewInstVol > 0 ? previewInstVol : 0.7;
+          src.connect(gain); gain.connect(ctx.destination);
+          const offsetSec = instOffsetMs / 1000;
+          if (offsetSec >= 0) src.start(ctx.currentTime + offsetSec);
+          else src.start(ctx.currentTime, -offsetSec);
+          srcs.push(src);
+        }
+      } catch (e: any) {
+        console.warn('[Preview] Instrumental ignoré:', e.message);
       }
     }
 
@@ -1434,7 +1457,7 @@ export default function MixerScreen({
                 <div className="px-4 pt-3 pb-2 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Music2 size={13} className="text-red-400"/>
-                    <p className="text-[11px] font-black text-white">Mix vocal</p>
+                    <p className="text-[11px] font-black text-white">{(hasInst || instBlob) ? 'Mix complet' : 'Mix vocal'}</p>
                     {totalDuration > 0 && (
                       <span className="text-[10px] text-zinc-500">{formatTime(totalDuration)}</span>
                     )}
