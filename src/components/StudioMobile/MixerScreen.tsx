@@ -237,7 +237,6 @@ export default function MixerScreen({
     dbg(`[Preview] ${currentTracks.length} piste(s) dans project.tracks`);
 
     // ── iOS : AudioContext DOIT être créé synchroniquement dans le user gesture ──
-    // Tout await après ce point ne pose plus de problème
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     let ctx: AudioContext;
     try {
@@ -251,7 +250,19 @@ export default function MixerScreen({
     setIsPreviewing(true);
 
     const PRE_DELAYS: Record<number, number> = { 1: 28, 2: 42, 3: 35, 4: 51, 5: 38 };
-    const srcs: AudioBufferSourceNode[] = [];
+
+    // ── ÉTAPE 1 : tout décoder D'ABORD, ne rien démarrer encore ────────────────
+    // FIX désync/"chanson incomplète" : décoder un fichier de 3-4 min prend de
+    // vraies secondes. ctx.currentTime avance en temps réel dès la création du
+    // contexte, MÊME si rien ne joue encore. Avant, chaque piste démarrait avec
+    // `ctx.currentTime + délai` juste après SON propre décodage — la voix
+    // (décodée en premier) jouait donc déjà depuis plusieurs secondes quand
+    // l'instrumental (décodé en dernier) était enfin programmé, décalant tout
+    // et donnant l'impression que le début de la chanson manquait. On décode
+    // maintenant tout en amont et on ne programme le démarrage qu'une fois que
+    // TOUT est prêt, avec un seul point de référence temporel partagé.
+    type Pending = { label: string; buffer: AudioBuffer; gainVal: number; panVal: number; delaySec: number; isInst: boolean; offsetSec: number };
+    const pending: Pending[] = [];
 
     for (const track of currentTracks) {
       const label = `"${track.trackLabel || track.id}" (idx=${track.trackIndex ?? '?'}, slot=${(track as any).takeSlot ?? '?'})`;
@@ -264,41 +275,32 @@ export default function MixerScreen({
       try {
         const ab = await blob.arrayBuffer();
         const buffer = await ctx.decodeAudioData(ab);
-        const src = ctx.createBufferSource();
-        src.buffer = buffer;
-        const gain = ctx.createGain();
-        gain.gain.value = Math.min(1.0, (track as any).gain ?? 1.0);
-        const pan = ctx.createStereoPanner();
-        pan.pan.value = (track as any).pan ?? 0;
-        src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
         const tIdx = (track as any).trackIndex ?? 0;
-        const delay = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) / 1000 : 0;
-        src.start(ctx.currentTime + delay);
-        srcs.push(src);
-        dbg(`[Preview] ${label} → OK (${(blob.size/1024).toFixed(0)}KB, gain=${gain.gain.value})`);
+        const delaySec = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) / 1000 : 0;
+        pending.push({
+          label, buffer,
+          gainVal: Math.min(1.0, (track as any).gain ?? 1.0),
+          panVal: (track as any).pan ?? 0,
+          delaySec, isInst: false, offsetSec: 0,
+        });
+        dbg(`[Preview] ${label} → décodé (${(blob.size/1024).toFixed(0)}KB, ${buffer.duration.toFixed(1)}s)`);
       } catch (e: any) {
         dbg(`[Preview] ${label} → EXCEPTION decode: ${e?.message}`);
       }
     }
 
-    // ── Ajouter l'instrumental au preview (auparavant absent : le preview ne jouait
-    // que voix + harmonies, jamais la musique, ce qui donnait l'impression d'un bug) ──
     if (hasInst && selected) {
       try {
         const instBlobForPreview = await studioOfflineDB.getAudio(`inst_${selected.id}`);
         if (instBlobForPreview && instBlobForPreview.size > 100) {
           const ab = await instBlobForPreview.arrayBuffer();
           const buffer = await ctx.decodeAudioData(ab);
-          const src = ctx.createBufferSource();
-          src.buffer = buffer;
-          const gain = ctx.createGain();
-          gain.gain.value = previewInstVol > 0 ? previewInstVol : 0.7;
-          src.connect(gain); gain.connect(ctx.destination);
-          const offsetSec = instOffsetMs / 1000;
-          if (offsetSec >= 0) src.start(ctx.currentTime + offsetSec);
-          else src.start(ctx.currentTime, -offsetSec);
-          srcs.push(src);
-          dbg(`[Preview] Instrumental → OK (${(instBlobForPreview.size/1024).toFixed(0)}KB, gain=${gain.gain.value})`);
+          pending.push({
+            label: 'Instrumental', buffer,
+            gainVal: previewInstVol > 0 ? previewInstVol : 0.7,
+            panVal: 0, delaySec: 0, isInst: true, offsetSec: instOffsetMs / 1000,
+          });
+          dbg(`[Preview] Instrumental → décodé (${(instBlobForPreview.size/1024).toFixed(0)}KB, ${buffer.duration.toFixed(1)}s)`);
         } else {
           dbg(`[Preview] Instrumental → SKIP (introuvable en IDB pour inst_${selected.id})`);
         }
@@ -307,13 +309,37 @@ export default function MixerScreen({
       }
     }
 
-    (window as any).__previewSrcs = srcs;
-
-    if (srcs.length === 0) {
+    if (pending.length === 0) {
       stopPreview();
       alert('Aucune piste audio disponible pour le preview.');
       return;
     }
+
+    // ── ÉTAPE 2 : tout est décodé — programmer le démarrage de chaque source ──
+    // contre UNE SEULE référence temporelle commune (anchor), plutôt que contre
+    // ctx.currentTime "au moment où on y arrive" pour chaque piste.
+    const anchor = ctx.currentTime + 0.15;
+    const srcs: AudioBufferSourceNode[] = [];
+    for (const p of pending) {
+      const src = ctx.createBufferSource();
+      src.buffer = p.buffer;
+      const gain = ctx.createGain();
+      gain.gain.value = p.gainVal;
+      if (p.isInst) {
+        src.connect(gain); gain.connect(ctx.destination);
+        if (p.offsetSec >= 0) src.start(anchor + p.offsetSec);
+        else src.start(anchor, -p.offsetSec);
+      } else {
+        const pan = ctx.createStereoPanner();
+        pan.pan.value = p.panVal;
+        src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
+        src.start(anchor + p.delaySec);
+      }
+      srcs.push(src);
+      dbg(`[Preview] ${p.label} → programmé à +${(p.isInst ? p.offsetSec : p.delaySec).toFixed(3)}s`);
+    }
+
+    (window as any).__previewSrcs = srcs;
 
     // Auto-stop quand toutes les sources sont terminées
     let ended = 0;
