@@ -1600,7 +1600,6 @@ export const studioService = {
       // entier se retrouvait décalé de 28ms par rapport à la voix principale
       // — perçu comme un écho distinct plutôt qu'une voix épaissie. On retire
       // donc le pre-delay ici pour ce cas précis (déjà géré en amont).
-      const tIdx = (track as any).trackIndex ?? 0;
       const isInstTrack = (track as any).isInstrumental || tIdx === -1;
       let preDelayMs = 0;
       if (!isInstTrack && tIdx > 0) {
