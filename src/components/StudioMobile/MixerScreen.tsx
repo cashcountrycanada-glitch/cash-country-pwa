@@ -62,12 +62,120 @@ interface Props {
 
 // Layers de renforcement style Johnny Cash / Elvis Presley / Alan Jackson
 // Gains discrets : les layers renforcent sans rivaliser avec la voix principale
+//
+// FIX "rester dans la sûreté" : les intervalles musicaux traditionnels
+// (Quarte=5ST, Quinte=7ST, Octave=12ST) dépassent tous la zone ±3 demi-tons
+// où les artefacts de pitch-shift restent quasi inaudibles, même avec les
+// meilleurs algorithmes (préservation de formants incluse) — voir recherche.
+// L'octave (-12ST) était même le pire cas, historiquement lié à des crashs
+// mémoire iOS. On remplace donc par les intervalles sûrs les plus proches
+// (±2/±3 demi-tons), en gardant l'orientation artistique d'origine (haut
+// pour Jackson/Brooks, bas pour Cash/Elvis) même si le nom d'intervalle
+// exact change.
+// FIX "je suis pas censé dire les sections d'une chanson" : les paroles
+// synchronisées dans le temps (lrcDense) existent déjà pour chaque chanson —
+// elles n'étaient simplement pas utilisées pour détecter la structure. On
+// détecte automatiquement : les blocs de paroles séparés par un grand silence
+// (= changement de section probable), puis on repère quels blocs se répètent
+// mot pour mot (= refrain, par définition), et on déduit Intro/Couplet/
+// Refrain/Pont/Outro à partir de ça. C'est une heuristique basée sur de
+// vraies données de la chanson, pas une invention — mais elle reste
+// ajustable manuellement ensuite si un passage est mal identifié.
+function normalizeLine(s: string): string {
+  return s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+}
+
+function autoDetectSections(lrcDense: Array<{ time: number; text: string }>, totalDuration: number): SectionMarker[] {
+  if (!lrcDense || lrcDense.length === 0) return [];
+  const lines = [...lrcDense].sort((a, b) => a.time - b.time);
+  const GAP_THRESHOLD = 6; // secondes — un trou de silence de ce genre = probable changement de section
+
+  // 1. Regrouper les lignes en blocs séparés par un grand silence
+  type Block = { start: number; end: number; lines: string[] };
+  const blocks: Block[] = [];
+  let current: Block | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const { time, text } = lines[i];
+    if (!current || time - current.end > GAP_THRESHOLD) {
+      current = { start: time, end: time, lines: [] };
+      blocks.push(current);
+    }
+    current.lines.push(text);
+    current.end = time;
+  }
+  if (blocks.length === 0) return [];
+
+  // 2. Signature par bloc (texte normalisé concaténé) pour repérer les répétitions
+  const sig = (b: Block) => b.lines.map(normalizeLine).join('|');
+  const sigs = blocks.map(sig);
+
+  // 3. Regrouper les blocs qui se ressemblent fortement (le refrain revient tel quel)
+  const similarity = (a: string, b: string) => {
+    const la = a.split('|'), lb = b.split('|');
+    const setA = new Set(la), setB = new Set(lb);
+    let shared = 0;
+    for (const l of setA) if (setB.has(l)) shared++;
+    return shared / Math.max(la.length, lb.length, 1);
+  };
+  const groupOf = new Array(blocks.length).fill(-1);
+  let nextGroup = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    if (groupOf[i] !== -1) continue;
+    groupOf[i] = nextGroup;
+    for (let j = i + 1; j < blocks.length; j++) {
+      if (groupOf[j] === -1 && similarity(sigs[i], sigs[j]) > 0.6) groupOf[j] = groupOf[i];
+    }
+    nextGroup++;
+  }
+  const groupCounts: Record<number, number> = {};
+  groupOf.forEach(g => { groupCounts[g] = (groupCounts[g] || 0) + 1; });
+  // Le groupe qui revient le plus souvent (2+) et qui n'est pas le tout premier bloc = refrain
+  let chorusGroup = -1, bestCount = 1;
+  Object.entries(groupCounts).forEach(([g, count]) => {
+    if (count > bestCount) { bestCount = count; chorusGroup = parseInt(g); }
+  });
+
+  // 4. Construire les SectionMarker
+  const sections: SectionMarker[] = [];
+  const PAD_END = 1.5; // secondes ajoutées après la dernière ligne d'un bloc (la voix résonne un peu)
+
+  if (blocks[0].start > 3) {
+    sections.push({ id: `sec_${Date.now()}_intro`, label: 'Intro', startSec: 0, endSec: blocks[0].start, activeHarmonies: [] });
+  }
+
+  let seenChorus = false;
+  blocks.forEach((b, i) => {
+    const isChorus = chorusGroup !== -1 && groupOf[i] === chorusGroup;
+    let label: SectionLabel;
+    if (isChorus) { label = 'Refrain'; seenChorus = true; }
+    else if (seenChorus && groupCounts[groupOf[i]] === 1) label = 'Pont';
+    else label = 'Couplet';
+
+    const nextStart = i + 1 < blocks.length ? blocks[i + 1].start : totalDuration;
+    const endSec = Math.min(nextStart, b.end + PAD_END);
+    sections.push({
+      id: `sec_${Date.now()}_${i}`,
+      label,
+      startSec: b.start,
+      endSec,
+      activeHarmonies: label === 'Refrain' ? [1, 2, 3, 4, 5] : label === 'Pont' ? [1, 3] : [1],
+    });
+  });
+
+  const lastEnd = sections[sections.length - 1]?.endSec ?? 0;
+  if (totalDuration - lastEnd > 3) {
+    sections.push({ id: `sec_${Date.now()}_outro`, label: 'Outro', startSec: lastEnd, endSec: totalDuration, activeHarmonies: [1, 2, 3, 4, 5] });
+  }
+
+  return sections;
+}
+
 const HARMONY_DEFS = [
   { trackIndex: 1, label: 'Double',  pitch:  0,  color: '#f97316', emoji: '🎵', musicNote: 'Unisson',   desc: 'Épaissit naturellement' },
-  { trackIndex: 2, label: '+5 ST',   pitch:  5,  color: '#eab308', emoji: '🎶', musicNote: 'Quarte ↑',  desc: 'Signature Alan Jackson' },
-  { trackIndex: 3, label: 'Oct ↓',  pitch: -12, color: '#3b82f6', emoji: '🔉', musicNote: 'Octave ↓',  desc: 'Grave profond Cash' },
-  { trackIndex: 4, label: '+7 ST',   pitch:  7,  color: '#a855f7', emoji: '✨', musicNote: 'Quinte ↑',  desc: 'Puissance Garth Brooks' },
-  { trackIndex: 5, label: '-5 ST',   pitch: -5,  color: '#22c55e', emoji: '🎼', musicNote: 'Quarte ↓',  desc: 'Chaleur grave Elvis' },
+  { trackIndex: 2, label: '+2 ST',   pitch:  2,  color: '#eab308', emoji: '🎶', musicNote: 'Seconde ↑',  desc: 'Signature Alan Jackson' },
+  { trackIndex: 3, label: '-3 ST',  pitch: -3, color: '#3b82f6', emoji: '🔉', musicNote: 'Tierce ↓',  desc: 'Grave profond Cash' },
+  { trackIndex: 4, label: '+3 ST',   pitch:  3,  color: '#a855f7', emoji: '✨', musicNote: 'Tierce ↑',  desc: 'Puissance Garth Brooks' },
+  { trackIndex: 5, label: '-2 ST',   pitch: -2,  color: '#22c55e', emoji: '🎼', musicNote: 'Seconde ↓',  desc: 'Chaleur grave Elvis' },
 ];
 
 export default function MixerScreen({
@@ -777,7 +885,52 @@ export default function MixerScreen({
                       </div>
 
                       {sections.length === 0 && (
-                        <p className="text-[9px] text-zinc-600 text-center py-2">Ajoute des sections pour activer les harmonies sélectivement</p>
+                        <>
+                          {selected.lrcDense && selected.lrcDense.length > 0 ? (
+                            <button
+                              onClick={() => {
+                                const detected = autoDetectSections(selected.lrcDense!, totalDuration);
+                                if (detected.length === 0) return;
+                                setSections(detected);
+                                onProjectUpdate({ ...project, sections: detected } as any);
+                              }}
+                              className="w-full py-2.5 rounded-xl text-[10px] font-black uppercase active:scale-[0.98] transition-all mb-1"
+                              style={{ background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740' }}>
+                              🪄 Détecter les sections automatiquement (paroles synchronisées)
+                            </button>
+                          ) : (
+                            <p className="text-[9px] text-zinc-600 text-center py-2">Pas de paroles synchronisées pour cette chanson — ajoute les sections manuellement</p>
+                          )}
+                        </>
+                      )}
+
+                      {sections.length === 0 && (
+                        <p className="text-[9px] text-zinc-600 text-center py-2">Ou ajoute des sections manuellement pour activer les harmonies sélectivement</p>
+                      )}
+
+                      {sections.length > 0 && (
+                        <button
+                          onClick={() => {
+                            // FIX "trop d'harmonies en même temps" : preset intelligent qui
+                            // suit la pratique standard d'arrangement vocal — construire
+                            // progressivement vers le refrain plutôt que tout jouer du
+                            // début à la fin. Couplet léger (juste double tracking),
+                            // refrain plein (toutes les harmonies), pont intermédiaire.
+                            const SMART_DEFAULTS: Record<SectionLabel, number[]> = {
+                              Intro:   [],
+                              Couplet: [1],
+                              Refrain: [1, 2, 3, 4, 5],
+                              Pont:    [1, 3],
+                              Outro:   [1, 2, 3, 4, 5],
+                            };
+                            const updated = sections.map(s => ({ ...s, activeHarmonies: SMART_DEFAULTS[s.label] }));
+                            setSections(updated);
+                            onProjectUpdate({ ...project, sections: updated } as any);
+                          }}
+                          className="w-full py-2 rounded-xl text-[9px] font-black uppercase active:scale-[0.98] transition-all mb-1"
+                          style={{ background: '#a855f720', color: '#a855f7', border: '1px solid #a855f740' }}>
+                          ✨ Preset intelligent (léger→plein selon la section)
+                        </button>
                       )}
 
                       {sections.map(sec => (

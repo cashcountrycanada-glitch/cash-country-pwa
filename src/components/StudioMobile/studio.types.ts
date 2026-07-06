@@ -259,14 +259,14 @@ export const TRACK_PRESETS: TrackPreset[] = [
     intervalLabel: 'Mélodie principale', singingTip: 'Chante ta mélodie normalement' },
   { index: 1, label: 'Double tracking', pitch: 0,   pan: -0.25, gain: 0.28, color: '#f97316', emoji: '🎵',
     intervalLabel: 'Unisson', singingTip: "Rechante la même mélodie — les variations naturelles créent l'épaisseur. Style Cash/Elvis." },
-  { index: 2, label: 'Layer +5 ST',     pitch: 5,   pan: 0.35,  gain: 0.20, color: '#eab308', emoji: '🎶',
-    intervalLabel: 'Quarte juste ↑', singingTip: 'Chante 5 demi-tons AU-DESSUS — signature Alan Jackson et country classique' },
-  { index: 3, label: 'Octave bas',      pitch: -12, pan: 0,     gain: 0.22, color: '#3b82f6', emoji: '🔉',
-    intervalLabel: 'Octave ↓', singingTip: 'Chante UNE OCTAVE EN DESSOUS — grave profond signature Johnny Cash' },
-  { index: 4, label: 'Layer +7 ST',     pitch: 7,   pan: -0.35, gain: 0.15, color: '#a855f7', emoji: '✨',
-    intervalLabel: 'Quinte juste ↑', singingTip: 'Chante 7 demi-tons AU-DESSUS — quinte Garth Brooks, puissance dans les refrains' },
-  { index: 5, label: 'Layer -5 ST',     pitch: -5,  pan: 0.30,  gain: 0.16, color: '#22c55e', emoji: '🎼',
-    intervalLabel: 'Quarte juste ↓', singingTip: 'Chante 5 demi-tons EN DESSOUS — chaleur grave style Elvis et les Jordanaires' },
+  { index: 2, label: 'Layer +2 ST',     pitch: 2,   pan: 0.35,  gain: 0.20, color: '#eab308', emoji: '🎶',
+    intervalLabel: 'Seconde ↑', singingTip: 'Chante 2 demi-tons AU-DESSUS — signature Alan Jackson et country classique' },
+  { index: 3, label: 'Layer -3 ST',      pitch: -3, pan: 0,     gain: 0.22, color: '#3b82f6', emoji: '🔉',
+    intervalLabel: 'Tierce ↓', singingTip: 'Chante 3 demi-tons EN DESSOUS — grave profond signature Johnny Cash' },
+  { index: 4, label: 'Layer +3 ST',     pitch: 3,   pan: -0.35, gain: 0.15, color: '#a855f7', emoji: '✨',
+    intervalLabel: 'Tierce ↑', singingTip: 'Chante 3 demi-tons AU-DESSUS — puissance Garth Brooks, refrains' },
+  { index: 5, label: 'Layer -2 ST',     pitch: -2,  pan: 0.30,  gain: 0.16, color: '#22c55e', emoji: '🎼',
+    intervalLabel: 'Seconde ↓', singingTip: 'Chante 2 demi-tons EN DESSOUS — chaleur grave style Elvis et les Jordanaires' },
 ];
 
 export const TRACK_FX_SUGGESTIONS: Record<number, string> = {

@@ -812,8 +812,8 @@ const PRESETS: Record<string, { label: string; emoji: string; description: strin
   },
   youtube: {
     label: 'YouTube', emoji: '▶',
-    description: '-13 LUFS · Optimal YouTube',
-    settings: { lowGain: 2.0, midGain: 0.0, highGain: 1.5, threshold: -16, ratio: 4, attack: 8, release: 120, ceiling: -1.0, targetLufs: -13 },
+    description: '-14 LUFS · Norme officielle YouTube 2026',
+    settings: { lowGain: 2.0, midGain: 0.0, highGain: 1.5, threshold: -16, ratio: 4, attack: 8, release: 120, ceiling: -1.0, targetLufs: -14 },
   },
   podcast: {
     label: 'Podcast / Voix', emoji: '🎙',

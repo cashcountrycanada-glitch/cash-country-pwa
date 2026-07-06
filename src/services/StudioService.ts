@@ -1539,18 +1539,58 @@ export const studioService = {
     const maxDuration = Math.max(...shifted.map(s => s.buffer.duration));
     const sampleRate = shifted[0].buffer.sampleRate;
     const offline = new OfflineAudioContext(2, Math.ceil(maxDuration * sampleRate) + 4096, sampleRate);
+    // FIX "sections d'harmonies pas appliquées au mixage" : jusqu'ici,
+    // project.sections/activeHarmonies existait dans l'UI (Mixer) mais
+    // n'était JAMAIS lu par le moteur de rendu — configurer des sections
+    // n'avait aucun effet sur le fichier final. On lit maintenant ces
+    // sections et on programme le volume de chaque harmonie (trackIndex 1-5)
+    // dans le temps via gain.setValueAtTime, avec une courte rampe pour
+    // éviter les clics aux transitions.
+    const sections: any[] = Array.isArray((project as any).sections) ? (project as any).sections : [];
+    const RAMP = 0.08; // 80ms, assez court pour être franc, assez long pour ne pas cliquer
     for (const { track, buffer } of shifted) {
       const src = offline.createBufferSource(); src.buffer = buffer;
       const gainNode = offline.createGain();
-      // Plafonner le gain à 1.0 dans le mix — évite le clipping
-      gainNode.gain.value = Math.min(1.0, track.gain ?? 1.0);
+      const baseGain = Math.min(1.0, track.gain ?? 1.0);
+      const tIdx = (track as any).trackIndex ?? 0;
+      const isHarmonyLayer = tIdx >= 1 && tIdx <= 5;
+
+      if (isHarmonyLayer && sections.length > 0) {
+        // Programme le volume section par section. En dehors des sections
+        // définies, on garde le gain de base (pas de silence surprise dans
+        // les zones non cartographiées).
+        gainNode.gain.setValueAtTime(baseGain, 0);
+        let currentGain = baseGain; // suivi manuel — gain.value ne reflète pas l'automation programmée à l'avance
+        const sorted = [...sections].sort((a, b) => a.startSec - b.startSec);
+        for (const sec of sorted) {
+          const active = Array.isArray(sec.activeHarmonies) && sec.activeHarmonies.includes(tIdx);
+          const secGain = active ? (sec.harmonyVolumes?.[tIdx] ?? baseGain) : 0;
+          const start = Math.max(0, sec.startSec);
+          const end = Math.max(start, sec.endSec);
+          gainNode.gain.setValueAtTime(currentGain, Math.max(0, start - RAMP));
+          gainNode.gain.linearRampToValueAtTime(secGain, start);
+          gainNode.gain.setValueAtTime(secGain, Math.max(start, end - RAMP));
+          gainNode.gain.linearRampToValueAtTime(baseGain, end);
+          currentGain = baseGain;
+        }
+      } else {
+        // Plafonner le gain à 1.0 dans le mix — évite le clipping
+        gainNode.gain.value = baseGain;
+      }
       const panner = offline.createStereoPanner(); panner.pan.value = track.pan ?? 0;
       src.connect(gainNode); gainNode.connect(panner); panner.connect(offline.destination);
 
       // ── Pre-delay par layer — style Cash/Elvis ────────────────────────────
       // Un vrai double tracking humain a des décalages naturels de 20-60ms.
       // Sans ces décalages, les layers sonnent "MIDI" — parfaitement alignés = artificiel.
-      // Référence : Sun Studio utilisait des délais de bande 30-55ms pour le slapback.
+      // Note : le vrai slapback de Sun Studio (Sam Phillips) mesurait en réalité
+      // ~134-140ms (analyse acoustique publiée), pas 30-55ms comme indiqué
+      // précédemment ici. On garde volontairement des valeurs plus courtes que
+      // ça : appliquer un vrai délai de 140ms à PLUSIEURS harmonies en même
+      // temps empilerait des échos audibles bien distincts. Le but ici est une
+      // variation subtile de timing ENTRE les couches simultanées, pas une
+      // reproduction fidèle du slapback historique (qui s'appliquait à une
+      // seule voix doublée, pas à un empilement d'harmonies).
       //
       // FIX "3e voix en écho" : pour le Double Tracking (trackIndex 1),
       // doubleTrack() dans harmony-worker.js gère DÉJÀ le timing naturel en

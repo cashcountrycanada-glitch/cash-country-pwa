@@ -207,15 +207,26 @@ function applyAGC(signal, reference) {
 // fins de mots) et on atténue doucement (jamais à zéro, pour rester naturel)
 // tout ce qui est sous ~-38dB relatif au pic de CETTE harmonie — donc ça
 // s'adapte automatiquement, aucun réglage manuel nécessaire.
-function applyBreathGate(signal, sampleRate) {
+// FIX "parfait pour radio/YouTube" : la recherche confirme que rester dans
+// ±3 demi-tons est la zone où les artefacts de pitch-shift restent quasi
+// inaudibles, même avec les meilleurs algorithmes (préservation de formants
+// incluse). Au-delà (nos harmonies vont jusqu'à +7ST/-5ST), un peu plus de
+// grain est structurellement inévitable. On compense en rendant le gate de
+// souffle plus mordant à mesure que l'écart de pitch grandit au-delà de
+// cette zone sûre — sans y toucher pour les écarts modestes (+4ST/-3ST) qui
+// n'en ont pas besoin.
+function applyBreathGate(signal, sampleRate, semitones = 0) {
   let peak = 0;
   for (let i = 0; i < signal.length; i++) peak = Math.max(peak, Math.abs(signal[i]));
   if (peak < 1e-6) return signal;
-  const threshold = peak * 0.0126; // ~ -38 dB sous le pic de l'harmonie
+  const extraShift = Math.max(0, Math.abs(semitones) - 3); // demi-tons au-delà de la zone sûre
+  // Seuil plus haut (gate plus agressif) et plancher plus bas pour les gros écarts
+  const thresholdDb = -38 + Math.min(extraShift * 1.5, 9); // jusqu'à -29dB pour les écarts extrêmes
+  const threshold = peak * Math.pow(10, thresholdDb / 20);
   const attackCoef  = Math.exp(-1 / (0.003 * sampleRate)); // 3ms
   const releaseCoef = Math.exp(-1 / (0.120 * sampleRate)); // 120ms — ne coupe pas les fins de mots
   let env = 0;
-  const floorGain = 0.25; // jamais un vrai silence, juste -12dB de moins → reste naturel
+  const floorGain = Math.max(0.15, 0.25 - extraShift * 0.02); // un peu plus mordant sur les gros écarts
   for (let i = 0; i < signal.length; i++) {
     const a = Math.abs(signal[i]);
     env = a > env ? attackCoef * env + (1 - attackCoef) * a
@@ -628,7 +639,7 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
 
   // 2-9. Toutes les étapes suivantes sont IN-PLACE — zéro allocation
   applyAGC(sig, mono);
-  applyBreathGate(sig, sampleRate);
+  applyBreathGate(sig, sampleRate, semitones);
   if (semitones >= 4) applySoftSaturation(sig, 0.03 + (semitones - 4) / 12 * 0.04);
   applyPhraseVariation(sig, sampleRate, profile.pitchVar, seed);
   applyOrganicJitter(sig, sampleRate, seed ^ 0xABCD1234);
