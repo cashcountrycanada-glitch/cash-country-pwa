@@ -1471,17 +1471,20 @@ export const studioService = {
 
     const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     const decoded: { track: MobileRecording; buffer: AudioBuffer }[] = [];
+    const dbg = (msg: string) => { try { (window as any).__addLog?.(msg); } catch {} console.log(msg); };
     for (let i = 0; i < activeTracks.length; i++) {
       const track = activeTracks[i];
+      const label = `"${track.trackLabel || track.id}" (idx=${track.trackIndex ?? '?'})`;
       onProgress?.(`Décodage piste ${i + 1}/${activeTracks.length}…`, 10 + Math.round((i / activeTracks.length) * 25));
       await yield_();
       try {
         const blob = await this.resolveBlobAsync(track.dataUrl || '', track.id);
-        if (!blob) { console.warn(`[Studio] Blob introuvable pour "${track.trackLabel}" — ignoré`); continue; }
+        if (!blob) { dbg(`[Mix] ${label} → SKIP (blob introuvable, dataUrl=${track.dataUrl ? track.dataUrl.slice(0,20) : 'VIDE'})`); continue; }
         const arrayBuffer = await blob.arrayBuffer();
         const buffer = await tmpCtx.decodeAudioData(arrayBuffer);
         decoded.push({ track, buffer });
-      } catch (e) { console.warn(`[Studio] Erreur décodage "${track.trackLabel}":`, e); }
+        dbg(`[Mix] ${label} → OK (${(blob.size/1024).toFixed(0)}KB)`);
+      } catch (e: any) { dbg(`[Mix] ${label} → EXCEPTION: ${e?.message}`); }
     }
     await tmpCtx.close();
     if (decoded.length === 0) throw new Error('Aucune piste décodable');

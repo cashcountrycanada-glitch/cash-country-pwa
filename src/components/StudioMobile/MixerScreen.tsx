@@ -233,6 +233,8 @@ export default function MixerScreen({
     if (isPreviewing) { stopPreview(); return; }
     const currentTracks = project?.tracks || [];
     if (currentTracks.length === 0) return;
+    const dbg = (msg: string) => { try { (window as any).__addLog?.(msg); } catch {} console.log(msg); };
+    dbg(`[Preview] ${currentTracks.length} piste(s) dans project.tracks`);
 
     // ── iOS : AudioContext DOIT être créé synchroniquement dans le user gesture ──
     // Tout await après ce point ne pose plus de problème
@@ -252,12 +254,13 @@ export default function MixerScreen({
     const srcs: AudioBufferSourceNode[] = [];
 
     for (const track of currentTracks) {
-      if ((track as any).muted) continue;
+      const label = `"${track.trackLabel || track.id}" (idx=${track.trackIndex ?? '?'}, slot=${(track as any).takeSlot ?? '?'})`;
+      if ((track as any).muted) { dbg(`[Preview] ${label} → SKIP (muted)`); continue; }
       let blob: Blob | null = null;
       try {
         blob = await studioService.resolveBlobAsync(track.dataUrl, track.id);
-      } catch { continue; }
-      if (!blob || blob.size < 100) continue;
+      } catch (e: any) { dbg(`[Preview] ${label} → EXCEPTION resolveBlobAsync: ${e?.message}`); continue; }
+      if (!blob || blob.size < 100) { dbg(`[Preview] ${label} → SKIP (blob introuvable, dataUrl=${track.dataUrl ? track.dataUrl.slice(0,20) : 'VIDE'})`); continue; }
       try {
         const ab = await blob.arrayBuffer();
         const buffer = await ctx.decodeAudioData(ab);
@@ -272,8 +275,9 @@ export default function MixerScreen({
         const delay = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) / 1000 : 0;
         src.start(ctx.currentTime + delay);
         srcs.push(src);
+        dbg(`[Preview] ${label} → OK (${(blob.size/1024).toFixed(0)}KB, gain=${gain.gain.value})`);
       } catch (e: any) {
-        console.warn('[Preview] piste ignorée:', e.message);
+        dbg(`[Preview] ${label} → EXCEPTION decode: ${e?.message}`);
       }
     }
 
@@ -294,9 +298,12 @@ export default function MixerScreen({
           if (offsetSec >= 0) src.start(ctx.currentTime + offsetSec);
           else src.start(ctx.currentTime, -offsetSec);
           srcs.push(src);
+          dbg(`[Preview] Instrumental → OK (${(instBlobForPreview.size/1024).toFixed(0)}KB, gain=${gain.gain.value})`);
+        } else {
+          dbg(`[Preview] Instrumental → SKIP (introuvable en IDB pour inst_${selected.id})`);
         }
       } catch (e: any) {
-        console.warn('[Preview] Instrumental ignoré:', e.message);
+        dbg(`[Preview] Instrumental → EXCEPTION: ${e?.message}`);
       }
     }
 
