@@ -479,8 +479,19 @@ function doubleTrack(mono,sr){
     }
     return out;
   };
-  const sL=resample(mono,1/Math.pow(2,0.10/12));
-  const sR=resample(mono,1/Math.pow(2,-0.10/12));
+  // FIX v5 "on distingue deux voix" : v3/v4 n'avaient touché QUE le délai
+  // (2-6ms → 16-29ms modulé), en s'appuyant sur l'effet Haas — mais la
+  // recherche montre que des délais jusqu'à ~30-40ms fusionnent déjà très
+  // bien pour de la voix, MÊME sans modulation. Le délai n'était donc pas
+  // le vrai coupable. L'effet Haas ne fusionne que du contenu QUASI
+  // IDENTIQUE — or on désaccordait chaque copie de ±10 cents (0.10 ST),
+  // largement assez pour qu'une oreille exercée suive une trajectoire de
+  // hauteur légèrement différente sur une note tenue = ça se lit comme une
+  // deuxième voix distincte, indépendamment du timing. On réduit à ±3 cents
+  // (assez pour casser le filtrage en peigne statique, pas assez pour être
+  // suivi comme une hauteur différente).
+  const sL=resample(mono,1/Math.pow(2,0.03/12));
+  const sR=resample(mono,1/Math.pow(2,-0.03/12));
   // FIX v3 "toujours 3 voix / écho" : réduire un délai FIXE, aussi court
   // soit-il, ne suffit pas — un délai statique et parfaitement périodique se
   // lit toujours comme une réflexion numérique (comb filtering), pas comme
@@ -505,8 +516,12 @@ function doubleTrack(mono,sr){
   // écho n'est PAS un délai plus court — c'est une modulation LFO du délai
   // dans le temps (comme une bande qui varie légèrement en vitesse), qui
   // empêche le délai d'être parfaitement statique/périodique.
-  const baseDelayL = 0.016 * sr, modDepthL = 0.004 * sr, modRateL = 0.5; // Hz — ~12-20ms
-  const baseDelayR = 0.024 * sr, modDepthR = 0.005 * sr, modRateR = 0.7; // ~19-29ms
+  // FIX v5 : profondeur de modulation réduite (4-5ms → 2-2.5ms). Un swing
+  // de délai trop large ressemble à un chorus marqué (chaque copie "ondule"
+  // audiblement en hauteur), ce qui ajoutait aussi à l'impression de
+  // deuxième voix, en plus du désaccord corrigé plus haut.
+  const baseDelayL = 0.016 * sr, modDepthL = 0.002 * sr, modRateL = 0.5; // Hz — ~14-18ms
+  const baseDelayR = 0.024 * sr, modDepthR = 0.0025 * sr, modRateR = 0.7; // ~21.5-26.5ms
   const maxDelay = Math.ceil(Math.max(baseDelayL + modDepthL, baseDelayR + modDepthR)) + 2;
   const outLen = len + maxDelay;
   const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
@@ -679,6 +694,15 @@ function processChunked(mono, semitones, sampleRate, trackIndex) {
   // et seule la portion déjà stable est gardée dans la sortie.
   const overlapSamp = Math.floor(sampleRate * 0.1);
   const preRollSamp  = Math.floor(sampleRate * 1.5); // 1.5s de "chauffe" avant chaque coupure
+  // FIX "trop d'artefacts" (clics aux coupures de chunk) : le pré-roll
+  // évite déjà le grincement de stabilisation, mais une simple concaténation
+  // brute de deux rendus indépendants peut encore créer une discontinuité
+  // audible à la jonction (les deux sorties de la moteur phase-vocoder ne
+  // s'alignent pas forcément échantillon pour échantillon). Confirmé par
+  // analyse de signal : des clics se regroupent quasiment pile aux
+  // timestamps de coupure (20s, 40s, 60s...). On fond maintenant en fondu
+  // enchaîné (~15ms) à chaque jonction au lieu d'un cut sec.
+  const crossfadeSamp = Math.max(1, Math.floor(sampleRate * 0.015));
   const final = new Float32Array(mono.length + overlapSamp * 4);
   let outOff = 0;
   let pos = 0;
@@ -719,10 +743,33 @@ function processChunked(mono, semitones, sampleRate, trackIndex) {
     const keepLen = hasMore
       ? Math.floor(usableLen * (mainSamp / (chunkView.length - actualPreRoll)))
       : usableLen;
-    if (outOff + keepLen <= final.length) {
-      final.set(processed.subarray(skipLen, skipLen + keepLen), outOff);
+
+    // fadeIn : chevauche le fadeOut déjà écrit par le chunk précédent
+    const fadeIn = (pos > 0) ? Math.min(crossfadeSamp, skipLen, outOff) : 0;
+    // fadeOut : puise dans l'overlap déjà calculé (contexte futur réel, pas jeté)
+    const fadeOut = hasMore ? Math.min(crossfadeSamp, Math.max(0, processed.length - skipLen - keepLen)) : 0;
+    const writeStart = skipLen - fadeIn;
+    const writeLen = keepLen + fadeIn + fadeOut;
+    const dstStart = outOff - fadeIn;
+
+    if (dstStart >= 0 && dstStart + writeLen <= final.length) {
+      for (let i = 0; i < writeLen; i++) {
+        const v = processed[writeStart + i];
+        if (i < fadeIn) {
+          const t = i / fadeIn; // 0 → 1 : le contenu précédent s'éteint, celui-ci apparaît
+          final[dstStart + i] = final[dstStart + i] * (1 - t) + v * t;
+        } else {
+          final[dstStart + i] = v;
+        }
+      }
+      outOff = dstStart + writeLen - fadeOut; // le fadeOut sera repris par le prochain chunk
+    } else {
+      // Repli sécuritaire (ne devrait pas arriver) : écriture directe sans fondu
+      if (outOff + keepLen <= final.length) {
+        final.set(processed.subarray(skipLen, skipLen + keepLen), outOff);
+      }
+      outOff += keepLen;
     }
-    outOff += keepLen;
     processed = null; // libère immédiatement — eligible GC avant prochain chunk
     pos = end;
   }

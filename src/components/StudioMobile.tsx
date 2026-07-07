@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.376';
+const BUILD_VERSION = 'v7.6.379';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1052,6 +1052,43 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
           const instBlobForMix = await getInstBlob();
           if (instBlobForMix && instBlobForMix.size > 100) {
             const instTrackUrl = URL.createObjectURL(instBlobForMix);
+            // FIX "musique trop forte" : un gain fixe (0.7) ignore le niveau réel de
+            // l'instrumental par rapport à la voix — les stems instrumentaux sont
+            // souvent déjà proches de 0dBFS, contrairement à une voix enregistrée
+            // à un gain d'entrée plus prudent. On mesure les deux peaks et on
+            // calibre l'inst pour qu'il arrive ~6dB sous la voix (ratio 0.5),
+            // au lieu d'appliquer un multiplicateur brut sur un signal déjà fort.
+            let instGain = 0.45; // repli si l'analyse échoue
+            try {
+              const mainVoiceTrack = mixProject.tracks.find((t: any) => t.trackIndex === 0 && !t.isGenerated);
+              if (mainVoiceTrack) {
+                const voiceBlob = await studioService.resolveBlobAsync(mainVoiceTrack.dataUrl, mainVoiceTrack.id);
+                if (voiceBlob) {
+                  const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+                  const peakOf = (buf: AudioBuffer) => {
+                    let pk = 0;
+                    for (let c = 0; c < buf.numberOfChannels; c++) {
+                      const ch = buf.getChannelData(c);
+                      for (let i = 0; i < ch.length; i++) { const a = Math.abs(ch[i]); if (a > pk) pk = a; }
+                    }
+                    return pk;
+                  };
+                  const [voiceBuf, instBuf] = await Promise.all([
+                    voiceBlob.arrayBuffer().then(ab => tmpCtx.decodeAudioData(ab)),
+                    instBlobForMix.arrayBuffer().then(ab => tmpCtx.decodeAudioData(ab)),
+                  ]);
+                  await tmpCtx.close();
+                  const voicePeak = peakOf(voiceBuf);
+                  const instPeak = peakOf(instBuf);
+                  if (voicePeak > 0.001 && instPeak > 0.001) {
+                    instGain = Math.max(0.15, Math.min(0.9, (voicePeak * 0.5) / instPeak));
+                  }
+                  (window as any).__addLog?.(`[Mix] Balance inst : voix pk=${voicePeak.toFixed(3)} inst pk=${instPeak.toFixed(3)} → gain=${instGain.toFixed(2)}`);
+                }
+              }
+            } catch (e: any) {
+              console.warn('[Mix] Analyse de balance inst échouée, repli sur gain fixe:', e.message);
+            }
             mixProject = {
               ...mixProject,
               tracks: [...mixProject.tracks, {
@@ -1062,7 +1099,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
                 transferred: false, fileName: 'instrumental.mp4',
                 trackIndex: -1, trackLabel: 'Instrumental',
                 isInstrumental: true,
-                gain: 0.7, pan: 0, muted: false,
+                gain: instGain, pan: 0, muted: false,
               } as any],
             };
             includedInst = true;

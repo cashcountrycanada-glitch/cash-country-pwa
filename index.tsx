@@ -2,6 +2,69 @@ import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import StudioMobile from './components/StudioMobile';
 
+// ── Filet de sécurité RACINE ────────────────────────────────────────────────
+// ScreenErrorBoundary (dans StudioMobile.tsx) protège chaque écran, mais si une
+// exception survient PENDANT que StudioMobile construit ses props/JSX (avant
+// même qu'un boundary enfant ne soit monté), React démonte TOUT l'arbre — et
+// comme rien n'entourait StudioMobile ici, `root` se retrouvait totalement
+// vide : écran noir, sans aucun message, impossible à diagnostiquer sans
+// rebrancher un débogueur. Ce boundary racine attrape ce cas et affiche un
+// écran de secours exploitable, quel que soit l'endroit précis du crash.
+class RootErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; errorMsg: string }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, errorMsg: '' };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, errorMsg: error?.message || String(error) };
+  }
+  componentDidCatch(error: any, info: any) {
+    console.error('[RootErrorBoundary] Crash application:', error, info);
+    try {
+      const msg = `[${new Date().toISOString().slice(11, 19)}] RootErrorBoundary: ${error?.message || error}`;
+      const existing = JSON.parse(localStorage.getItem('cc_crash_log') || '[]');
+      existing.unshift(msg);
+      localStorage.setItem('cc_crash_log', JSON.stringify(existing.slice(0, 10)));
+    } catch {}
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          minHeight: '100vh', background: '#020202', color: '#fff',
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', gap: 16, padding: '0 24px', textAlign: 'center',
+          fontFamily: 'sans-serif',
+        }}>
+          <p style={{ fontSize: 40 }}>⚠️</p>
+          <p style={{ fontWeight: 900, fontSize: 20, letterSpacing: 2, textTransform: 'uppercase' }}>
+            Application indisponible
+          </p>
+          <p style={{ fontSize: 11, color: '#71717a', maxWidth: 320 }}>
+            Une erreur inattendue a stoppé l'appli. Tes prises et projets sont sauvegardés localement.
+          </p>
+          <p style={{ fontSize: 9, color: '#3f3f46', fontFamily: 'monospace', maxWidth: 320, wordBreak: 'break-all' }}>
+            {this.state.errorMsg}
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              padding: '12px 24px', background: '#dc2626', borderRadius: 16, border: 'none',
+              color: '#fff', fontWeight: 900, fontSize: 13, letterSpacing: 2, textTransform: 'uppercase',
+              marginTop: 8,
+            }}>
+            ↻ Relancer
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // Sur Railway, App.tsx et AudienceMode n'existent pas - on détecte le mode ICI
 // pour ne jamais importer App (qui causait MODULE_OFFLINE sur Railway).
 const _rh = window.location.hash.replace('#','').trim();
@@ -45,7 +108,9 @@ if (rootElement) {
 
   root.render(
     <React.StrictMode>
-      <StudioMobileWithSongs />
+      <RootErrorBoundary>
+        <StudioMobileWithSongs />
+      </RootErrorBoundary>
     </React.StrictMode>
   );
 }

@@ -231,10 +231,40 @@ export default function MixerScreen({
 
   const startPreview = async () => {
     if (isPreviewing) { stopPreview(); return; }
-    const currentTracks = project?.tracks || [];
-    if (currentTracks.length === 0) return;
     const dbg = (msg: string) => { try { (window as any).__addLog?.(msg); } catch {} console.log(msg); };
-    dbg(`[Preview] ${currentTracks.length} piste(s) dans project.tracks`);
+    // FIX "layers pas utilisés / voix réduite" : le Mixdown (handleMix côté
+    // StudioMobile.tsx) filtre déjà pour ne garder qu'UN SEUL take actif par
+    // piste (takeSlot pour la voix principale, activeManualSlots pour les
+    // harmonies manuelles 2-5) — mais Preview Mix jouait TOUT project.tracks
+    // sans ce filtre. Si d'anciens takes non-actifs traînent (non mutés),
+    // ils jouaient EN MÊME TEMPS que le take actif : ça peut noyer/masquer
+    // les layers générés dans le mélange, et surtout créer de l'annulation
+    // de phase avec la voix principale (deux prises quasi identiques qui se
+    // superposent = perte de niveau/clarté perçue comme "voix réduite").
+    // On applique maintenant exactement la même règle que le Mixdown.
+    const activeSlot = takeSlot ?? 'A';
+    const seenVoice = new Set<string>();
+    const seenHarmonySlot = new Set<string>();
+    const rawTracks = project?.tracks || [];
+    const currentTracks = rawTracks.filter((t: any) => {
+      if (t.trackIndex === 0 && !t.isGenerated) {
+        const slot = t.takeSlot ?? 'A';
+        if (seenVoice.has(slot)) return false;
+        seenVoice.add(slot);
+        return slot === activeSlot;
+      }
+      if (t.trackIndex >= 2 && t.trackIndex <= 5 && !t.isGenerated) {
+        const slot = t.takeSlot ?? 'A';
+        const preferredSlot = activeManualSlots[t.trackIndex] ?? 'A';
+        const key = `${t.trackIndex}_${slot}`;
+        if (seenHarmonySlot.has(key)) return false;
+        seenHarmonySlot.add(key);
+        return slot === preferredSlot;
+      }
+      return true; // double-tracking (idx=1) + layers générés : toujours inclus
+    });
+    if (currentTracks.length === 0) return;
+    dbg(`[Preview] ${currentTracks.length}/${rawTracks.length} piste(s) retenue(s) après filtre slot actif (${activeSlot})`);
 
     // ── iOS : AudioContext DOIT être créé synchroniquement dans le user gesture ──
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
