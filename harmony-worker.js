@@ -487,8 +487,9 @@ function doubleTrack(mono,sr){
     out.set(buf.subarray(0, Math.min(buf.length, len)));
     return out;
   };
-  const sL = fitLength(rbPitchShift(mono, 0.03, sr));
-  const sR = fitLength(rbPitchShift(mono, -0.03, sr));
+  const lightShift = (view, semi, sr) => rbPitchShift(view, semi, sr);
+  const sL = fitLength(processChunked(mono, 0.03, sr, undefined, lightShift));
+  const sR = fitLength(processChunked(mono, -0.03, sr, undefined, lightShift));
   // FIX v3 "toujours 3 voix / écho" : réduire un délai FIXE, aussi court
   // soit-il, ne suffit pas — un délai statique et parfaitement périodique se
   // lit toujours comme une réflexion numérique (comb filtering), pas comme
@@ -675,10 +676,11 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
 // durée), donc 20s reste avec une marge confortable sous le seuil de crash
 // historique tout en divisant par ~2 le nombre de coupures de chunk (donc de
 // points où l'algo doit se "re-stabiliser").
-function processChunked(mono, semitones, sampleRate, trackIndex) {
+function processChunked(mono, semitones, sampleRate, trackIndex, processFn) {
+  const doProcess = processFn || ((view, semi, sr) => processSingle(view, semi, sr, trackIndex));
   const chunkSamp = Math.floor(sampleRate * 20);
 
-  if (mono.length <= chunkSamp) return processSingle(mono, semitones, sampleRate, trackIndex);
+  if (mono.length <= chunkSamp) return doProcess(mono, semitones, sampleRate);
 
   // FIX "ça grince puis devient clair au milieu d'une phrase" :
   // Chaque chunk relançait Rubber Band à zéro, sans AUCUN contexte avant le
@@ -730,7 +732,7 @@ function processChunked(mono, semitones, sampleRate, trackIndex) {
       actualPreRoll = mirrorLen;
     }
 
-    let processed = processSingle(chunkView, semitones, sampleRate, trackIndex);
+    let processed = doProcess(chunkView, semitones, sampleRate);
     // Portion à sauter au début = le pré-roll (proportionnel, comme pour keepLen)
     const skipLen = actualPreRoll > 0
       ? Math.floor(processed.length * (actualPreRoll / chunkView.length))
