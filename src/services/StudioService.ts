@@ -1823,26 +1823,32 @@ export const studioService = {
       // Principe : renforcement subtil — les layers se fondent dans la voix principale
       // Gains très discrets : on les sent, on ne les entend pas séparément
       // Pre-delay Sun Studio (28-51ms) déjà appliqué dans le mix
+      //
+      // FIX CRITIQUE "les mauvais layers reviennent après régénération" :
+      // ce tableau (la vraie source utilisée à la génération) était resté sur
+      // les anciennes valeurs (+5/-12/+7/-5 ST) alors que HARMONY_DEFS dans
+      // MixerScreen.tsx (l'affichage) avait déjà été corrigé pour rester dans
+      // la zone sûre ±3 ST. Résultat : taper "Régénérer" ne pouvait JAMAIS
+      // corriger le souci — ça refabriquait le même audio à risque à chaque
+      // fois. Les deux sources sont maintenant alignées sur les mêmes valeurs.
 
       // 1. Double tracking — unisson, épaisseur naturelle humaine
       // Cash et Elvis rechanaient systématiquement leurs propres voix
       { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.28, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
 
-      // 2. +5 ST — quarte juste, signature Alan Jackson et country classique
-      // Aussi utilisé par Garth Brooks dans les couplets
-      { trackIndex: 2, trackLabel: 'Layer +5 ST',     pitch: 5,   gain: 0.20, pan: 0.35,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
+      // 2. +2 ST — seconde majeure, signature Alan Jackson (remplace l'ancien +5 ST/quarte,
+      // hors zone sûre ±3 ST)
+      { trackIndex: 2, trackLabel: 'Layer +2 ST',     pitch: 2,   gain: 0.20, pan: 0.35,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
 
-      // 3. Octave bas — grave profond Cash, très discret
-      // Johnny Cash l'utilisait pour renforcer le bas sans changer la couleur
-      { trackIndex: 3, trackLabel: 'Octave bas',      pitch: -12, gain: 0.22, pan: 0.0,   emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
+      // 3. -3 ST — tierce grave, couleur Johnny Cash (remplace l'ancienne octave -12ST,
+      // le pire cas historique pour les artefacts ET les crashs mémoire iOS)
+      { trackIndex: 3, trackLabel: 'Layer -3 ST',     pitch: -3,  gain: 0.22, pan: 0.0,   emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
 
-      // 4. +7 ST — quinte, signature Garth Brooks dans les refrains puissants
-      // Très discret pour ne pas sonner "chorale"
-      { trackIndex: 4, trackLabel: 'Layer +7 ST',     pitch: 7,   gain: 0.15, pan: -0.35, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
+      // 4. +3 ST — tierce, puissance Garth Brooks (remplace l'ancien +7 ST/quinte)
+      { trackIndex: 4, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.15, pan: -0.35, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
 
-      // 5. -5 ST — quarte grave, chaleur Elvis dans les refrains
-      // Elvis l'utilisait avec les Jordanaires pour le soutien grave
-      { trackIndex: 5, trackLabel: 'Layer -5 ST',     pitch: -5,  gain: 0.16, pan: 0.30,  emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
+      // 5. -2 ST — seconde grave, chaleur Elvis (remplace l'ancien -5 ST/quarte grave)
+      { trackIndex: 5, trackLabel: 'Layer -2 ST',     pitch: -2,  gain: 0.16, pan: 0.30,  emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
     ];
     // Si targetTrackIndex spécifié → générer seulement cette harmonie
     const layers = targetTrackIndex !== undefined

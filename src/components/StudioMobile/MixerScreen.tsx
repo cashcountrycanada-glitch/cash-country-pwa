@@ -1123,6 +1123,14 @@ export default function MixerScreen({
                   const isGen         = generatingIndex === h.trackIndex;
                   const isDone        = generatedDone.has(h.trackIndex);
                   const appliedFxId   = (existingTrack as any)?.fxPresetId as string | undefined;
+                  // FIX "les mauvais layers" : si une piste a été générée AVANT un
+                  // changement de preset (ex: l'ancien "+5 ST"/"Octave -12ST" remplacés
+                  // depuis par des intervalles sûrs ±3 ST), l'audio stocké ne correspond
+                  // plus au preset actuel — on le signale au lieu de le montrer comme
+                  // "généré" sans distinction, ce qui prêtait à confusion.
+                  const storedPitch = (existingTrack as any)?.pitchShift;
+                  const isStalePreset = hasTrack && !isManualRecording
+                    && storedPitch !== undefined && storedPitch !== h.pitch;
 
                   return (
                     <div
@@ -1156,6 +1164,12 @@ export default function MixerScreen({
                             {isManualRecording && (
                               <span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-blue-900/40 text-blue-300">
                                 🎤 Voix réelle
+                              </span>
+                            )}
+                            {isStalePreset && (
+                              <span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-red-900/40 text-red-300"
+                                title={`Généré à ${storedPitch > 0 ? '+' : ''}${storedPitch} ST (ancien preset) — le preset actuel est ${h.pitch > 0 ? '+' : ''}${h.pitch} ST`}>
+                                ⚠️ Ancien preset ({storedPitch > 0 ? '+' : ''}{storedPitch} ST) — régénère
                               </span>
                             )}
                             {h.pitch !== 0 && (
