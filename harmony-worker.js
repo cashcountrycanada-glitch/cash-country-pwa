@@ -471,27 +471,24 @@ function applyGainPanDouble(inL,inR,len,gain){
 // ═══════════════════════════════════════════════════════════════
 function doubleTrack(mono,sr){
   const len=mono.length;
-  const resample=(src,ratio)=>{
-    const outLen=Math.floor(src.length/ratio),out=new Float32Array(outLen);
-    for(let i=0;i<outLen;i++){
-      const pos=i*ratio,idx=Math.min(Math.floor(pos)|0,src.length-2);
-      out[i]=src[idx]+(src[idx+1]-src[idx])*(pos-Math.floor(pos));
-    }
+  // FIX "décalage progressif qui s'accumule" : l'ancien resample() linéaire
+  // change la hauteur en changeant la VITESSE de lecture (comme ralentir/
+  // accélérer une bande analogique) — pitch et durée sont couplés. Pour un
+  // désaccord de 3 cents, la copie détournée devient ~0.017% plus longue que
+  // l'original ; chaque échantillon i de la copie provient alors d'une
+  // position i*ratio dans l'original, un décalage qui CROÎT linéairement
+  // avec i. Sur une chanson de 3:43, ça donne ~0.3-0.4s de dérive à la fin —
+  // exactement "parfait au début, de plus en plus désynchro". On utilise
+  // maintenant Rubber Band (déjà utilisé ailleurs, timeRatio=1.0) qui décale
+  // la hauteur SANS toucher à la durée : plus aucune dérive possible.
+  const fitLength = (buf) => {
+    if (buf.length === len) return buf;
+    const out = new Float32Array(len);
+    out.set(buf.subarray(0, Math.min(buf.length, len)));
     return out;
   };
-  // FIX v5 "on distingue deux voix" : v3/v4 n'avaient touché QUE le délai
-  // (2-6ms → 16-29ms modulé), en s'appuyant sur l'effet Haas — mais la
-  // recherche montre que des délais jusqu'à ~30-40ms fusionnent déjà très
-  // bien pour de la voix, MÊME sans modulation. Le délai n'était donc pas
-  // le vrai coupable. L'effet Haas ne fusionne que du contenu QUASI
-  // IDENTIQUE — or on désaccordait chaque copie de ±10 cents (0.10 ST),
-  // largement assez pour qu'une oreille exercée suive une trajectoire de
-  // hauteur légèrement différente sur une note tenue = ça se lit comme une
-  // deuxième voix distincte, indépendamment du timing. On réduit à ±3 cents
-  // (assez pour casser le filtrage en peigne statique, pas assez pour être
-  // suivi comme une hauteur différente).
-  const sL=resample(mono,1/Math.pow(2,0.03/12));
-  const sR=resample(mono,1/Math.pow(2,-0.03/12));
+  const sL = fitLength(rbPitchShift(mono, 0.03, sr));
+  const sR = fitLength(rbPitchShift(mono, -0.03, sr));
   // FIX v3 "toujours 3 voix / écho" : réduire un délai FIXE, aussi court
   // soit-il, ne suffit pas — un délai statique et parfaitement périodique se
   // lit toujours comme une réflexion numérique (comb filtering), pas comme
