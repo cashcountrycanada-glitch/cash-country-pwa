@@ -1387,7 +1387,7 @@ export const studioService = {
     // Sauvegarder backup_voice en arriere-plan (fire-and-forget — pas de await)
     if (track.trackIndex === 0 && !(track as any).isGenerated && track.dataUrl && !track.dataUrl.startsWith('opfs:')) {
       const db2 = getOfflineDB();
-      this.resolveBlobAsync(track.dataUrl).then(b2 => {
+      this.resolveBlobAsync(track.dataUrl, track.id).then(b2 => {
         if (b2 && b2.size > 1000) db2.saveAudio(`backup_voice_${track.id}`, b2, { type: 'backup_voice', savedAt: Date.now() }).catch(() => {});
       }).catch(() => {});
     }
@@ -1440,7 +1440,7 @@ export const studioService = {
     try {
       // Chercher d'abord en mémoire (sync), puis IndexedDB si absent (session précédente)
       let blob = this.resolveBlob(dataUrl);
-      if (!blob) blob = await this.resolveBlobAsync(dataUrl);
+      if (!blob) blob = await this.resolveBlobAsync(dataUrl, cacheKey);
       if (!blob) return []; // introuvable même en IDB
       const arrayBuffer = await blob.arrayBuffer();
       const audioBuffer = await ctx.decodeAudioData(arrayBuffer); const data = audioBuffer.getChannelData(0);
@@ -1710,7 +1710,7 @@ export const studioService = {
     let srcBlob: Blob | null = null;
     const db = getOfflineDB();
     if (mainVoice.dataUrl && mainVoice.dataUrl.length > 1000) {
-      srcBlob = await this.resolveBlobAsync(mainVoice.dataUrl);
+      srcBlob = await this.resolveBlobAsync(mainVoice.dataUrl, mainVoice.id);
     }
     if (!srcBlob || srcBlob.size < 1000) {
       try {
@@ -1950,7 +1950,7 @@ export const studioService = {
 
     return generated;
   },
-  async applyFxToTrack(dataUrl: string, fx: { hpf?: number; lowGain: number; lowMidGain?: number; midGain: number; highGain: number; airGain?: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; autotune?: number; autotuneSpeed?: string; }, onProgress?: (pct: number) => void): Promise<string> {
+  async applyFxToTrack(dataUrl: string, fx: { hpf?: number; lowGain: number; lowMidGain?: number; midGain: number; highGain: number; airGain?: number; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compKnee: number; saturation: number; reverb: string; reverbMix: number; autotune?: number; autotuneSpeed?: string; }, onProgress?: (pct: number) => void, trackId?: string): Promise<string> {
     onProgress?.(5);
     // Décoder — réutiliser le cache si disponible
     let srcBuf: AudioBuffer;
@@ -1984,7 +1984,7 @@ export const studioService = {
           }
         }
       } else {
-        const resolved = await this.resolveBlobAsync(dataUrl);
+        const resolved = await this.resolveBlobAsync(dataUrl, trackId);
         if (!resolved) throw new Error('Blob audio introuvable — réessayez');
         srcBlob = resolved;
       }

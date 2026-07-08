@@ -487,7 +487,7 @@ export default function MixerScreen({
       let blob: Blob | null = null;
       // resolveBlobAsync gère data:, blob:, opfs: et les clés IDB
       if (voice.dataUrl) {
-        blob = await studioService.resolveBlobAsync(voice.dataUrl);
+        blob = await studioService.resolveBlobAsync(voice.dataUrl, voice.id);
       }
       if (!blob || blob.size < 1000) {
         blob = await studioOfflineDB.getAudio(`rec_${voice.id}`);
@@ -564,14 +564,17 @@ export default function MixerScreen({
   // Backup de la voix principale — export fichier audio directement
   // (localStorage trop limité pour les blobs audio sur iOS)
   const backupMainVoice = async () => {
-    if (!mainVoice?.dataUrl) return;
+    if (!mainVoice) return;
     try {
       // FIX "Erreur backup : Load failed" — mainVoice.dataUrl peut être une
       // sentinelle "opfs:xxx" (blob volumineux stocké dans OPFS, pas une vraie
       // URL fetchable) plutôt qu'un vrai dataUrl base64. fetch("opfs:...")
       // échoue immédiatement dans Safari avec "Load failed". Il faut passer
       // par resolveBlobAsync() qui sait lire depuis OPFS/IDB dans ce cas.
-      const blob = await studioService.resolveBlobAsync(mainVoice.dataUrl);
+      // FIX "fichier introuvable" malgré Play qui fonctionne : dataUrl peut
+      // être vide (chargement à la demande) — resolveBlobAsync retombe alors
+      // sur rec_<id> en IDB, comme le fait déjà le bouton Play.
+      const blob = await studioService.resolveBlobAsync(mainVoice.dataUrl, mainVoice.id);
       if (!blob) { alert('Erreur backup : fichier introuvable en mémoire.'); return; }
       const safeTitle = (mainVoice.songTitle || 'voix').replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
       const ext  = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('mpeg') ? 'mp3' : 'wav';
@@ -597,12 +600,13 @@ export default function MixerScreen({
 
   // Export audio de la voix principale vers iPhone
   const exportMainVoice = async () => {
-    if (!mainVoice?.dataUrl || exportingVoice) return;
+    if (!mainVoice || exportingVoice) return;
     setExportingVoice(true);
     try {
       // Même fix que backupMainVoice : passer par resolveBlobAsync() pour
-      // gérer les sentinelles "opfs:" au lieu de fetch() direct.
-      const blob = await studioService.resolveBlobAsync(mainVoice.dataUrl);
+      // gérer les sentinelles "opfs:" au lieu de fetch() direct, ET l'id en
+      // secours pour le cas où dataUrl est vide (chargement à la demande).
+      const blob = await studioService.resolveBlobAsync(mainVoice.dataUrl, mainVoice.id);
       if (!blob) { alert('Erreur export : fichier introuvable en mémoire.'); return; }
       const safeTitle = (mainVoice.songTitle || 'voix').replace(/[^a-zA-Z0-9]/g, '_');
       const ext  = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('mpeg') ? 'mp3' : 'wav';

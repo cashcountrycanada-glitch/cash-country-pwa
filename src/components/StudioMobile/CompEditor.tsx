@@ -40,7 +40,7 @@ async function getRecordingDataUrl(rec: MobileRecording): Promise<string | null>
   // Sentinelle opfs: → résoudre via le blob réel puis convertir en blob: URL
   if (rec.dataUrl && rec.dataUrl.startsWith('opfs:')) {
     try {
-      const blob = await studioService.resolveBlobAsync(rec.dataUrl);
+      const blob = await studioService.resolveBlobAsync(rec.dataUrl, rec.id);
       if (blob) return URL.createObjectURL(blob);
     } catch {}
   }

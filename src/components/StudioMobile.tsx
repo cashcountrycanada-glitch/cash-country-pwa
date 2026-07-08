@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.382';
+const BUILD_VERSION = 'v7.6.383';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1193,10 +1193,11 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const handleAutoSync = async () => {
     if (!project || autoSyncing) return;
     const mainTrack = project.tracks.find((t: any) => t.trackIndex === 0 && !t.isGenerated);
-    if (!mainTrack?.dataUrl) { alert('Voix principale introuvable'); return; }
+    if (!mainTrack) { alert('Voix principale introuvable'); return; }
     setAutoSyncing(true);
     try {
-      const blob = await studioService.resolveBlobAsync(mainTrack.dataUrl);
+      const blob = await studioService.resolveBlobAsync(mainTrack.dataUrl, mainTrack.id);
+      if (!blob) { alert('Voix principale introuvable en mémoire'); setAutoSyncing(false); return; }
       const url = URL.createObjectURL(blob);
       const detectedMs = await audio.autoDetectOffset(url);
       URL.revokeObjectURL(url);

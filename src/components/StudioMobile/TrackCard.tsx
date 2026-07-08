@@ -54,7 +54,7 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
     if (downloadingTrack) return;
     setDownloadingTrack(true);
     try {
-      const blob = await studioService.resolveBlobAsync(track.dataUrl);
+      const blob = await studioService.resolveBlobAsync(track.dataUrl, track.id);
       if (!blob) { alert('Fichier introuvable en mémoire pour cette piste.'); return; }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -118,7 +118,6 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
 
   async function startLivePreview(fx: FxPreset) {
     stopLivePreview();
-    if (!track.dataUrl) return;
     try {
       const ctx = liveCtxRef.current && liveCtxRef.current.state !== 'closed'
         ? liveCtxRef.current
@@ -129,7 +128,7 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
       if (!liveBufRef.current) {
         // Résoudre le blob correctement — supporte data:, opfs:, blob:
         // fetch(track.dataUrl) ne fonctionne pas sur Safari iOS pour les data: URL
-        const blob = await studioService.resolveBlobAsync(track.dataUrl);
+        const blob = await studioService.resolveBlobAsync(track.dataUrl, track.id);
         if (!blob || blob.size === 0) throw new Error('Blob introuvable pour preview');
         const ab = await blob.arrayBuffer();
         liveBufRef.current = await ctx.decodeAudioData(ab);
@@ -254,6 +253,7 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
       const newDataUrl = await studioService.applyFxToTrack(
         sourceDataUrl, fx,
         (pct) => setApplyPct(pct),
+        track.id,
       );
 
       // Stocker le blob FX sous __trackBlob_${track.id} pour que playRecording
