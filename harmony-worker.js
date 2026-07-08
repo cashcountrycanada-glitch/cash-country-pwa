@@ -701,7 +701,7 @@ function processChunked(mono, semitones, sampleRate, trackIndex, processFn) {
   // analyse de signal : des clics se regroupent quasiment pile aux
   // timestamps de coupure (20s, 40s, 60s...). On fond maintenant en fondu
   // enchaîné (~15ms) à chaque jonction au lieu d'un cut sec.
-  const crossfadeSamp = Math.max(1, Math.floor(sampleRate * 0.015));
+  const crossfadeSamp = Math.max(1, Math.floor(sampleRate * 0.04));
   const final = new Float32Array(mono.length + overlapSamp * 4);
   let outOff = 0;
   let pos = 0;
@@ -755,8 +755,14 @@ function processChunked(mono, semitones, sampleRate, trackIndex, processFn) {
       for (let i = 0; i < writeLen; i++) {
         const v = processed[writeStart + i];
         if (i < fadeIn) {
-          const t = i / fadeIn; // 0 → 1 : le contenu précédent s'éteint, celui-ci apparaît
-          final[dstStart + i] = final[dstStart + i] * (1 - t) + v * t;
+          const t = i / fadeIn; // 0 → 1
+          // Fondu à puissance égale (cosine) plutôt que linéaire : un fondu
+          // linéaire creuse le volume perçu au milieu de la transition quand
+          // les deux sources ne sont pas parfaitement en phase, ce qui rend
+          // la jonction plus audible au lieu de moins.
+          const gOut = Math.cos(t * Math.PI / 2);
+          const gIn = Math.sin(t * Math.PI / 2);
+          final[dstStart + i] = final[dstStart + i] * gOut + v * gIn;
         } else {
           final[dstStart + i] = v;
         }
