@@ -266,6 +266,7 @@ function applyOrganicJitter(signal, sr, seed) {
   // Pré-calculer les échantillons source avant modification in-place
   // On doit lire l'original donc on copie d'abord — mais utilisons un seul buffer
   const src=signal.slice(); // 1 copie inévitable pour lire l'original
+  let srcPos=0; // FIX : position ACCUMULÉE, pas recalculée depuis i à chaque échantillon
   for(let i=0;i<len;i++){
     const noiseD=rand()*2-1;
     const noiseF=rand()*2-1;
@@ -274,11 +275,18 @@ function applyOrganicJitter(signal, sr, seed) {
     lpF=lpF+alphaF*(noiseF-lpF);
     const flutter=1.0+lpF*0.015;
     const ratio=Math.pow(2,driftCents/1200);
-    const srcPos=i*ratio;
-    const s0=Math.max(0,Math.min(len-2,Math.floor(srcPos)|0));
+    // FIX qualité : interpolation cubique (Hermite) au lieu de linéaire —
+    // moins de distorsion HF, important car ce signal repasse encore par un
+    // 2e resampling juste après (variation de phrase).
+    const s1=Math.max(0,Math.min(len-1,Math.floor(srcPos)|0));
     const fr=srcPos-Math.floor(srcPos);
-    const pitched=(src[s0]||0)*(1-fr)+(src[Math.min(s0+1,len-1)]||0)*fr;
+    const s0=Math.max(0,s1-1), s2=Math.min(len-1,s1+1), s3=Math.min(len-1,s1+2);
+    const y0=src[s0]||0, y1=src[s1]||0, y2=src[s2]||0, y3=src[s3]||0;
+    const a0=y3-y2-y0+y1, a1=y0-y1-a0, a2=y2-y0, a3=y1;
+    const pitched = a0*fr*fr*fr + a1*fr*fr + a2*fr + a3;
     signal[i]=pitched*flutter;
+    srcPos+=ratio;
+    if (srcPos > len-1) srcPos = len-1; // sécurité fin de buffer
   }
   return signal; // in-place
 }
@@ -295,13 +303,19 @@ function applyPhraseVariation(signal, sr, depthCents, seed) {
   const alpha=dt/(dt+1/(2*Math.PI*2.5));
   let lp=0;
   const src=signal.slice(); // 1 copie inévitable
+  let srcPos=0; // FIX : même correction — position accumulée, pas i*ratio
   for(let i=0;i<len;i++){
     lp=lp+alpha*((rand()*2-1)-lp);
     const ratio=Math.pow(2,lp*depthCents/1200);
-    const srcPos=i*ratio;
-    const s0=Math.max(0,Math.min(len-2,Math.floor(srcPos)|0));
+    // Même fix qualité : interpolation cubique au lieu de linéaire
+    const s1=Math.max(0,Math.min(len-1,Math.floor(srcPos)|0));
     const fr=srcPos-Math.floor(srcPos);
-    signal[i]=(src[s0]||0)*(1-fr)+(src[Math.min(s0+1,len-1)]||0)*fr;
+    const s0=Math.max(0,s1-1), s2=Math.min(len-1,s1+1), s3=Math.min(len-1,s1+2);
+    const y0=src[s0]||0, y1=src[s1]||0, y2=src[s2]||0, y3=src[s3]||0;
+    const a0=y3-y2-y0+y1, a1=y0-y1-a0, a2=y2-y0, a3=y1;
+    signal[i] = a0*fr*fr*fr + a1*fr*fr + a2*fr + a3;
+    srcPos+=ratio;
+    if (srcPos > len-1) srcPos = len-1;
   }
   return signal; // in-place
 }
