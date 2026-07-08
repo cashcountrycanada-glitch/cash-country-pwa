@@ -217,7 +217,6 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
   }, [isPlaying]);
 
   const handleApplyFx = async (fx: FxPreset) => {
-    if (!track.dataUrl) return;
     setApplyingFx(true); setApplyPct(0); setApplyDone(false);
     try {
       // TOUJOURS appliquer depuis la voix brute originale.
@@ -225,7 +224,8 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
       // 1. __originalBlob_${id}  — blob brut mis de côté dès le 1er FX
       // 2. originalDataUrl persisté sur la piste (session courante seulement)
       // 3. __trackBlob_${id}     — MAIS seulement si pas de blob FX connu
-      // 4. track.dataUrl         — dernier recours
+      // 4. rec_${id} en IDB      — piste jamais chargée en mémoire (chargement à la demande)
+      // 5. track.dataUrl         — dernier recours
       const originalBlob = (window as any)[`__originalBlob_${track.id}`] as Blob | undefined;
       let sourceDataUrl: string;
 
@@ -233,8 +233,8 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
         // Blob brut original mis de côté — source la plus fiable
         sourceDataUrl = URL.createObjectURL(originalBlob);
       } else {
-        sourceDataUrl = (track as any).originalDataUrl || track.dataUrl;
-        if (sourceDataUrl.startsWith('blob:') || sourceDataUrl.startsWith('opfs:')) {
+        sourceDataUrl = (track as any).originalDataUrl || track.dataUrl || '';
+        if (!sourceDataUrl || sourceDataUrl.startsWith('blob:') || sourceDataUrl.startsWith('opfs:')) {
           // Chercher le blob brut dans backup_voice_ (jamais écrasé par les FX)
           const backupBlob = await studioOfflineDB.getAudio(`backup_voice_${track.id}`).catch(() => null);
           if (backupBlob && backupBlob.size > 100) {
@@ -246,9 +246,22 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
             const memBlob = (window as any)[`__trackBlob_${track.id}`] as Blob | undefined;
             if (memBlob && memBlob.size > 100) {
               sourceDataUrl = URL.createObjectURL(memBlob);
+            } else {
+              // Piste jamais chargée en mémoire (chargement à la demande) — la
+              // prise brute existe presque toujours quand même sous rec_<id>.
+              const recBlob = await studioOfflineDB.getAudio(`rec_${track.id}`).catch(() => null);
+              if (recBlob && recBlob.size > 100) {
+                sourceDataUrl = URL.createObjectURL(recBlob);
+                (window as any)[`__originalBlob_${track.id}`] = recBlob;
+              }
             }
           }
         }
+      }
+      if (!sourceDataUrl) {
+        alert('Fichier audio introuvable pour cette piste — essaie de la lire (▶) une fois avant d\'appliquer un FX.');
+        setApplyingFx(false); setApplyPct(0);
+        return;
       }
       const newDataUrl = await studioService.applyFxToTrack(
         sourceDataUrl, fx,
