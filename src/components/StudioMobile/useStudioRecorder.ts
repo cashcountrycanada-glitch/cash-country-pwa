@@ -89,6 +89,12 @@ interface RecorderResult {
   vocalGainNodeRef: React.RefObject<GainNode | null>;
   autoSelectReason: AutoSelectReason;
   activeDeviceLabel: string;
+  inputGain: number;
+  setInputGain: (v: number) => void;
+  monitorVol: number;
+  setMonitorVol: (v: number) => void;
+  recInstVol: number;
+  setRecInstVol: (v: number) => void;
 }
 
 function resolveAutoDevice(
@@ -150,6 +156,27 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
       try { monitorGainRef.current.gain.setTargetAtTime(clamped, audioCtxRef.current.currentTime, 0.015); } catch {}
     }
   };
+  // Volume de l'instrumental ENTENDU pendant l'enregistrement (pas celui du mix
+  // final). Défaut abaissé de 1.4 → 0.9 : à 1.4, la musique dans les écouteurs
+  // pouvait pousser à forcer la voix pour "sortir" par-dessus. Ajustable et
+  // mémorisé, pour ne plus avoir à retoucher le code à chaque fois.
+  const [recInstVol, setRecInstVolRaw] = useState(() => {
+    try { const v = parseFloat(localStorage.getItem('studio_recInstVol_v3') || '0.45'); return isNaN(v) ? 0.45 : Math.max(0.2, Math.min(2.0, v)); } catch { return 0.45; }
+  });
+  const setRecInstVol = (v: number) => {
+    const clamped = Math.max(0.2, Math.min(2.0, v));
+    setRecInstVolRaw(clamped);
+    try { localStorage.setItem('studio_recInstVol_v3', String(clamped)); } catch {}
+    // Mettre à jour en temps réel si l'instrumental joue déjà (GainNode ou <audio>)
+    const gainNode: GainNode | undefined = (window as any).__instGainNode;
+    if (gainNode && audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
+      try { gainNode.gain.setTargetAtTime(clamped, audioCtxRef.current.currentTime, 0.015); } catch {}
+    }
+    const instEl = optsRef.current?.instRef?.current;
+    if (instEl) { try { instEl.volume = Math.max(0, Math.min(1, clamped)); } catch {} }
+  };
+  const recInstVolRef = useRef(recInstVol);
+  useEffect(() => { recInstVolRef.current = recInstVol; }, [recInstVol]);
   const [duration, setDuration]         = useState(0);
   const [analyser, setAnalyser]         = useState<AnalyserNode | null>(null);
   const [vuLevel, setVuLevel]           = useState<number>(0);
@@ -274,7 +301,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
 
         if (!ctx) {
           // Fallback ultime : <audio>.play() séquentiel (pas idéal mais fonctionnel)
-          if (instEl  && optsRef.current.instUrl)       { instEl.play().catch(()=>{}); }
+          if (instEl  && optsRef.current.instUrl)       { try { instEl.volume = Math.max(0, Math.min(1, recInstVolRef.current)); } catch {} instEl.play().catch(()=>{}); }
           if (vocalEl && optsRef.current.vocalGuideUrl) { vocalEl.play().catch(()=>{}); }
           return;
         }
@@ -307,7 +334,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           // iOS réduit le volume AudioContext ~50% quand le micro est actif (Voice Processing)
           // On compense avec un gain de 1.4 (2.0 était trop fort — écrasait la voix)
           const instGain = ctx.createGain();
-          instGain.gain.value = 1.4;
+          instGain.gain.value = recInstVolRef.current;
           bsrc.connect(instGain);
           instGain.connect(ctx.destination);
           (window as any).__instBufSrc    = bsrc;
@@ -334,6 +361,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
           }
         } else if (instEl && optsRef.current.instUrl) {
           // Buffer non dispo → fallback <audio>
+          try { instEl.volume = Math.max(0, Math.min(1, recInstVolRef.current)); } catch {}
           instEl.play().catch(() => {});
         }
 
@@ -771,6 +799,7 @@ export function useStudioRecorder(opts: RecorderOptions): RecorderResult {
     punchIn, punchOut, setPunchIn, setPunchOut,
     setPermError, toggleMonitoring, preWarmMic, startRecording, stopRecording,
     monitorVol, setMonitorVol,
+    recInstVol, setRecInstVol,
     vocalGainNodeRef, autoSelectReason, activeDeviceLabel,
   };
 }

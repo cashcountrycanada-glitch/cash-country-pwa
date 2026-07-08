@@ -24,6 +24,7 @@ interface Props {
   vuLevel: number; monitoring: boolean; permError: boolean; httpsUrl: string;
   inputGain: number; onInputGainChange: (v: number) => void;
   monitorVol: number; onMonitorVolChange: (v: number) => void;
+  recInstVol: number; onRecInstVolChange: (v: number) => void;
   instUrl: string | null; instLoading: boolean; instCached: boolean;
   vocalGuideUrl: string | null; vocalLoading: boolean; vocalCached: boolean;
   vocalGuideVol: number; showLyrics: boolean;
@@ -522,6 +523,7 @@ function HarmonyGuide({ preset, vocalGuideUrl, instUrl, isRecording, isSaving, o
 export default function RecordScreen({
   selected, project, currentPreset, reverb, isRecording, isSaving, duration, analyser, vuLevel,
   monitoring, permError, httpsUrl, inputGain, onInputGainChange, monitorVol, onMonitorVolChange,
+  recInstVol, onRecInstVolChange,
   instUrl, instLoading, instCached, vocalGuideUrl, vocalLoading, vocalCached,
   vocalGuideVol, showLyrics, instRef, vocalGuideRef, getInstPlaybackTime, onRefreshSong,
   takeSlot, onTakeSlotChange, slotTakes, onSlotGuide, slotGuideActive,
@@ -968,6 +970,21 @@ export default function RecordScreen({
                 />
                 <span className="text-[9px] text-emerald-400 font-black w-8 text-right">
                   {monitorVol >= 1.0 ? `+${((monitorVol-1)*100).toFixed(0)}%` : `-${((1-monitorVol)*100).toFixed(0)}%`}
+                </span>
+              </div>
+            )}
+            {/* Volume instrumental entendu pendant l'enregistrement — abaisse-le si
+                tu remarques que tu forces la voix quand la musique est forte */}
+            {(monitoring || isRecording) && (
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[9px] text-orange-400 font-black uppercase tracking-widest whitespace-nowrap">🎵 Musique</span>
+                <input type="range" min={0.2} max={2.0} step={0.1}
+                  value={recInstVol}
+                  onChange={e => onRecInstVolChange(parseFloat(e.target.value))}
+                  className="flex-1 h-1 accent-orange-400"
+                />
+                <span className="text-[9px] text-orange-300 font-black w-8 text-right">
+                  {recInstVol >= 1.0 ? `+${((recInstVol-1)*100).toFixed(0)}%` : `-${((1-recInstVol)*100).toFixed(0)}%`}
                 </span>
               </div>
             )}

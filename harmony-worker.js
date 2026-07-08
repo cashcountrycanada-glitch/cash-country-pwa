@@ -631,12 +631,23 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
   for (let i = 0; i < mono.length; i++) prePeak = Math.max(prePeak, Math.abs(mono[i]));
   if (prePeak > 0.001 && prePeak < 0.5) {
     preGain = Math.min(0.707 / prePeak, 8.0); // cible -3 dBFS, plafonné à +18 dB (retour arrière : +30dB a empiré le résultat)
-    // Gate doux : atténue ce qui est sous ~-45 dBFS (souffle/silence entre phrases)
-    // avant le boost, pour éviter de rendre le souffle audible/plus fort que l'original.
+    // FIX "voix étouffée par artefacts" : l'ancien gate agissait sur la valeur
+    // instantanée de CHAQUE échantillon, ce qui déforme la forme d'onde des
+    // passages calmes (une forme de distorsion) avant même le pitch-shift.
+    // Un vocodeur de phase transforme un signal bruité/déformé en grésillement
+    // robotique qui se mélange à la voix (pas juste dans les silences) — c'est
+    // le "bruit musical" classique des algos de pitch-shift. On suit
+    // maintenant une ENVELOPPE lissée (attaque 3ms / relâche 80ms), qui coupe
+    // le souffle/bruit de fond sans déformer la forme d'onde du signal utile.
     const gateThresh = 0.0056; // ~ -45 dBFS
+    const attackCoef  = Math.exp(-1 / (0.003 * sampleRate));
+    const releaseCoef = Math.exp(-1 / (0.080 * sampleRate));
+    let env = 0;
     for (let i = 0; i < mono.length; i++) {
       const a = Math.abs(mono[i]);
-      const g = a < gateThresh ? (a / gateThresh) * (a / gateThresh) : 1.0; // knee quadratique
+      env = a > env ? attackCoef * env + (1 - attackCoef) * a
+                    : releaseCoef * env + (1 - releaseCoef) * a;
+      const g = env < gateThresh ? (env / gateThresh) * (env / gateThresh) : 1.0; // knee quadratique sur l'enveloppe, pas l'échantillon
       mono[i] *= preGain * g;
     }
   }
