@@ -1481,7 +1481,16 @@ export const studioService = {
         const blob = await this.resolveBlobAsync(track.dataUrl || '', track.id);
         if (!blob) { dbg(`[Mix] ${label} → SKIP (blob introuvable, dataUrl=${track.dataUrl ? track.dataUrl.slice(0,20) : 'VIDE'})`); continue; }
         const arrayBuffer = await blob.arrayBuffer();
-        const buffer = await tmpCtx.decodeAudioData(arrayBuffer);
+        let buffer = await tmpCtx.decodeAudioData(arrayBuffer);
+        if (buffer.numberOfChannels > 1) {
+          // Repli mono : le pan est réappliqué plus loin via StereoPannerNode,
+          // donc garder 2 canaux ici ne sert qu'à doubler la mémoire pour rien.
+          const mono = tmpCtx.createBuffer(1, buffer.length, buffer.sampleRate);
+          const dst = mono.getChannelData(0);
+          const ch0 = buffer.getChannelData(0), ch1 = buffer.getChannelData(buffer.numberOfChannels > 1 ? 1 : 0);
+          for (let s = 0; s < buffer.length; s++) dst[s] = (ch0[s] + ch1[s]) * 0.5;
+          buffer = mono;
+        }
         decoded.push({ track, buffer });
         dbg(`[Mix] ${label} → OK (${(blob.size/1024).toFixed(0)}KB)`);
       } catch (e: any) { dbg(`[Mix] ${label} → EXCEPTION: ${e?.message}`); }
