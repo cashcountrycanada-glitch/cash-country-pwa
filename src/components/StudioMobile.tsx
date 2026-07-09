@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.391';
+const BUILD_VERSION = 'v7.6.393';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1064,7 +1064,6 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
               if (mainVoiceTrack) {
                 const voiceBlob = await studioService.resolveBlobAsync(mainVoiceTrack.dataUrl, mainVoiceTrack.id);
                 if (voiceBlob) {
-                  const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
                   const peakOf = (buf: AudioBuffer) => {
                     let pk = 0;
                     for (let c = 0; c < buf.numberOfChannels; c++) {
@@ -1073,13 +1072,18 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
                     }
                     return pk;
                   };
-                  const [voiceBuf, instBuf] = await Promise.all([
-                    voiceBlob.arrayBuffer().then(ab => tmpCtx.decodeAudioData(ab)),
-                    instBlobForMix.arrayBuffer().then(ab => tmpCtx.decodeAudioData(ab)),
-                  ]);
-                  await tmpCtx.close();
+                  const tmpCtxVoice = new (window.AudioContext || (window as any).webkitAudioContext)();
+                  const voiceAb = await voiceBlob.arrayBuffer();
+                  const voiceBuf = await tmpCtxVoice.decodeAudioData(voiceAb);
                   const voicePeak = peakOf(voiceBuf);
+                  await tmpCtxVoice.close();
+
+                  const tmpCtxInst = new (window.AudioContext || (window as any).webkitAudioContext)();
+                  const instAb = await instBlobForMix.arrayBuffer();
+                  const instBuf = await tmpCtxInst.decodeAudioData(instAb);
                   const instPeak = peakOf(instBuf);
+                  await tmpCtxInst.close();
+
                   if (voicePeak > 0.001 && instPeak > 0.001) {
                     instGain = Math.max(0.15, Math.min(0.9, (voicePeak * 0.5) / instPeak));
                   }

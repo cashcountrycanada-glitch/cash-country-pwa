@@ -1465,220 +1465,204 @@ export const studioService = {
     const yield_ = () => new Promise<void>(r => setTimeout(r, 40));
     const activeTracks = project.tracks.filter(t => !t.muted && (t.dataUrl || t.id));
     if (activeTracks.length === 0) throw new Error('Aucune piste valide à mixer');
-
-    onProgress?.('Décodage des pistes…', 10);
-    await yield_();
-
-    const tmpCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const decoded: { track: MobileRecording; buffer: AudioBuffer }[] = [];
     const dbg = (msg: string) => { try { (window as any).__addLog?.(msg); } catch {} console.log(msg); };
+
+    // Convertit un AudioBuffer (potentiellement stéréo) en mono, in-place-ish.
+    // Le pan est réappliqué séparément via StereoPannerNode plus loin — garder
+    // 2 canaux ici ne fait que doubler la mémoire pour rien.
+    const toMono = (ctx: BaseAudioContext, buffer: AudioBuffer): AudioBuffer => {
+      if (buffer.numberOfChannels <= 1) return buffer;
+      const mono = ctx.createBuffer(1, buffer.length, buffer.sampleRate);
+      const dst = mono.getChannelData(0);
+      const ch0 = buffer.getChannelData(0), ch1 = buffer.getChannelData(1);
+      for (let s = 0; s < buffer.length; s++) dst[s] = (ch0[s] + ch1[s]) * 0.5;
+      return mono;
+    };
+
+    // Pitch-shift via le worker Rubber Band partagé (déjà initialisé), pour les
+    // rares pistes non générées qui ont un pitchShift explicite (harmonies
+    // manuelles retouchées). Retourne un nouveau Blob WAV déjà shifté.
+    const shiftTrackViaWorker = async (buffer: AudioBuffer, semitones: number, track: MobileRecording): Promise<Blob> => {
+      return await new Promise<Blob>(async (resolve, reject) => {
+        let worker: Worker;
+        try { worker = await getHarmonyWorker(); } catch (e: any) { reject(e); return; }
+        const id = Date.now();
+        const chL = buffer.getChannelData(0).slice();
+        const chR = (buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0)).slice();
+        const timeout = setTimeout(() => {
+          try { worker.terminate(); } catch {}
+          __harmonyWorker = null;
+          reject(new Error('pitch timeout'));
+        }, 120000);
+        worker.onmessage = (e) => {
+          if (e.data.id !== id) return;
+          if (e.data.type === 'done') { clearTimeout(timeout); resolve(new Blob([e.data.wavBuf], { type: 'audio/wav' })); }
+          else if (e.data.type === 'error') { clearTimeout(timeout); reject(new Error(e.data.message)); }
+        };
+        worker.onerror = (e) => {
+          clearTimeout(timeout);
+          try { worker.terminate(); } catch {}
+          __harmonyWorker = null;
+          reject(new Error(e.message));
+        };
+        worker.postMessage({ id, op: 'pitch', channelL: chL, channelR: chR, semitones, gain: 1.0, pan: track.pan ?? 0, sampleRate: buffer.sampleRate, trackIndex: track.trackIndex ?? 2 }, [chL.buffer, chR.buffer]);
+      });
+    };
+
+    // ── PASSE 1 : pour chaque piste, obtenir un Blob "prêt à jouer" (déjà
+    // pitch-shifté si besoin) + ses métadonnées de timing — SANS garder son
+    // AudioBuffer décodé en mémoire au-delà de cette passe.
+    type TrackMeta = {
+      track: MobileRecording; blob: Blob; duration: number; sampleRate: number;
+      startSec: number; bufferReadOffsetSec: number; isInstTrack: boolean;
+    };
+    const metas: TrackMeta[] = [];
+    const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 42, 3: 35, 4: 51, 5: 38 };
+
     for (let i = 0; i < activeTracks.length; i++) {
       const track = activeTracks[i];
       const label = `"${track.trackLabel || track.id}" (idx=${track.trackIndex ?? '?'})`;
-      onProgress?.(`Décodage piste ${i + 1}/${activeTracks.length}…`, 10 + Math.round((i / activeTracks.length) * 25));
+      onProgress?.(`Analyse piste ${i + 1}/${activeTracks.length}…`, 8 + Math.round((i / activeTracks.length) * 22));
       await yield_();
       try {
-        const blob = await this.resolveBlobAsync(track.dataUrl || '', track.id);
-        if (!blob) { dbg(`[Mix] ${label} → SKIP (blob introuvable, dataUrl=${track.dataUrl ? track.dataUrl.slice(0,20) : 'VIDE'})`); continue; }
-        const arrayBuffer = await blob.arrayBuffer();
-        let buffer = await tmpCtx.decodeAudioData(arrayBuffer);
-        if (buffer.numberOfChannels > 1) {
-          // Repli mono : le pan est réappliqué plus loin via StereoPannerNode,
-          // donc garder 2 canaux ici ne sert qu'à doubler la mémoire pour rien.
-          const mono = tmpCtx.createBuffer(1, buffer.length, buffer.sampleRate);
-          const dst = mono.getChannelData(0);
-          const ch0 = buffer.getChannelData(0), ch1 = buffer.getChannelData(buffer.numberOfChannels > 1 ? 1 : 0);
-          for (let s = 0; s < buffer.length; s++) dst[s] = (ch0[s] + ch1[s]) * 0.5;
-          buffer = mono;
+        let blob = await this.resolveBlobAsync(track.dataUrl || '', track.id);
+        if (!blob) { dbg(`[Mix] ${label} → SKIP (blob introuvable, dataUrl=${track.dataUrl ? track.dataUrl.slice(0, 20) : 'VIDE'})`); continue; }
+
+        const semitones = track.pitchShift ?? 0;
+        const needsShift = semitones !== 0 && !(track as any).isGenerated;
+        if (needsShift) {
+          const shiftCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          try {
+            const arrayBuffer = await blob.arrayBuffer();
+            const rawBuffer = await shiftCtx.decodeAudioData(arrayBuffer);
+            blob = await shiftTrackViaWorker(rawBuffer, semitones, track);
+          } catch (e) {
+            console.warn(`[Mix] Pitch worker échoué pour "${track.trackLabel}", pas de shift:`, e);
+          } finally { await shiftCtx.close(); }
         }
-        decoded.push({ track, buffer });
-        dbg(`[Mix] ${label} → OK (${(blob.size/1024).toFixed(0)}KB)`);
+
+        // Probe légère : juste pour lire durée/samplerate, libérée immédiatement après.
+        const probeCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        let duration: number, sampleRate: number;
+        try {
+          const ab = await blob.arrayBuffer();
+          const buf = await probeCtx.decodeAudioData(ab);
+          duration = buf.duration; sampleRate = buf.sampleRate;
+        } finally { await probeCtx.close(); }
+
+        const tIdx = (track as any).trackIndex ?? 0;
+        const isInstTrack = (track as any).isInstrumental || tIdx === -1;
+        let startSec = 0, bufferReadOffsetSec = 0;
+        if (isInstTrack && instOffsetMs !== 0) {
+          if (instOffsetMs >= 0) startSec = instOffsetMs / 1000;
+          else bufferReadOffsetSec = -instOffsetMs / 1000;
+        } else if (!isInstTrack && tIdx > 0) {
+          startSec = (PRE_DELAYS[tIdx] ?? 30) / 1000;
+        }
+        metas.push({ track, blob, duration, sampleRate, startSec, bufferReadOffsetSec, isInstTrack });
+        dbg(`[Mix] ${label} → analysé (${duration.toFixed(1)}s @ ${sampleRate}Hz)`);
       } catch (e: any) { dbg(`[Mix] ${label} → EXCEPTION: ${e?.message}`); }
     }
-    await tmpCtx.close();
-    if (decoded.length === 0) throw new Error('Aucune piste décodable');
+    if (metas.length === 0) throw new Error('Aucune piste décodable');
 
-    onProgress?.('Traitement pitch…', 38);
+    const outSampleRate = metas[0].sampleRate;
+    const totalDuration = Math.max(...metas.map(m => m.startSec + (m.duration - m.bufferReadOffsetSec)));
+
+    onProgress?.('Préparation du rendu segmenté…', 32);
     await yield_();
 
-    const shifted: { track: MobileRecording; buffer: AudioBuffer }[] = [];
-    for (const { track, buffer } of decoded) {
-      const semitones = track.pitchShift ?? 0;
-      // Les pistes isGenerated sont déjà pitch-shiftées à la génération — ne pas re-shifter
-      // Les pistes normales sans pitch → passer directement
-      if (semitones === 0 || (track as any).isGenerated) {
-        shifted.push({ track, buffer });
-      } else {
-        // Utiliser le harmony-worker PARTAGÉ (hors main thread) pour ne pas geler iOS
-        // FIX BUG MÉMOIRE/FONCTIONNEL : ce chemin créait auparavant un `new Worker` jetable
-        // à chaque piste via createSafeWorker(), SANS jamais lui envoyer le message 'init'
-        // (celui qui transfère le module WASM pré-compilé). Résultat : rbReady restait
-        // toujours false dans ce worker frais → rubberband_new plantait immédiatement
-        // avec "Rubber Band non prêt", la piste n'était jamais réellement pitch-shiftée
-        // (fallback silencieux sur `buffer` non modifié), et on payait quand même le coût
-        // de spawn/compile d'un Worker + WASM en pure perte à chaque piste du mixdown.
-        // On réutilise maintenant le worker persistant unique (déjà initialisé une seule
-        // fois avec le WASM Rubber Band), identique à celui utilisé par generateLayers().
-        try {
-          const workerBlob = await new Promise<Blob>(async (resolve, reject) => {
-            let worker: Worker;
-            try { worker = await getHarmonyWorker(); } catch(e: any) { reject(e); return; }
-            const id = Date.now();
-            const chL = buffer.getChannelData(0).slice();
-            const chR = (buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0)).slice();
-            const timeout = setTimeout(() => {
-              // Worker partagé bloqué : on le termine et on réinitialise la référence
-              // module pour qu'un futur appel en recrée un propre (voir même pattern
-              // utilisé après échec dans generateLayers()).
-              try { worker.terminate(); } catch {}
-              __harmonyWorker = null;
-              reject(new Error('pitch timeout'));
-            }, 120000);
-            worker.onmessage = (e) => {
-              if (e.data.id !== id) return;
-              if (e.data.type === 'done') { clearTimeout(timeout); resolve(new Blob([e.data.wavBuf], { type: 'audio/wav' })); }
-              else if (e.data.type === 'error') { clearTimeout(timeout); reject(new Error(e.data.message)); }
-            };
-            worker.onerror = (e) => {
-              clearTimeout(timeout);
-              try { worker.terminate(); } catch {}
-              __harmonyWorker = null;
-              reject(new Error(e.message));
-            };
-            worker.postMessage({ id, op: 'pitch', channelL: chL, channelR: chR, semitones, gain: 1.0, pan: track.pan ?? 0, sampleRate: buffer.sampleRate, trackIndex: track.trackIndex ?? 2 }, [chL.buffer, chR.buffer]);
-          });
-          const tmpCtx2 = new (window.AudioContext || (window as any).webkitAudioContext)();
-          try {
-            const ab = await workerBlob.arrayBuffer();
-            const shiftedBuf = await tmpCtx2.decodeAudioData(ab);
-            shifted.push({ track, buffer: shiftedBuf });
-          } finally { tmpCtx2.close(); }
-        } catch (e) {
-          console.warn(`[Mix] Pitch worker échoué pour "${track.trackLabel}", skip shift:`, e);
-          shifted.push({ track, buffer });
-        }
-      }
-      await yield_();
-    }
+    // ── PASSE 2 : rendu par tranches de temps ───────────────────────────────
+    // Chaque piste n'est redécodée (depuis son Blob déjà en mémoire locale,
+    // pas re-téléchargée) QUE pour les segments où elle apparaît réellement —
+    // au plus quelques pistes À LA FOIS, jamais les 7 en entier simultanément.
+    const SEGMENT_SEC = 40;
+    const numSegments = Math.max(1, Math.ceil(totalDuration / SEGMENT_SEC));
+    const totalSamples = Math.ceil(totalDuration * outSampleRate) + 4096;
 
-    onProgress?.('Rendu audio…', 50);
-    await yield_();
+    const finalCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const finalBuffer = finalCtx.createBuffer(2, totalSamples, outSampleRate);
+    const finalL = finalBuffer.getChannelData(0);
+    const finalR = finalBuffer.getChannelData(1);
 
-    const maxDuration = Math.max(...shifted.map(s => s.buffer.duration));
-    const sampleRate = shifted[0].buffer.sampleRate;
-    const offline = new OfflineAudioContext(2, Math.ceil(maxDuration * sampleRate) + 4096, sampleRate);
-    // FIX "sections d'harmonies pas appliquées au mixage" : jusqu'ici,
-    // project.sections/activeHarmonies existait dans l'UI (Mixer) mais
-    // n'était JAMAIS lu par le moteur de rendu — configurer des sections
-    // n'avait aucun effet sur le fichier final. On lit maintenant ces
-    // sections et on programme le volume de chaque harmonie (trackIndex 1-5)
-    // dans le temps via gain.setValueAtTime, avec une courte rampe pour
-    // éviter les clics aux transitions.
     const sections: any[] = Array.isArray((project as any).sections) ? (project as any).sections : [];
-    const RAMP = 0.08; // 80ms, assez court pour être franc, assez long pour ne pas cliquer
-    for (const { track, buffer } of shifted) {
-      const src = offline.createBufferSource(); src.buffer = buffer;
-      const gainNode = offline.createGain();
-      const baseGain = Math.min(1.0, track.gain ?? 1.0);
-      const tIdx = (track as any).trackIndex ?? 0;
-      const isHarmonyLayer = tIdx >= 1 && tIdx <= 5;
+    const RAMP = 0.08;
 
-      if (isHarmonyLayer && sections.length > 0) {
-        // Programme le volume section par section. En dehors des sections
-        // définies, on garde le gain de base (pas de silence surprise dans
-        // les zones non cartographiées).
-        gainNode.gain.setValueAtTime(baseGain, 0);
-        let currentGain = baseGain; // suivi manuel — gain.value ne reflète pas l'automation programmée à l'avance
-        const sorted = [...sections].sort((a, b) => a.startSec - b.startSec);
-        for (const sec of sorted) {
-          const active = Array.isArray(sec.activeHarmonies) && sec.activeHarmonies.includes(tIdx);
-          const secGain = active ? (sec.harmonyVolumes?.[tIdx] ?? baseGain) : 0;
-          const start = Math.max(0, sec.startSec);
-          const end = Math.max(start, sec.endSec);
-          gainNode.gain.setValueAtTime(currentGain, Math.max(0, start - RAMP));
-          gainNode.gain.linearRampToValueAtTime(secGain, start);
-          gainNode.gain.setValueAtTime(secGain, Math.max(start, end - RAMP));
-          gainNode.gain.linearRampToValueAtTime(baseGain, end);
-          currentGain = baseGain;
-        }
-      } else {
-        // Plafonner le gain à 1.0 dans le mix — évite le clipping
-        gainNode.gain.value = baseGain;
-      }
-      const panner = offline.createStereoPanner(); panner.pan.value = track.pan ?? 0;
-      src.connect(gainNode); gainNode.connect(panner); panner.connect(offline.destination);
+    for (let seg = 0; seg < numSegments; seg++) {
+      const segStart = seg * SEGMENT_SEC;
+      const segEnd = Math.min(totalDuration, segStart + SEGMENT_SEC);
+      const segDur = segEnd - segStart;
+      onProgress?.(`Rendu segment ${seg + 1}/${numSegments}…`, 32 + Math.round((seg / numSegments) * 52));
+      await yield_();
 
-      // ── Pre-delay par layer — style Cash/Elvis ────────────────────────────
-      // Un vrai double tracking humain a des décalages naturels de 20-60ms.
-      // Sans ces décalages, les layers sonnent "MIDI" — parfaitement alignés = artificiel.
-      // Note : le vrai slapback de Sun Studio (Sam Phillips) mesurait en réalité
-      // ~134-140ms (analyse acoustique publiée), pas 30-55ms comme indiqué
-      // précédemment ici. On garde volontairement des valeurs plus courtes que
-      // ça : appliquer un vrai délai de 140ms à PLUSIEURS harmonies en même
-      // temps empilerait des échos audibles bien distincts. Le but ici est une
-      // variation subtile de timing ENTRE les couches simultanées, pas une
-      // reproduction fidèle du slapback historique (qui s'appliquait à une
-      // seule voix doublée, pas à un empilement d'harmonies).
-      //
-      // FIX "3e voix en écho" : pour le Double Tracking (trackIndex 1),
-      // doubleTrack() dans harmony-worker.js gère DÉJÀ le timing naturel en
-      // interne (micro-délais modulés façon chorus, ~3-8ms). Ajouter ICI un
-      // 2e délai de 28ms sur le bloc ENTIER empilait deux systèmes de délai
-      // indépendants : les 2 voix internes fusionnaient bien, mais le bloc
-      // entier se retrouvait décalé de 28ms par rapport à la voix principale
-      // — perçu comme un écho distinct plutôt qu'une voix épaissie. On retire
-      // donc le pre-delay ici pour ce cas précis (déjà géré en amont).
-      const isInstTrack = (track as any).isInstrumental || tIdx === -1;
-      let preDelayMs = 0;
-      if (!isInstTrack && tIdx > 0) {
-        // Chaque layer a un pre-delay unique et cohérent
-        switch (tIdx) {
-          case 1: preDelayMs = 0;   break; // Double tracking : géré en interne, pas de 2e délai
-          case 2: preDelayMs = 42;  break; // +5 ST : 42ms — légèrement plus loin dans l'espace
-          case 3: preDelayMs = 35;  break; // Octave bas : 35ms — présence sans coller
-          case 4: preDelayMs = 51;  break; // +3 ST : 51ms — fond discret
-          case 5: preDelayMs = 38;  break; // -5 ST : 38ms — chaleur décalée
-          default: preDelayMs = 30; break;
-        }
-      }
+      const overlapping = metas.filter(m => {
+        const mStart = m.startSec, mEnd = m.startSec + (m.duration - m.bufferReadOffsetSec);
+        return mEnd > segStart && mStart < segEnd;
+      });
+      if (overlapping.length === 0) continue;
 
-      // Appliquer l'offset inst ou le pre-delay layer
-      if (isInstTrack && instOffsetMs !== 0) {
-        const offsetSec = instOffsetMs / 1000;
-        if (offsetSec >= 0) {
-          src.start(offsetSec);
+      const offline = new OfflineAudioContext(2, Math.ceil(segDur * outSampleRate) + 4096, outSampleRate);
+
+      for (const m of overlapping) {
+        const decCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        let buffer: AudioBuffer;
+        try {
+          const ab = await m.blob.arrayBuffer();
+          buffer = toMono(decCtx, await decCtx.decodeAudioData(ab));
+        } finally { await decCtx.close(); }
+
+        const src = offline.createBufferSource(); src.buffer = buffer;
+        const gainNode = offline.createGain();
+        const baseGain = Math.min(1.0, m.track.gain ?? 1.0);
+        const tIdx = (m.track as any).trackIndex ?? 0;
+        const isHarmonyLayer = tIdx >= 1 && tIdx <= 5;
+
+        if (isHarmonyLayer && sections.length > 0) {
+          // Automation de sections, convertie en temps RELATIFS à ce segment
+          gainNode.gain.setValueAtTime(baseGain, 0);
+          let currentGain = baseGain;
+          const sorted = [...sections].sort((a, b) => a.startSec - b.startSec);
+          for (const sec of sorted) {
+            const startRel = sec.startSec - segStart, endRel = sec.endSec - segStart;
+            if (endRel <= 0 || startRel >= segDur) continue; // section hors de ce segment
+            const active = Array.isArray(sec.activeHarmonies) && sec.activeHarmonies.includes(tIdx);
+            const secGain = active ? (sec.harmonyVolumes?.[tIdx] ?? baseGain) : 0;
+            const s = Math.max(0, startRel), e = Math.min(segDur, endRel);
+            gainNode.gain.setValueAtTime(currentGain, Math.max(0, s - RAMP));
+            gainNode.gain.linearRampToValueAtTime(secGain, s);
+            gainNode.gain.setValueAtTime(secGain, Math.max(s, e - RAMP));
+            gainNode.gain.linearRampToValueAtTime(baseGain, e);
+            currentGain = baseGain;
+          }
         } else {
-          src.start(0, -offsetSec);
+          gainNode.gain.value = baseGain;
         }
-      } else if (preDelayMs > 0) {
-        src.start(preDelayMs / 1000);
-      } else {
-        src.start(0);
+        const panner = offline.createStereoPanner(); panner.pan.value = m.track.pan ?? 0;
+        src.connect(gainNode); gainNode.connect(panner); panner.connect(offline.destination);
+
+        // Position de cette piste DANS ce segment (peut être négative si elle
+        // a démarré dans un segment précédent — on lit alors plus loin dans
+        // son buffer plutôt que de redémarrer à zéro).
+        const trackStartInSeg = m.startSec - segStart;
+        const startTime = Math.max(0, trackStartInSeg);
+        const bufferOffset = m.bufferReadOffsetSec + Math.max(0, -trackStartInSeg);
+        try { src.start(startTime, Math.min(bufferOffset, Math.max(0, buffer.duration - 0.001))); } catch { src.start(startTime); }
       }
+
+      const rendered = await safeStartRendering(offline);
+      const destOffset = Math.round(segStart * outSampleRate);
+      const rL = rendered.getChannelData(0);
+      const rR = rendered.numberOfChannels > 1 ? rendered.getChannelData(1) : rL;
+      const n = Math.min(rendered.length, finalL.length - destOffset);
+      for (let s = 0; s < n; s++) { finalL[destOffset + s] = rL[s]; finalR[destOffset + s] = rR[s]; }
     }
 
-    // Animer la barre pendant le rendu OfflineAudioContext (durée inconnue, ~10-60s)
-    let renderPct = 52;
-    const renderTick = setInterval(() => {
-      renderPct = Math.min(74, renderPct + 1);
-      onProgress?.('Rendu audio…', renderPct);
-    }, 800);
-
-    let rendered: AudioBuffer;
-    try {
-      rendered = await safeStartRendering(offline);
-    } finally {
-      clearInterval(renderTick);
-    }
-
-    onProgress?.('Encodage du mix…', 76);
+    onProgress?.('Encodage du mix…', 86);
     await yield_();
 
-    // Encodage en temps réel — animer la barre
-    const encDur = rendered.duration;
-    const encBlob = await audioBufferToBlob(rendered, (pct) => {
-      onProgress?.(`Encodage WAV… ${pct}%`, 76 + Math.round(pct * 0.22));
+    const encBlob = await audioBufferToBlob(finalBuffer, (pct) => {
+      onProgress?.(`Encodage WAV… ${pct}%`, 86 + Math.round(pct * 0.12));
     });
+    try { await finalCtx.close(); } catch {}
 
     onProgress?.('Terminé ✓', 100);
     return encBlob;
