@@ -279,7 +279,14 @@ export default function MixerScreen({
     (window as any).__previewCtx = ctx;
     setIsPreviewing(true);
 
-    const PRE_DELAYS: Record<number, number> = { 1: 28, 2: 42, 3: 35, 4: 51, 5: 38 };
+    // FIX délais trop longs : la recherche sur l'empilement d'harmonies (pas
+    // un simple doublage à l'unisson) recommande 5-15ms entre les parties —
+    // au-delà de ~30ms le cerveau commence à percevoir un écho distinct
+    // plutôt qu'une fusion naturelle. Les anciennes valeurs (35-51ms)
+    // dépassaient ce seuil. trackIndex 1 (Double tracking) à 0 : son délai
+    // interne est déjà géré dans le fichier généré (doubleTrack()) — un
+    // délai supplémentaire ici recréait le bug "écho / 3 voix" déjà corrigé.
+    const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 9, 3: 12, 4: 14, 5: 7 };
 
     // ── ÉTAPE 1 : tout décoder D'ABORD, ne rien démarrer encore ────────────────
     // FIX désync/"chanson incomplète" : décoder un fichier de 3-4 min prend de

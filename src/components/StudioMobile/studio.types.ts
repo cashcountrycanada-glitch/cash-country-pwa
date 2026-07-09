@@ -89,7 +89,7 @@ export const FX_PRESETS: FxPreset[] = [
     hpf: 62,
     lowGain: 3.0, lowMidGain: -3.5, midGain: 2.5, highGain: 0.5, airGain: 0.5,
     compThreshold: -22, compRatio: 2.5, compAttack: 28, compRelease: 320, compKnee: 12,
-    saturation: 0.28, reverb: 'plate', reverbMix: 0.14, deverbAmount: 0.40,
+    saturation: 0.28, reverb: 'plate', reverbMix: 0.24, deverbAmount: 0.40,
   },
   {
     // CASH NOIR — Johnny Cash Man in Black
@@ -249,6 +249,23 @@ export const FX_PRESETS: FxPreset[] = [
     compThreshold: -20, compRatio: 3, compAttack: 15, compRelease: 220, compKnee: 10,
     saturation: 0.16, reverb: 'hall', reverbMix: 0.14, deverbAmount: 0.40,
     autotune: 0.40, autotuneSpeed: 'medium',
+  },
+  {
+    // SCÈNE TV — style America's Got Talent / The Voice
+    // Gros son de diffusion : présence vocale forte, aigus brillants,
+    // compression assez marquée pour rester "toujours devant", reverb hall
+    // généreuse pour la sensation de grande scène, léger auto-tune rapide
+    // pour ce polish "toujours juste" typique des voix de plateau télé.
+    id: 'tv_talent_show',
+    label: 'Scène TV',
+    emoji: '🌟',
+    description: "Style America's Got Talent / The Voice - gros son, grande scène, polish radio",
+    color: '#facc15',
+    hpf: 85,
+    lowGain: 2.0, lowMidGain: -3.0, midGain: 3.5, highGain: 2.5, airGain: 2.5,
+    compThreshold: -18, compRatio: 4, compAttack: 8, compRelease: 180, compKnee: 8,
+    saturation: 0.20, reverb: 'hall', reverbMix: 0.28, deverbAmount: 0.40,
+    autotune: 0.35, autotuneSpeed: 'fast',
   },
 ];
 export const FX_PRESET_DEFAULT = FX_PRESETS[0]; // Clean

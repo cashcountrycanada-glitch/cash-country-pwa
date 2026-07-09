@@ -971,11 +971,12 @@ export default function MasteringEngine({
     try {
       // 1. Décoder le mix vocal
       setProgressLabel('Décodage de la voix...'); setProgress(10);
-      const vocalRaw = await decodeBlob(vocalBlob);
+      let vocalRaw: AudioBuffer | null = await decodeBlob(vocalBlob);
 
       // 2. Masteriser la voix seule (Mode A)
       setProgressLabel('Masterisation voix...'); setProgress(30);
       const vocalM = await masterAudio(vocalRaw, settings);
+      vocalRaw = null; // FIX mémoire : relâché dès que possible, plus besoin après ce point
       setVocalMastered(vocalM);
       setOutputVocalLufs(Math.round(analyzeLoudness(vocalM) * 10) / 10);
 
@@ -997,13 +998,15 @@ export default function MasteringEngine({
       // 3. Si instrumental disponible → mixer + masteriser (Mode B)
       if (instBlob) {
         setProgressLabel("Chargement de l'instrumental..."); setProgress(60);
-        const instRaw = await decodeBlob(instBlob);
+        let instRaw: AudioBuffer | null = await decodeBlob(instBlob);
 
         setProgressLabel('Mixage vocal + instrumental...'); setProgress(70);
-        const fullRaw = await mixVocalWithInst(vocalM, instRaw, instGainDb, instOffsetMs);
+        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalM, instRaw, instGainDb, instOffsetMs);
+        instRaw = null; // FIX mémoire : relâché dès que possible
 
         setProgressLabel('Masterisation du mix complet...'); setProgress(80);
         const fullM = await masterAudio(fullRaw, settings);
+        fullRaw = null; // FIX mémoire : relâché dès que possible, avant l'encodage
         setFullMastered(fullM);
         setOutputFullLufs(Math.round(analyzeLoudness(fullM) * 10) / 10);
 

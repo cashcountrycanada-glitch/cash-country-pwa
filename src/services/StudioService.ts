@@ -1517,7 +1517,9 @@ export const studioService = {
       startSec: number; bufferReadOffsetSec: number; isInstTrack: boolean;
     };
     const metas: TrackMeta[] = [];
-    const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 42, 3: 35, 4: 51, 5: 38 };
+    // FIX délais trop longs (voir même fix dans MixerScreen.tsx Preview) :
+    // 5-15ms recommandé pour l'empilement d'harmonies, pas 35-51ms.
+    const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 9, 3: 12, 4: 14, 5: 7 };
 
     for (let i = 0; i < activeTracks.length; i++) {
       const track = activeTracks[i];
@@ -1827,21 +1829,21 @@ export const studioService = {
 
       // 1. Double tracking — unisson, épaisseur naturelle humaine
       // Cash et Elvis rechanaient systématiquement leurs propres voix
-      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.28, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
+      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.34, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
 
       // 2. +2 ST — seconde majeure, signature Alan Jackson (remplace l'ancien +5 ST/quarte,
       // hors zone sûre ±3 ST)
-      { trackIndex: 2, trackLabel: 'Layer +2 ST',     pitch: 2,   gain: 0.20, pan: 0.35,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 2, trackLabel: 'Layer +2 ST',     pitch: 2,   gain: 0.30, pan: 0.35,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
 
       // 3. -3 ST — tierce grave, couleur Johnny Cash (remplace l'ancienne octave -12ST,
       // le pire cas historique pour les artefacts ET les crashs mémoire iOS)
-      { trackIndex: 3, trackLabel: 'Layer -3 ST',     pitch: -3,  gain: 0.22, pan: 0.0,   emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
+      { trackIndex: 3, trackLabel: 'Layer -3 ST',     pitch: -3,  gain: 0.32, pan: 0.0,   emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
 
       // 4. +3 ST — tierce, puissance Garth Brooks (remplace l'ancien +7 ST/quinte)
-      { trackIndex: 4, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.15, pan: -0.35, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 4, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.24, pan: -0.35, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
 
       // 5. -2 ST — seconde grave, chaleur Elvis (remplace l'ancien -5 ST/quarte grave)
-      { trackIndex: 5, trackLabel: 'Layer -2 ST',     pitch: -2,  gain: 0.16, pan: 0.30,  emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 5, trackLabel: 'Layer -2 ST',     pitch: -2,  gain: 0.25, pan: 0.30,  emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
     ];
     // Si targetTrackIndex spécifié → générer seulement cette harmonie
     const layers = targetTrackIndex !== undefined
