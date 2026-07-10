@@ -267,6 +267,64 @@ export const FX_PRESETS: FxPreset[] = [
     saturation: 0.20, reverb: 'hall', reverbMix: 0.28, deverbAmount: 0.40,
     autotune: 0.35, autotuneSpeed: 'fast',
   },
+  {
+    // STUDIO SIGNATURE (v7.6.407) — met en avant la nouvelle reverb 'studio'
+    // (8 combs/4 allpass, aussi dense que Freeverb, brillant/dense comme
+    // demandé). EQ neutre inspirée de "Studio Vocal" pour ne pas colorer le
+    // son et laisser la reverb être le point d'écoute. reverbMix à 20% pour
+    // bien l'entendre pendant le test A/B — ajustable ensuite à l'oreille.
+    id: 'studio_signature',
+    label: 'Studio Signature',
+    emoji: '✨',
+    description: "Nouvelle reverb 'studio' - dense et brillante, a tester",
+    color: '#38bdf8',
+    hpf: 85,
+    lowGain: 0.5, lowMidGain: -4.0, midGain: 3.5, highGain: 1.0, airGain: 1.5,
+    compThreshold: -18, compRatio: 3, compAttack: 12, compRelease: 180, compKnee: 8,
+    saturation: 0.12, reverb: 'studio', reverbMix: 0.20, deverbAmount: 0.40,
+  },
+  {
+    // STUDIO DOUX (v7.6.408) — variante discrète, reverb 'studio' a peine
+    // perceptible (12%), chaleur proche de Cash Noir. Pour juger l'effet
+    // "presence subtile" plutot que "gros son".
+    id: 'studio_doux',
+    label: 'Studio Doux',
+    emoji: '🕊️',
+    description: "Reverb 'studio' discrete (12%) - chaleur naturelle",
+    color: '#5eead4',
+    hpf: 65,
+    lowGain: 2.0, lowMidGain: -3.5, midGain: 2.5, highGain: 0.5, airGain: 0.5,
+    compThreshold: -22, compRatio: 2.5, compAttack: 25, compRelease: 300, compKnee: 12,
+    saturation: 0.20, reverb: 'studio', reverbMix: 0.12, deverbAmount: 0.40,
+  },
+  {
+    // STUDIO PUISSANT (v7.6.408) — variante grande scène, reverb 'studio'
+    // genereuse (32%), EQ proche de Scene TV. Pour juger l'effet "gros son"
+    // avec la nouvelle reverb au lieu du hall existant.
+    id: 'studio_puissant',
+    label: 'Studio Puissant',
+    emoji: '🌠',
+    description: "Reverb 'studio' genereuse (32%) - grande scene, gros son",
+    color: '#818cf8',
+    hpf: 85,
+    lowGain: 2.0, lowMidGain: -3.0, midGain: 3.5, highGain: 2.5, airGain: 2.5,
+    compThreshold: -18, compRatio: 4, compAttack: 8, compRelease: 180, compKnee: 8,
+    saturation: 0.20, reverb: 'studio', reverbMix: 0.32, deverbAmount: 0.40,
+  },
+  {
+    // STUDIO HARMONIE (v7.6.408) — pour les couches d'harmonie, meme logique
+    // que "Layer Harmony" (grave conserve, mid coupe) mais avec la reverb
+    // 'studio' au lieu de hall, pour juger l'effet sur une couche de fond.
+    id: 'studio_harmonie',
+    label: 'Studio Harmonie',
+    emoji: '🎐',
+    description: "Layer d'harmonie avec la reverb 'studio' - a tester en couche",
+    color: '#c4b5fd',
+    hpf: 80,
+    lowGain: 1.0, lowMidGain: -5.0, midGain: 1.0, highGain: 0.0, airGain: 0.0,
+    compThreshold: -26, compRatio: 5, compAttack: 10, compRelease: 150, compKnee: 10,
+    saturation: 0.18, reverb: 'studio', reverbMix: 0.18,
+  },
 ];
 export const FX_PRESET_DEFAULT = FX_PRESETS[0]; // Clean
 
@@ -322,9 +380,10 @@ export const REVERB_LABELS: Record<ReverbType, string> = {
   room:  'Pièce',
   hall:  'Hall',
   plate: 'Plaque',
+  studio: 'Studio ✨',
 };
 
-export const REVERB_TYPES: ReverbType[] = ['none', 'room', 'hall', 'plate'];
+export const REVERB_TYPES: ReverbType[] = ['none', 'room', 'hall', 'plate', 'studio'];
 
 export function formatTime(s: number): string {
   return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;

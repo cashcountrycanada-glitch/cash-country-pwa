@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: cash-country-pwa
+    runtime: node
+    plan: free
+    buildCommand: node build.js
+    startCommand: node server.js
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.0

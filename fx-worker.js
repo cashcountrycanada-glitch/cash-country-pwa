@@ -227,7 +227,32 @@ const ALLPASS_DELAYS_MS = {
 const REVERB_PARAMS = {
   room:  { feedback: 0.76, damp: 0.35, preDelayMs: 8,  erDecay: 0.55 },
   hall:  { feedback: 0.82, damp: 0.25, preDelayMs: 22, erDecay: 0.70 },
-  plate: { feedback: 0.78, damp: 0.45, preDelayMs: 4,  erDecay: 0.60 },
+  // FIX "plate pas assez brillant" (v7.6.404) : damp était à 0.45, plus haut
+  // que room (0.35) et hall (0.25) — donc le plate était le PLUS sombre des
+  // trois presets, alors qu'un vrai plate (plaque métallique) doit être le
+  // plus brillant/scintillant. damp abaissé sous les deux autres + feedback
+  // remonté légèrement pour une traîne plus dense.
+  plate: { feedback: 0.82, damp: 0.14, preDelayMs: 4,  erDecay: 0.60 },
+  // NOUVEAU PRESET "studio" (v7.6.406) : room/hall/plate gardent leurs 4 combs
+  // + 2 allpass (INCHANGÉ, zéro risque de régression). Ce preset utilise à la
+  // place 8 combs + 4 allpass par canal — la même densité que Freeverb, la
+  // référence open-source du genre — pour une traîne plus lisse, moins
+  // "peignée/métallique" que les 3 presets existants. Délais dérivés des
+  // valeurs Freeverb (converties samples→ms, indépendantes du sample rate),
+  // reconnues pour éviter les artefacts de résonance grâce à leurs longueurs
+  // non multiples entre elles. Damp bas + feedback élevé = brillant et dense,
+  // comme demandé.
+  studio: {
+    feedback: 0.84, damp: 0.16, preDelayMs: 6, erDecay: 0.68,
+    combDelaysMs: {
+      L: [25.31, 26.94, 28.96, 30.75, 32.24, 33.81, 35.31, 36.67],
+      R: [25.83, 27.46, 29.48, 31.27, 32.76, 34.33, 35.83, 37.19],
+    },
+    apDelaysMs: {
+      L: [12.61, 10.00, 7.73, 5.10],
+      R: [13.13, 10.52, 8.25, 5.62],
+    },
+  },
 };
 
 function reverbChannel(input, combDelays, apDelays, sr, params) {
@@ -253,12 +278,12 @@ function reverbChannel(input, combDelays, apDelays, sr, params) {
     preBuf[prePtr] = input[i];
     prePtr = (prePtr + 1) % preD;
 
-    // 4 combs en parallèle
+    // N combs en parallèle (4 pour room/hall/plate, 8 pour studio)
     let combSum = 0;
     for (const c of combs) {
       combSum += combFilter(c, preSig, feedback, damp);
     }
-    combSum *= 0.25; // moyenne des 4 combs
+    combSum /= combs.length; // moyenne des combs, générique quel que soit leur nombre
 
     // 2 allpass en série
     let sig = combSum;
@@ -308,9 +333,13 @@ function reverb(dL, dR, type, mix, sr) {
   const erL = earlyReflections(feedL, sr, params.erDecay);
   const erR = earlyReflections(feedR, sr, params.erDecay);
 
-  // Comb + allpass par canal (délais différents L/R)
-  const wetL = reverbChannel(feedL, COMB_DELAYS_MS.L, ALLPASS_DELAYS_MS.L, sr, params);
-  const wetR = reverbChannel(feedR, COMB_DELAYS_MS.R, ALLPASS_DELAYS_MS.R, sr, params);
+  // Comb + allpass par canal (délais différents L/R) — utilise les délais propres
+  // au preset s'ils existent (ex: studio, 8 combs), sinon les valeurs globales
+  // historiques (room/hall/plate, 4 combs) pour ne rien changer à leur son.
+  const combMs = params.combDelaysMs || COMB_DELAYS_MS;
+  const apMs = params.apDelaysMs || ALLPASS_DELAYS_MS;
+  const wetL = reverbChannel(feedL, combMs.L, apMs.L, sr, params);
+  const wetR = reverbChannel(feedR, combMs.R, apMs.R, sr, params);
 
   // Normaliser wet
   let peakW = 0;

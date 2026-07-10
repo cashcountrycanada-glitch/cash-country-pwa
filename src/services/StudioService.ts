@@ -121,7 +121,7 @@ async function createSafeWorker(path: string): Promise<Worker> {
  *   • Nettoyage nodes précédents avant chaque prise (pas d'accumulation).
  *   • Capture SÈCHE (DRY) : config.reverb IGNORÉ — effets = post-prod uniquement.
  */
-export type ReverbType = 'none' | 'room' | 'hall' | 'plate';
+export type ReverbType = 'none' | 'room' | 'hall' | 'plate' | 'studio';
 export interface StudioEffectsConfig {
   reverb: ReverbType;
   saturation: number;

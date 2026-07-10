@@ -92,6 +92,10 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
       room:  { duration: 0.8,  decay: 2.5, preDelay: 0.008 },
       hall:  { duration: 1.8,  decay: 3.5, preDelay: 0.018 },
       plate: { duration: 1.2,  decay: 3.0, preDelay: 0.005 },
+      // Approximation du preset 'studio' (8 combs/4 allpass, feedback 0.84,
+      // damp bas) pour que le preview temps réel colle au rendu final :
+      // traîne plus longue que plate (feedback plus élevé → decay plus lent).
+      studio: { duration: 1.5,  decay: 2.6, preDelay: 0.006 },
     };
     const p = irParams[reverbType] || irParams.room;
     const irSr = ctx.sampleRate;
