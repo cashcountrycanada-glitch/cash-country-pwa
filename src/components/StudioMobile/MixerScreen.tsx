@@ -751,6 +751,23 @@ export default function MixerScreen({
   };
 
   // Générer une harmonie individuelle
+  // FIX "crash mémoire à force de régénérer des harmonies" : chaque régénération
+  // crée une piste avec un NOUVEL id — mais le Blob complet de l'ANCIENNE piste
+  // restait pour toujours dans window.__trackBlob_<ancienId> / __originalBlob_<ancienId>,
+  // jamais nettoyé. Sur une longue session de tests (plusieurs régénérations),
+  // ça s'accumule silencieusement jusqu'à faire déborder la mémoire iOS.
+  const cleanupStaleTrackBlobs = (proj: TrackProject | null) => {
+    try {
+      const validIds = new Set((proj?.tracks || []).map(t => t.id));
+      const w = window as any;
+      for (const key of Object.keys(w)) {
+        if (!key.startsWith('__trackBlob_') && !key.startsWith('__originalBlob_')) continue;
+        const id = key.startsWith('__trackBlob_') ? key.slice('__trackBlob_'.length) : key.slice('__originalBlob_'.length);
+        if (!validIds.has(id)) { delete w[key]; }
+      }
+    } catch {}
+  };
+
   const generateOne = async (harmonyDef: typeof HARMONY_DEFS[0]) => {
     if (!mainVoice || generatingIndex !== null) return;
     // Charger l'audio à la demande (différé — pas au montage)
@@ -801,6 +818,7 @@ export default function MixerScreen({
             }),
           };
           onProjectUpdate(uFixed);
+          cleanupStaleTrackBlobs(uFixed);
         }
         setGeneratedDone(prev => new Set([...prev, harmonyDef.trackIndex]));
         setTimeout(() => setGeneratedDone(prev => {
@@ -860,6 +878,7 @@ export default function MixerScreen({
           ),
         };
         onProjectUpdate(up);
+        cleanupStaleTrackBlobs(up);
       }
     } catch (e: any) {
       const isQuota = e?.name === 'QuotaExceededError'
