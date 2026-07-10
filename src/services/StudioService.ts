@@ -759,7 +759,12 @@ export const studioService = {
     // Pour les sentinelles opfs:, le blob est déjà dans OPFS sous la clé fx_xxx
     // On sauvegarde seulement les métadonnées
     const isOpfsSentinel = rec.dataUrl!.startsWith('opfs:') || rec.dataUrl!.startsWith('blob:');
-    const blob = isOpfsSentinel ? null : (() => { try { return this.dataUrlToBlob(rec.dataUrl!); } catch { return null; } })();
+    // FIX v7.6.403 : fetch() natif au lieu de dataUrlToBlob() (atob() + boucle sync)
+    // qui pouvait geler le thread principal sur un enregistrement volumineux.
+    const blob = isOpfsSentinel ? null : await (async () => {
+      try { return await fetch(rec.dataUrl!).then(r => r.blob()); }
+      catch { try { return this.dataUrlToBlob(rec.dataUrl!); } catch { return null; } }
+    })();
     const MAX_ATTEMPTS = 5;
     let lastError: any = null;
 
@@ -1281,6 +1286,19 @@ export const studioService = {
       return null;
     };
     if (!dataUrl) return tryFallback();
+    // FIX CRASH ÉCRAN NOIR MASTERISATION (v7.6.403) : pour un dataUrl "data:" volumineux
+    // (mix complet en base64, plusieurs dizaines de Mo), l'ancien chemin passait par
+    // resolveBlob() → dataUrlToBlob() → atob() + boucle charCodeAt() sur CHAQUE octet,
+    // 100% synchrone. Sur un mix de plusieurs minutes ça bloque le thread principal
+    // plusieurs secondes d'un coup, dès l'appui sur le bouton — iOS tue alors l'affichage
+    // (écran noir, barre du haut seule) AVANT même que le nouvel écran ait pu s'afficher.
+    // fetch() sur une data: URL est géré nativement par le navigateur (hors boucle JS),
+    // donc beaucoup plus rapide et ça ne bloque pas le thread. On l'essaie en premier.
+    if (dataUrl.startsWith('data:')) {
+      try { return await fetch(dataUrl).then(r => r.blob()); } catch {}
+      try { return this.dataUrlToBlob(dataUrl); } catch {}
+      return tryFallback();
+    }
     // Essai synchrone d'abord
     const sync = this.resolveBlob(dataUrl);
     if (sync) return sync;
@@ -1348,8 +1366,17 @@ export const studioService = {
   addTrackToProject(projectId: string, track: MobileRecording): TrackProject | null {
     const projects = this.getProjects(); const project = projects.find(p => p.id === projectId);
     if (!project) return null;
-    // Stocker seulement les métadonnées dans localStorage (dataUrl est dans IndexedDB)
-    const trackMeta = { ...track, dataUrl: undefined, blob: undefined };
+    // FIX PERTE HARMONIES APRÈS FERMETURE (v7.6.403) : dataUrl était mis à `undefined`
+    // sans exception, y compris pour les sentinelles "opfs:harmony_..." — pourtant
+    // cette petite chaîne (~30 caractères) est le SEUL lien entre la piste et le blob
+    // audio réel sauvegardé en IndexedDB/OPFS. Une fois perdue, le rechargement retombe
+    // sur une ancienne clé de secours (harmony_<songId>_t<index>) qui ne correspond
+    // JAMAIS à la vraie clé de sauvegarde (harmony_<voiceId>_t<index>) — la piste est
+    // donc filtrée comme "sans audio" au rechargement, même si le blob existe toujours.
+    // On garde donc les sentinelles opfs: (et toute chaîne courte) dans les métadonnées ;
+    // seules les data: URL volumineuses restent exclues du localStorage.
+    const keepDataUrl = !!track.dataUrl && (track.dataUrl.startsWith('opfs:') || track.dataUrl.length < 500);
+    const trackMeta = { ...track, dataUrl: keepDataUrl ? track.dataUrl : undefined, blob: undefined };
 
     // DEDUP COMPLET avant ajout — nettoyer tous les doublons existants d'abord
     // (même id ou même trackIndex+slot pour toutes les pistes manuelles)

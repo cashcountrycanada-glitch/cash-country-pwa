@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.402';
+const BUILD_VERSION = 'v7.6.404';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -604,7 +604,19 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
           const opfsKey = track.dataUrl?.startsWith('opfs:') ? track.dataUrl.slice(5) : null;
           const keysToTry: string[] = [];
           if (opfsKey) keysToTry.push(opfsKey);
-          // Priorite 2: cle par voiceId extraite de l'opfsKey si disponible
+          // Priorite 2 (RÉCUPÉRATION v7.6.403) : la vraie convention de sauvegarde utilise
+          // l'id de la prise vocale (mainVoice.id), pas le songId — pour les harmonies
+          // générées avant ce correctif, dataUrl a été effacé au moment de sauvegarder le
+          // projet et la sentinelle opfs: est perdue. On tente donc de reconstruire la clé
+          // avec l'id de chaque prise vocale connue du projet (toutes prises A/B/C).
+          if (track.trackIndex != null) {
+            const voiceIds = new Set(
+              (proj.tracks || [])
+                .filter((t: any) => t.trackIndex === 0 && !t.isGenerated && t.id)
+                .map((t: any) => t.id)
+            );
+            for (const vId of voiceIds) keysToTry.push(`harmony_${vId}_t${track.trackIndex}`);
+          }
           // Priorite 3: fallback legacy avec songId (ancienne convention incorrecte)
           if (track.songId && track.trackIndex != null) {
             keysToTry.push(`harmony_${track.songId}_t${track.trackIndex}`);
