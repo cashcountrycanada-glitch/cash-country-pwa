@@ -70,9 +70,23 @@ function isIOS(): boolean {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
+// FIX CRASH ÉCRAN NOIR (v7.6.402) : sur iOS, si le thread principal reste
+// bloqué trop longtemps par du calcul JS synchrone, WebKit considère la page
+// "unresponsive" et tue le processus de contenu → écran noir, seule la barre
+// du haut reste, tout le React (y compris le DebugPanel) disparaît d'un coup.
+// Les fonctions d'analyse (LUFS, True Peak) et de traitement (noise gate,
+// saturation) tournaient boucle-par-sample sur la chanson ENTIÈRE sans jamais
+// rendre la main — et étaient appelées plusieurs fois par export (voix seule
+// + mix complet, jusqu'à 3 passes pour le True Peak). Ce helper les découpe
+// en tranches avec une micro-pause entre chaque, pour laisser iOS respirer.
+const CHUNK_YIELD_SAMPLES = 150000; // pause tous les ~3.4s d'audio traité
+function yieldToMain(): Promise<void> {
+  return new Promise(r => setTimeout(r, 0));
+}
+
 // LUFS ITU-R BS.1770-4 avec gating — standard broadcast complet
 // Gating absolu (-70 LUFS) + gating relatif (-10 LU) selon EBU R128
-function analyzeLoudness(buffer: AudioBuffer): number {
+async function analyzeLoudness(buffer: AudioBuffer): Promise<number> {
   const sr = buffer.sampleRate;
   const ch = Math.min(2, buffer.numberOfChannels);
 
@@ -108,6 +122,7 @@ function analyzeLoudness(buffer: AudioBuffer): number {
       const x0=data[i];
       const y0=(b0s/a0s)*x0+(b1s/a0s)*x1+(b2s/a0s)*x2-(a1s/a0s)*y1-(a2s/a0s)*y2;
       f[i]=y0; x2=x1; x1=x0; y2=y1; y1=y0;
+      if (i % CHUNK_YIELD_SAMPLES === 0 && i > 0) await yieldToMain();
     }
     // Filtre 2 (high-pass)
     let x1b=0,x2b=0,y1b=0,y2b=0;
@@ -115,6 +130,7 @@ function analyzeLoudness(buffer: AudioBuffer): number {
       const x0=f[i];
       const y0=(b0h/a0h)*x0+(b1h/a0h)*x1b+(b2h/a0h)*x2b-(a1h/a0h)*y1b-(a2h/a0h)*y2b;
       f[i]=y0; x2b=x1b; x1b=x0; y2b=y1b; y1b=y0;
+      if (i % CHUNK_YIELD_SAMPLES === 0 && i > 0) await yieldToMain();
     }
     filtered.push(f);
   }
@@ -136,6 +152,7 @@ function analyzeLoudness(buffer: AudioBuffer): number {
       power += w * sum / blockSize;
     }
     blockPower.push(power);
+    if (b % 500 === 0 && b > 0) await yieldToMain();
   }
 
   if (blockPower.length === 0) return -100;
@@ -161,7 +178,7 @@ function analyzeLoudness(buffer: AudioBuffer): number {
 // True Peak measurement — détecte les inter-sample peaks via oversampling 4x
 // Les inter-sample peaks peuvent dépasser 0 dBFS même si les samples sont sous 0 dBFS
 // Standard EBU R128 / ITU-R BS.1770-4 : max -1 dBTP
-function measureTruePeak(buffer: AudioBuffer): number {
+async function measureTruePeak(buffer: AudioBuffer): Promise<number> {
   const ch = Math.min(2, buffer.numberOfChannels);
   let maxTP = 0;
   // Oversampling 4x via interpolation sinc simplifiée (Lanczos-2)
@@ -181,6 +198,8 @@ function measureTruePeak(buffer: AudioBuffer): number {
         const interp = ((a*t + b)*t + cc)*t + p1;
         maxTP = Math.max(maxTP, Math.abs(interp));
       }
+      // 4x oversample → pause plus fréquente, ce calcul est le plus coûteux du pipeline
+      if (i % CHUNK_YIELD_SAMPLES === 0 && i > 0) await yieldToMain();
     }
   }
   return maxTP > 0 ? 20 * Math.log10(maxTP) : -100; // dBTP
@@ -256,16 +275,19 @@ async function mixVocalWithInst(
   const duration = Math.max(vocalBuf.duration, instBuf.duration + Math.abs(offsetSec));
 
   // Mesurer les peaks des deux signaux
-  const peakOf = (buf: AudioBuffer): number => {
+  const peakOf = async (buf: AudioBuffer): Promise<number> => {
     let pk = 0;
     for (let c = 0; c < buf.numberOfChannels; c++) {
       const ch = buf.getChannelData(c);
-      for (let i = 0; i < ch.length; i++) { const a = Math.abs(ch[i]); if (a > pk) pk = a; }
+      for (let i = 0; i < ch.length; i++) {
+        const a = Math.abs(ch[i]); if (a > pk) pk = a;
+        if (i % CHUNK_YIELD_SAMPLES === 0 && i > 0) await yieldToMain();
+      }
     }
     return pk;
   };
-  const vocalPeak = peakOf(vocalBuf);
-  const instPeak  = peakOf(instBuf);
+  const vocalPeak = await peakOf(vocalBuf);
+  const instPeak  = await peakOf(instBuf);
 
   // Normaliser chaque signal à -1dBFS séparément
   // Puis appliquer le ratio voix/inst souhaité
@@ -342,13 +364,14 @@ async function mixVocalWithInst(
       L[i] += vL[i] * vocalGain * (1.0 - env);
       R[i] += vR[i] * vocalGain * (1.0 - env);
     }
+    if (i % CHUNK_YIELD_SAMPLES === 0 && i > 0) await yieldToMain();
   }
   return mixed;
 }
 
 // Tape saturation douce — signature chaleur analogique
 // Applique une distorsion asymétrique légère qui enrichit les harmoniques
-function applySaturation(data: Float32Array, drive: number = 0.3): Float32Array {
+async function applySaturation(data: Float32Array, drive: number = 0.3): Promise<Float32Array> {
   const out = new Float32Array(data.length);
   for (let i = 0; i < data.length; i++) {
     const x = data[i] * (1 + drive);
@@ -356,13 +379,14 @@ function applySaturation(data: Float32Array, drive: number = 0.3): Float32Array 
     out[i] = x < 0
       ? Math.tanh(x * 0.9)   // légèrement plus doux sur les négatifs
       : Math.tanh(x * 1.0);
+    if (i % CHUNK_YIELD_SAMPLES === 0 && i > 0) await yieldToMain();
   }
   return out;
 }
 
 // Noise gate — coupe le bruit de fond entre les phrases vocales
 // Seuil en amplitude linéaire, release doux pour éviter les clics
-function applyNoiseGate(data: Float32Array, thresholdDb: number = -65, releaseMs: number = 150, sr: number = 44100): Float32Array {
+async function applyNoiseGate(data: Float32Array, thresholdDb: number = -65, releaseMs: number = 150, sr: number = 44100): Promise<Float32Array> {
   // Seuil adaptatif : calculer le plancher de bruit du signal
   // Utiliser le 10e percentile de l'énergie comme référence pour le bruit de fond
   const blockSize = Math.floor(sr * 0.01); // blocs 10ms
@@ -372,6 +396,7 @@ function applyNoiseGate(data: Float32Array, thresholdDb: number = -65, releaseMs
     let e = 0;
     for (let i = b*blockSize; i < (b+1)*blockSize; i++) e += data[i]*data[i];
     blockEnergies.push(Math.sqrt(e/blockSize));
+    if (b % 20000 === 0 && b > 0) await yieldToMain();
   }
   blockEnergies.sort((a,b) => a-b);
   // Plancher = médiane des 15% plus silencieux + 6dB de marge
@@ -401,6 +426,7 @@ function applyNoiseGate(data: Float32Array, thresholdDb: number = -65, releaseMs
     // Fermeture douce avec envelope — évite les clics
     const gain = gateOpen ? 1.0 : Math.max(0, releaseCount / releaseSamp);
     out[i] = data[i] * gain;
+    if (i % CHUNK_YIELD_SAMPLES === 0 && i > 0) await yieldToMain();
   }
   return out;
 }
@@ -422,6 +448,7 @@ async function stereoWiden(buf: AudioBuffer, widthGain: number = 1.3): Promise<A
     const side = (L[i] - R[i]) * 0.5 * widthGain;
     outL[i] = mid + side;
     outR[i] = mid - side;
+    if (i % CHUNK_YIELD_SAMPLES === 0 && i > 0) await yieldToMain();
   }
   // Vérification compatibilité mono : le sum L+R ne doit pas annuler la voix
   // (phase cancellation si trop de widening sur signal déjà stéréo)
@@ -469,9 +496,9 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const step1Buf = offline1.createBuffer(ch, len, sr);
   for (let c = 0; c < ch; c++) {
     let data = new Float32Array(buf.getChannelData(c));
-    data = applyNoiseGate(data, -65, 150, sr);
+    data = await applyNoiseGate(data, -65, 150, sr);
     const driveAmt = 0.12 + Math.abs(s.lowGain) * 0.01;
-    data = applySaturation(data, driveAmt);
+    data = await applySaturation(data, driveAmt);
     step1Buf.getChannelData(c).set(data);
   }
   const s1src = offline1.createBufferSource(); s1src.buffer = step1Buf;
@@ -548,7 +575,7 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
 
   // ── ÉTAPE 3 : LUFS targeting + True Peak limiting broadcast-compliant ──────
   // Mesure LUFS sur le signal compressé (avec gating BS.1770-4)
-  const compressedLufs = analyzeLoudness(compressed);
+  const compressedLufs = await analyzeLoudness(compressed);
   // Cap à 20dB max pour éviter un gain excessif sur silence/voix très douce
   let gainDb = Math.min(s.targetLufs - compressedLufs, 20);
 
@@ -581,7 +608,7 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
     finalBuf = await offline2.startRendering();
 
     // Mesurer True Peak du résultat
-    const truePeakDB = measureTruePeak(finalBuf);
+    const truePeakDB = await measureTruePeak(finalBuf);
     const truePeakHeadroom = s.ceiling - truePeakDB; // positif = sous le plafond
 
     // Si True Peak est dans la tolérance ±0.3 dB du ceiling → on arrête
@@ -594,7 +621,7 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
     } else if (truePeakHeadroom > 1.5) {
       // Trop de marge → on peut monter un peu pour atteindre le targetLufs
       // Mais seulement si on est encore loin du targetLufs
-      const finalLufs = analyzeLoudness(finalBuf);
+      const finalLufs = await analyzeLoudness(finalBuf);
       if (finalLufs < s.targetLufs - 0.5) gainDb += Math.min(truePeakHeadroom - 0.5, s.targetLufs - finalLufs);
       else break;
     } else {
@@ -976,7 +1003,7 @@ export default function MasteringEngine({
   // Analyser l'entrée au montage
   useEffect(() => {
     decodeBlob(vocalBlob)
-      .then(buf => setInputLufs(Math.round(analyzeLoudness(buf) * 10) / 10))
+      .then(async buf => setInputLufs(Math.round((await analyzeLoudness(buf)) * 10) / 10))
       .catch(() => {});
     return () => {
       if (vocalUrlRef.current) URL.revokeObjectURL(vocalUrlRef.current);
@@ -1010,7 +1037,7 @@ export default function MasteringEngine({
       const vocalM = await masterAudio(vocalRaw, settings);
       vocalRaw = null; // FIX mémoire : relâché dès que possible, plus besoin après ce point
       setVocalMastered(vocalM);
-      setOutputVocalLufs(Math.round(analyzeLoudness(vocalM) * 10) / 10);
+      setOutputVocalLufs(Math.round((await analyzeLoudness(vocalM)) * 10) / 10);
 
       // Encodage voix — progression animée en temps réel (durée réelle)
       if (vocalUrlRef.current) URL.revokeObjectURL(vocalUrlRef.current);
@@ -1040,7 +1067,7 @@ export default function MasteringEngine({
         const fullM = await masterAudio(fullRaw, settings);
         fullRaw = null; // FIX mémoire : relâché dès que possible, avant l'encodage
         setFullMastered(fullM);
-        setOutputFullLufs(Math.round(analyzeLoudness(fullM) * 10) / 10);
+        setOutputFullLufs(Math.round((await analyzeLoudness(fullM)) * 10) / 10);
 
         // Encodage mix complet — progression animée
         if (fullUrlRef.current) URL.revokeObjectURL(fullUrlRef.current);
