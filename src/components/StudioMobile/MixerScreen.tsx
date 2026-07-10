@@ -217,6 +217,7 @@ export default function MixerScreen({
   };
 
   const [isPreviewing, setIsPreviewing] = useState(false);
+  const [exportingPreview, setExportingPreview] = useState(false);
 
   const tracks    = project?.tracks || [];
 
@@ -385,6 +386,123 @@ export default function MixerScreen({
     });
     // Sécurité : stop après 4 minutes
     setTimeout(() => stopPreview(), 4 * 60 * 1000);
+  };
+
+  // Exporte le Preview Mix tel quel (mêmes pistes/gains/pans/délais que la
+  // lecture en direct) dans un vrai fichier WAV — pour permettre de vérifier
+  // hors de l'appareil si les harmonies sont vraiment absentes du calcul, ou
+  // si le souci est spécifique à la lecture en temps réel.
+  const exportPreviewMix = async () => {
+    if (exportingPreview) return;
+    setExportingPreview(true);
+    const dbg = (msg: string) => { try { (window as any).__addLog?.(msg); } catch {} console.log(msg); };
+    try {
+      const activeSlot = takeSlot ?? 'A';
+      const seenVoice = new Set<string>();
+      const seenHarmonySlot = new Set<string>();
+      const rawTracks = project?.tracks || [];
+      const currentTracks = rawTracks.filter((t: any) => {
+        if (t.trackIndex === 0 && !t.isGenerated) {
+          const slot = t.takeSlot ?? 'A';
+          if (seenVoice.has(slot)) return false;
+          seenVoice.add(slot);
+          return slot === activeSlot;
+        }
+        if (t.trackIndex >= 2 && t.trackIndex <= 5 && !t.isGenerated) {
+          const slot = t.takeSlot ?? 'A';
+          const preferredSlot = activeManualSlots[t.trackIndex] ?? 'A';
+          const key = `${t.trackIndex}_${slot}`;
+          if (seenHarmonySlot.has(key)) return false;
+          seenHarmonySlot.add(key);
+          return slot === preferredSlot;
+        }
+        return true;
+      });
+      if (currentTracks.length === 0) { alert('Aucune piste à exporter.'); return; }
+      dbg(`[ExportPreview] ${currentTracks.length}/${rawTracks.length} piste(s) retenue(s)`);
+
+      const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 9, 3: 12, 4: 14, 5: 7 };
+      const probeCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      type Item = { label: string; buffer: AudioBuffer; gainVal: number; panVal: number; delaySec: number; isInst: boolean; offsetSec: number };
+      const items: Item[] = [];
+
+      for (const track of currentTracks) {
+        const label = `"${track.trackLabel || track.id}" (idx=${track.trackIndex ?? '?'})`;
+        if ((track as any).muted) { dbg(`[ExportPreview] ${label} → SKIP (muted)`); continue; }
+        let blob: Blob | null = null;
+        try { blob = await studioService.resolveBlobAsync(track.dataUrl, track.id); } catch {}
+        if (!blob || blob.size < 100) { dbg(`[ExportPreview] ${label} → SKIP (blob introuvable)`); continue; }
+        try {
+          const ab = await blob.arrayBuffer();
+          const buffer = await probeCtx.decodeAudioData(ab);
+          const tIdx = (track as any).trackIndex ?? 0;
+          const delaySec = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) / 1000 : 0;
+          items.push({
+            label, buffer,
+            gainVal: Math.min(1.0, (track as any).gain ?? 1.0),
+            panVal: (track as any).pan ?? 0,
+            delaySec, isInst: false, offsetSec: 0,
+          });
+          dbg(`[ExportPreview] ${label} → décodé (${(blob.size / 1024).toFixed(0)}KB, gain=${Math.min(1.0, (track as any).gain ?? 1.0)})`);
+        } catch (e: any) { dbg(`[ExportPreview] ${label} → EXCEPTION: ${e?.message}`); }
+      }
+
+      if (hasInst && selected) {
+        try {
+          const instBlobForPreview = await studioOfflineDB.getAudio(`inst_${selected.id}`);
+          if (instBlobForPreview && instBlobForPreview.size > 100) {
+            const ab = await instBlobForPreview.arrayBuffer();
+            const buffer = await probeCtx.decodeAudioData(ab);
+            items.push({
+              label: 'Instrumental', buffer,
+              gainVal: previewInstVol > 0 ? previewInstVol : 0.7,
+              panVal: 0, delaySec: 0, isInst: true, offsetSec: instOffsetMs / 1000,
+            });
+            dbg(`[ExportPreview] Instrumental → décodé`);
+          }
+        } catch (e: any) { dbg(`[ExportPreview] Instrumental → EXCEPTION: ${e?.message}`); }
+      }
+      await probeCtx.close();
+
+      if (items.length === 0) { alert('Aucune piste décodable à exporter.'); return; }
+
+      const totalDur = Math.max(...items.map(it => it.delaySec + it.offsetSec + it.buffer.duration)) + 0.5;
+      const sr = items[0].buffer.sampleRate;
+      const offline = new OfflineAudioContext(2, Math.ceil(totalDur * sr), sr);
+      for (const it of items) {
+        const src = offline.createBufferSource(); src.buffer = it.buffer;
+        const gain = offline.createGain(); gain.gain.value = it.gainVal;
+        if (it.isInst) {
+          src.connect(gain); gain.connect(offline.destination);
+          if (it.offsetSec >= 0) src.start(it.offsetSec);
+          else src.start(0, -it.offsetSec);
+        } else {
+          const pan = offline.createStereoPanner(); pan.pan.value = it.panVal;
+          src.connect(gain); gain.connect(pan); pan.connect(offline.destination);
+          src.start(it.delaySec);
+        }
+      }
+      dbg(`[ExportPreview] Rendu de ${items.length} piste(s), durée ${totalDur.toFixed(1)}s…`);
+      const rendered = await offline.startRendering();
+      const blob = await audioBufferToBlob(rendered);
+
+      const safeTitle = (selected?.title || project?.songTitle || 'preview').replace(/[^a-zA-Z0-9]/g, '_');
+      const fileName = `${safeTitle}_PREVIEW_EXPORT.wav`;
+      const file = new File([blob], fileName, { type: 'audio/wav' });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ title: fileName, files: [file] });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fileName; a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
+      dbg(`[ExportPreview] Export terminé : ${fileName}`);
+    } catch (e: any) {
+      alert('Erreur export preview : ' + e.message);
+    } finally {
+      setExportingPreview(false);
+    }
   };
 
 
@@ -1526,6 +1644,15 @@ export default function MixerScreen({
               className="w-full py-3 rounded-2xl font-black text-[13px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
               style={{ background: isPreviewing ? '#7c3aed' : '#18181b', border: `2px solid ${isPreviewing ? '#7c3aed' : '#3f3f46'}`, color: isPreviewing ? '#fff' : '#a1a1aa' }}>
               {isPreviewing ? <><Pause size={15}/> Stop Preview</> : <><Play size={15}/> ▶ Preview Mix</>}
+            </button>
+
+            {/* Bouton Export Preview (debug) — exporte exactement ce que Preview Mix
+                calcule (mêmes pistes/gains/délais) en fichier WAV, pour vérifier
+                hors de l'app si un souci vient du calcul ou de la lecture en direct */}
+            <button onClick={exportPreviewMix} disabled={exportingPreview}
+              className="w-full py-2.5 rounded-2xl font-bold text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
+              style={{ background: '#18181b', border: '2px solid #3f3f46', color: '#71717a', opacity: exportingPreview ? 0.6 : 1 }}>
+              <Download size={13}/> {exportingPreview ? 'Export en cours…' : 'Exporter le Preview (debug)'}
             </button>
 
             {/* Bouton Mixer */}

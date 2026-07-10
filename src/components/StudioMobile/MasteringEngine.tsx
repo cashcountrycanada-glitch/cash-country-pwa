@@ -491,21 +491,53 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const deEss  = offline1.createBiquadFilter(); deEss.type = 'peaking'; deEss.frequency.value = 7500; deEss.Q.value = 3.0; deEss.gain.value = -3.0;
   const deEss2 = offline1.createBiquadFilter(); deEss2.type = 'peaking'; deEss2.frequency.value = 9500; deEss2.Q.value = 2.0; deEss2.gain.value = -1.5;
 
-  // Compression douce (étape 1 de 2) — ratio bas pour la colle
+  // Compression douce (glue, avant la séparation en bandes) — ratio bas,
+  // attaque lente, garde les transitoires tout en collant légèrement le mix
   const comp1 = offline1.createDynamicsCompressor();
   comp1.threshold.value = s.threshold + 6; // 6dB au-dessus du threshold final
   comp1.ratio.value     = Math.min(s.ratio * 0.5, 3); // ratio très doux
   comp1.attack.value    = s.attack / 1000 * 2; // attaque lente = garde les transitoires
   comp1.release.value   = s.release / 1000; comp1.knee.value = 10;
 
-  // Compression principale (étape 2)
-  const comp2 = offline1.createDynamicsCompressor();
-  comp2.threshold.value = s.threshold; comp2.ratio.value = s.ratio;
-  comp2.attack.value    = s.attack / 1000; comp2.release.value = s.release / 1000; comp2.knee.value = 4;
-
   s1src.connect(hpf); hpf.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4);
-  eq4.connect(deEss); deEss.connect(deEss2); deEss2.connect(comp1); comp1.connect(comp2);
-  comp2.connect(offline1.destination);
+  eq4.connect(deEss); deEss.connect(deEss2); deEss2.connect(comp1);
+
+  // ── COMPRESSION MULTIBANDE (basse/médium/aigu) ──────────────────────────
+  // La vraie différence entre un moteur "single-band" et un mastering
+  // pro/LANDR : chaque bande de fréquence reçoit SA PROPRE dynamique au lieu
+  // qu'un seul détecteur/compresseur traite tout le spectre pareil (une
+  // grosse note de basse ne devrait pas faire "respirer" les aigus, et
+  // inversement). Crossovers à 200Hz et 3000Hz, filtres en cascade (~12dB/oct,
+  // approximation Linkwitz-Riley simple).
+  const lowXover = 200, highXover = 3000;
+
+  const lowLp1 = offline1.createBiquadFilter(); lowLp1.type = 'lowpass'; lowLp1.frequency.value = lowXover; lowLp1.Q.value = 0.707;
+  const lowLp2 = offline1.createBiquadFilter(); lowLp2.type = 'lowpass'; lowLp2.frequency.value = lowXover; lowLp2.Q.value = 0.707;
+  const lowComp = offline1.createDynamicsCompressor();
+  lowComp.threshold.value = s.threshold - 2; lowComp.ratio.value = Math.min(s.ratio * 0.7, 4);
+  lowComp.attack.value = 0.030; lowComp.release.value = Math.max(s.release / 1000, 0.25); lowComp.knee.value = 6;
+
+  const midHp1 = offline1.createBiquadFilter(); midHp1.type = 'highpass'; midHp1.frequency.value = lowXover; midHp1.Q.value = 0.707;
+  const midHp2 = offline1.createBiquadFilter(); midHp2.type = 'highpass'; midHp2.frequency.value = lowXover; midHp2.Q.value = 0.707;
+  const midLp1 = offline1.createBiquadFilter(); midLp1.type = 'lowpass'; midLp1.frequency.value = highXover; midLp1.Q.value = 0.707;
+  const midLp2 = offline1.createBiquadFilter(); midLp2.type = 'lowpass'; midLp2.frequency.value = highXover; midLp2.Q.value = 0.707;
+  const midComp = offline1.createDynamicsCompressor();
+  midComp.threshold.value = s.threshold; midComp.ratio.value = s.ratio;
+  midComp.attack.value = s.attack / 1000; midComp.release.value = s.release / 1000; midComp.knee.value = 5;
+
+  const highHp1 = offline1.createBiquadFilter(); highHp1.type = 'highpass'; highHp1.frequency.value = highXover; highHp1.Q.value = 0.707;
+  const highHp2 = offline1.createBiquadFilter(); highHp2.type = 'highpass'; highHp2.frequency.value = highXover; highHp2.Q.value = 0.707;
+  const highComp = offline1.createDynamicsCompressor();
+  highComp.threshold.value = s.threshold + 3; highComp.ratio.value = Math.min(s.ratio * 0.6, 3);
+  highComp.attack.value = 0.004; highComp.release.value = Math.max(s.release / 1000 * 0.6, 0.08); highComp.knee.value = 8;
+
+  const bandSum = offline1.createGain(); // point de sommation des 3 bandes
+
+  comp1.connect(lowLp1); lowLp1.connect(lowLp2); lowLp2.connect(lowComp); lowComp.connect(bandSum);
+  comp1.connect(midHp1); midHp1.connect(midHp2); midHp2.connect(midLp1); midLp1.connect(midLp2); midLp2.connect(midComp); midComp.connect(bandSum);
+  comp1.connect(highHp1); highHp1.connect(highHp2); highHp2.connect(highComp); highComp.connect(bandSum);
+
+  bandSum.connect(offline1.destination);
   s1src.start(0);
   const compressed = await offline1.startRendering();
 
