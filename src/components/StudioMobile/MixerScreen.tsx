@@ -484,7 +484,7 @@ export default function MixerScreen({
       }
       dbg(`[ExportPreview] Rendu de ${items.length} piste(s), durée ${totalDur.toFixed(1)}s…`);
       const rendered = await offline.startRendering();
-      const blob = await audioBufferToBlob(rendered);
+      const blob = await studioService.encodeToWav(rendered);
 
       const safeTitle = (selected?.title || project?.songTitle || 'preview').replace(/[^a-zA-Z0-9]/g, '_');
       const fileName = `${safeTitle}_PREVIEW_EXPORT.wav`;

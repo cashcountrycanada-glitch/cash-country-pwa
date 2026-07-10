@@ -736,6 +736,12 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
 
 
 export const studioService = {
+  // Wrapper public pour audioBufferToBlob (fonction privée du module) — permet
+  // à d'autres écrans (ex: export debug du Preview Mix) d'encoder un
+  // AudioBuffer en WAV sans dupliquer l'encodeur.
+  async encodeToWav(buffer: AudioBuffer, onProgress?: (pct: number) => void): Promise<Blob> {
+    return audioBufferToBlob(buffer, onProgress);
+  },
   // FIX FUITE MÉMOIRE : `__harmonyWorker` ici est une variable privée du module
   // (ligne ~53), distincte de `window.__harmonyWorker`. Le nettoyage fait côté
   // StudioMobile.tsx (clearSongMemory) essayait de terminer `window.__harmonyWorker`,
