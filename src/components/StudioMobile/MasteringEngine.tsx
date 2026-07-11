@@ -971,6 +971,12 @@ function db(v: number) { return v >= 0 ? `+${v.toFixed(1)} dB` : `${v.toFixed(1)
 export default function MasteringEngine({
   vocalBlob, instBlob, instOffsetMs = 0, songTitle, songId, onBack, onStemReady, isOnline,
 }: MasteringProps) {
+  // FIX DIAGNOSTIC (v7.6.415) : trace synchrone à l'instant précis où React
+  // commence à exécuter le rendu de ce composant — avant tout hook, avant tout
+  // effet. Si cette ligne n'apparaît jamais dans le log, le crash se produit
+  // AVANT même l'entrée dans ce composant (donc dans StudioMobile.tsx, le
+  // DebugPanel, ou le ScreenErrorBoundary lui-même) — pas ici.
+  try { (window as any).__breadcrumb?.(`🎬 MasteringEngine render démarré — vocalBlob=${vocalBlob ? vocalBlob.size + 'B/' + vocalBlob.type : 'NULL'}`); } catch {}
 
   const [preset, setPreset]               = useState('cash_country');
   const [activeCategory, setActiveCategory] = useState('country');

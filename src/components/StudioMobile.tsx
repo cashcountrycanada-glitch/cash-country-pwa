@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.414';
+const BUILD_VERSION = 'v7.6.415';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1233,7 +1233,10 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     setScreen('mixer');
     return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex items-center justify-center text-white/60 text-sm">Retour au mixeur…</div></>;
   }
-  if (screen === 'master' && masterVocalBlob && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
+  if (screen === 'master' && masterVocalBlob && selected) {
+    try { (window as any).__breadcrumb?.(`🖼️ Construction JSX écran Master démarrée (vocalBlob=${masterVocalBlob.size}B)`); } catch {}
+    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
+  }
   if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Comp Editor" onReset={() => setScreen('mixer')}><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {
               // Persister les régions dans les pistes du projet
               if (!project) return;
