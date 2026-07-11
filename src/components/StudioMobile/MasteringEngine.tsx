@@ -566,23 +566,34 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
 
   bandSum.connect(offline1.destination);
   s1src.start(0);
-  const compressed = await offline1.startRendering();
+  let compressed: AudioBuffer | null = await offline1.startRendering();
+
+  // FIX CRASH MÉMOIRE MASTERISATION (v7.6.410) : mesurer le LUFS AVANT le
+  // stereo widening (au lieu d'après) permet de libérer `compressed` (un
+  // buffer stéréo pleine longueur) dès que possible, au lieu de le garder
+  // vivant pendant tout le rendu du widening. Chaque buffer stéréo pleine
+  // chanson pèse plusieurs dizaines de Mo — sur un export qui en enchaîne
+  // 5-10 (voix seule + mix complet, x plusieurs étapes chacun), libérer la
+  // mémoire dès que possible réduit le pic mémoire cumulé sur iOS.
+  const compressedLufs = await analyzeLoudness(compressed);
+  await new Promise<void>(r => setTimeout(r, 100)); // laisse le GC respirer
 
   // ── ÉTAPE 3 : Stereo widening + Gain makeup + Limiteur transparent ──────────
   // Stereo widening léger — plus large sur les presets country et bright
   const widenAmt = s.highGain > 1 ? 1.35 : 1.20;
   const widened  = await stereoWiden(compressed, widenAmt);
+  compressed = null; // libère le buffer pré-widening, plus besoin
 
   // ── ÉTAPE 3 : LUFS targeting + True Peak limiting broadcast-compliant ──────
-  // Mesure LUFS sur le signal compressé (avec gating BS.1770-4)
-  const compressedLufs = await analyzeLoudness(compressed);
   // Cap à 20dB max pour éviter un gain excessif sur silence/voix très douce
   let gainDb = Math.min(s.targetLufs - compressedLufs, 20);
+  await new Promise<void>(r => setTimeout(r, 100)); // laisse le GC respirer avant la boucle
 
   // Boucle de correction True Peak (max 3 itérations — converge toujours)
   // À chaque itération : appliquer le gain, mesurer True Peak, réajuster si nécessaire
   let finalBuf: AudioBuffer = widened;
   for (let iter = 0; iter < 3; iter++) {
+    if (iter > 0) await new Promise<void>(r => setTimeout(r, 100)); // pause GC entre itérations
     const offline2 = new OfflineAudioContext(2, widened.length, widened.sampleRate);
     const s2src    = offline2.createBufferSource(); s2src.buffer = widened;
 
@@ -1064,6 +1075,7 @@ export default function MasteringEngine({
         instRaw = null; // FIX mémoire : relâché dès que possible
 
         setProgressLabel('Masterisation du mix complet...'); setProgress(80);
+        await new Promise<void>(r => setTimeout(r, 150)); // pause GC avant la 2e passe lourde
         const fullM = await masterAudio(fullRaw, settings);
         fullRaw = null; // FIX mémoire : relâché dès que possible, avant l'encodage
         setFullMastered(fullM);
