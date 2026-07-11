@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.417';
+const BUILD_VERSION = 'v7.6.418';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -176,10 +176,27 @@ class ScreenErrorBoundary extends React.Component<
 
 export default function StudioMobile({ songs: propSongs = [] }: Props) {
   try { const w = window as any; w.__smRenderCount = (w.__smRenderCount||0)+1; if (w.__smRenderCount % 5 === 1) w.__breadcrumb?.(`🔁 StudioMobile render #${w.__smRenderCount}`); } catch {}
-  const [screen, setScreen]     = useState<Screen>('songs');
-  const [selected, setSelected] = useState<Song | null>(null);
-  const [project, setProject]   = useState<TrackProject | null>(null);
+  const [screen, setScreenRaw]     = useState<Screen>('songs');
+  const [selected, setSelectedRaw] = useState<Song | null>(null);
+  const [project, setProjectRaw]   = useState<TrackProject | null>(null);
   const [apiSongs, setApiSongs] = useState<Song[]>([]);
+  // FIX DIAGNOSTIC BOUCLE INFINIE (v7.6.418) : ces wrappers tracent QUI appelle
+  // setScreen/setSelected/setProject pendant que screen==='master', pour
+  // trouver lequel des trois (ou une combinaison) redéclenche le rendu en
+  // boucle. Limité à 30 traces pour ne pas noyer le log.
+  const spyCountRef = useRef(0);
+  const setScreen = (v: any) => {
+    if (screen === 'master' && spyCountRef.current < 30) { spyCountRef.current++; try { (window as any).__breadcrumb?.(`🕵️ setScreen('${typeof v === 'function' ? v(screen) : v}') appelé pendant master`); } catch {} }
+    setScreenRaw(v);
+  };
+  const setSelected = (v: any) => {
+    if (screen === 'master' && spyCountRef.current < 30) { spyCountRef.current++; try { (window as any).__breadcrumb?.(`🕵️ setSelected(...) appelé pendant master`); } catch {} }
+    setSelectedRaw(v);
+  };
+  const setProject = (v: any) => {
+    if (screen === 'master' && spyCountRef.current < 30) { spyCountRef.current++; try { (window as any).__breadcrumb?.(`🕵️ setProject(...) appelé pendant master`); } catch {} }
+    setProjectRaw(v);
+  };
   const [recordings, setRecordings] = useState<MobileRecording[]>([]);
   const [currentPreset, setCurrentPreset] = useState<TrackPreset>(TRACK_PRESETS[0]);
   // Reverb par défaut : 'hall' (grande salle) plutôt que 'room' (petite pièce).
