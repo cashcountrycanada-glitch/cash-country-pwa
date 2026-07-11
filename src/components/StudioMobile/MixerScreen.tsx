@@ -930,28 +930,31 @@ export default function MixerScreen({
   };
 
   const handleMasterize = async () => {
-    if (!project?.mixedDataUrl) return;
+    const crumb = (m: string) => { try { (window as any).__breadcrumb?.(m); } catch {} };
+    crumb(`🖱️ Bouton Masteriser cliqué — mixedDataUrl=${project?.mixedDataUrl ? project.mixedDataUrl.slice(0,30) : 'VIDE'}`);
+    if (!project?.mixedDataUrl) { crumb(`⛔ handleMasterize STOP — project.mixedDataUrl est vide, bouton n'a rien fait`); return; }
     const url = project.mixedDataUrl;
     if (url.startsWith('blob:')) {
       // blob: URL → essayer __mixBlob mémoire d'abord
       const memBlob = (window as any).__mixBlob as Blob | undefined;
-      if (memBlob && memBlob.size > 100) { onMasterize(memBlob, instBlob); return; }
+      if (memBlob && memBlob.size > 100) { crumb(`✅ Mix trouvé en mémoire (__mixBlob, ${memBlob.size}B) → onMasterize`); onMasterize(memBlob, instBlob); return; }
       // Tenter fetch (valide si même session)
       try {
         const b = await fetch(url).then(r => r.blob());
-        if (b && b.size > 100) { onMasterize(b, instBlob); return; }
-      } catch {}
+        if (b && b.size > 100) { crumb(`✅ Mix trouvé via fetch blob: (${b.size}B) → onMasterize`); onMasterize(b, instBlob); return; }
+      } catch (e: any) { crumb(`⚠️ fetch blob: a échoué: ${e?.message}`); }
       // blob: URL morte — chercher le dernier mix dans IDB
       try {
         const db = studioOfflineDB;
         const fromDb = await db.getAudio(`mix_${project.id}`).catch(() => null);
-        if (fromDb && fromDb.size > 100) { onMasterize(fromDb, instBlob); return; }
+        if (fromDb && fromDb.size > 100) { crumb(`✅ Mix trouvé en IDB (mix_${project.id}, ${fromDb.size}B) → onMasterize`); onMasterize(fromDb, instBlob); return; }
       } catch {}
+      crumb(`⛔ handleMasterize STOP — mix introuvable partout (mémoire/fetch/IDB)`);
       alert('Mix introuvable — veuillez relancer le mixage avant de masteriser.');
     } else {
       const resolved = await studioService.resolveBlobAsync(url);
-      if (resolved) onMasterize(resolved, instBlob);
-      else console.warn('[Masterize] Blob mix introuvable');
+      if (resolved) { crumb(`✅ Mix résolu via resolveBlobAsync (${resolved.size}B) → onMasterize`); onMasterize(resolved, instBlob); }
+      else { crumb(`⛔ handleMasterize STOP — resolveBlobAsync a retourné null pour dataUrl legacy`); console.warn('[Masterize] Blob mix introuvable'); }
     }
   };
 

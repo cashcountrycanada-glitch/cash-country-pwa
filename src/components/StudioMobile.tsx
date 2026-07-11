@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.412';
+const BUILD_VERSION = 'v7.6.413';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -209,6 +209,24 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   };
   (window as any).__addLog = addLog;
 
+  // FIX DIAGNOSTIC ÉCRAN NOIR (v7.6.413) : addLog() ne vit qu'en mémoire React —
+  // si un vrai rechargement de page survient juste après (crash silencieux),
+  // le log est perdu avant même d'être vu. breadcrumb() écrit EN PLUS, tout de
+  // suite et de façon synchrone, dans localStorage — ça survit à un rechargement
+  // complet de la page, contrairement à addLog() seul. Permet de savoir jusqu'où
+  // l'exécution s'est rendue avant qu'un écran noir survienne, même si React
+  // n'a jamais eu la chance de re-render après.
+  const breadcrumb = (msg: string) => {
+    addLog(msg);
+    try {
+      const t = new Date().toISOString().slice(11,19);
+      const existing = JSON.parse(localStorage.getItem('cc_breadcrumb_log') || '[]');
+      existing.unshift(`[${t}] ${msg}`);
+      localStorage.setItem('cc_breadcrumb_log', JSON.stringify(existing.slice(0, 15)));
+    } catch {}
+  };
+  (window as any).__breadcrumb = breadcrumb;
+
   // Rejouer les crashs survenus avant ce rechargement (capturés par le filet
   // global window.onerror / unhandledrejection dans index.tsx). Permet de
   // diagnostiquer un écran noir même après avoir relancé l'app, puisque
@@ -219,6 +237,11 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       if (crashes.length > 0) {
         crashes.slice(0, 5).forEach((c: string) => addLog(`💥 ${c}`));
         localStorage.removeItem('cc_crash_log');
+      }
+      const crumbs = JSON.parse(localStorage.getItem('cc_breadcrumb_log') || '[]');
+      if (crumbs.length > 0) {
+        crumbs.slice(0, 8).forEach((c: string) => addLog(`🍞 ${c}`));
+        localStorage.removeItem('cc_breadcrumb_log');
       }
     } catch {}
   }, []);
@@ -1176,8 +1199,9 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   };
 
   const handleMasterize = (vocalBlob: Blob, instBlob: Blob | null) => {
-    addLog(`🎛️ handleMasterize appelé : vocalBlob=${vocalBlob ? vocalBlob.size + 'B' : 'NULL'} instBlob=${instBlob ? instBlob.size + 'B' : 'null'} selected=${selected ? selected.id : 'NULL'}`);
+    breadcrumb(`🎛️ handleMasterize appelé : vocalBlob=${vocalBlob ? vocalBlob.size + 'B' : 'NULL'} instBlob=${instBlob ? instBlob.size + 'B' : 'null'} selected=${selected ? selected.id : 'NULL'}`);
     setMasterVocalBlob(vocalBlob); setMasterInstBlob(instBlob); setScreen('master');
+    breadcrumb(`🎛️ setScreen('master') exécuté`);
   };
   const handleStemReady = async (_blob: Blob, fileName: string) => { if (!selected) return; console.log(`[StudioMobile] Stem vocal transféré : ${fileName}`); };
   const handleRecordingSaved = (rec: MobileRecording, up: TrackProject | null) => {
