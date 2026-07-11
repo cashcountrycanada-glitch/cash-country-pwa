@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.416';
+const BUILD_VERSION = 'v7.6.417';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -175,6 +175,7 @@ class ScreenErrorBoundary extends React.Component<
 }
 
 export default function StudioMobile({ songs: propSongs = [] }: Props) {
+  try { const w = window as any; w.__smRenderCount = (w.__smRenderCount||0)+1; if (w.__smRenderCount % 5 === 1) w.__breadcrumb?.(`🔁 StudioMobile render #${w.__smRenderCount}`); } catch {}
   const [screen, setScreen]     = useState<Screen>('songs');
   const [selected, setSelected] = useState<Song | null>(null);
   const [project, setProject]   = useState<TrackProject | null>(null);
@@ -1246,7 +1247,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     if (!w.__masterRenderAttempts) w.__masterRenderAttempts = [];
     w.__masterRenderAttempts = w.__masterRenderAttempts.filter((t: number) => now - t < 1000);
     w.__masterRenderAttempts.push(now);
-    if (w.__masterRenderAttempts.length > 5) {
+    if (w.__masterRenderAttempts.length > 25) {
       breadcrumb(`🛑 BOUCLE DÉTECTÉE : ${w.__masterRenderAttempts.length} tentatives de rendu Master en <1s → arrêt forcé`);
       w.__masterRenderAttempts = [];
       setScreen('mixer'); setMasterVocalBlob(null); setMasterInstBlob(null);
