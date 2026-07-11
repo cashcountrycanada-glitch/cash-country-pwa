@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.411';
+const BUILD_VERSION = 'v7.6.412';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1175,7 +1175,10 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     } finally { setUploading(null); }
   };
 
-  const handleMasterize = (vocalBlob: Blob, instBlob: Blob | null) => { setMasterVocalBlob(vocalBlob); setMasterInstBlob(instBlob); setScreen('master'); };
+  const handleMasterize = (vocalBlob: Blob, instBlob: Blob | null) => {
+    addLog(`🎛️ handleMasterize appelé : vocalBlob=${vocalBlob ? vocalBlob.size + 'B' : 'NULL'} instBlob=${instBlob ? instBlob.size + 'B' : 'null'} selected=${selected ? selected.id : 'NULL'}`);
+    setMasterVocalBlob(vocalBlob); setMasterInstBlob(instBlob); setScreen('master');
+  };
   const handleStemReady = async (_blob: Blob, fileName: string) => { if (!selected) return; console.log(`[StudioMobile] Stem vocal transféré : ${fileName}`); };
   const handleRecordingSaved = (rec: MobileRecording, up: TrackProject | null) => {
     if (up) {
@@ -1189,9 +1192,23 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     reloadRecordings();
     setScreen('mixer');
   };
-  const getInstBlob = async (): Promise<Blob | null> => { if (!audio.instUrl) return null; try { return await studioOfflineDB.getAudio(`inst_${selected?.id}`); } catch { return null; } };
+  // FIX même bug que hasInst dans MixerScreen (v7.6.412) : audio.instUrl reflète
+  // l'état du lecteur, pas la présence réelle du fichier. On vérifie l'IDB direct.
+  const getInstBlob = async (): Promise<Blob | null> => { try { return await studioOfflineDB.getAudio(`inst_${selected?.id}`); } catch { return null; } };
   const pendingCount = recordings.filter(r => !r.transferred).length;
 
+  // FIX ÉCRAN NOIR MASTERISATION (v7.6.412) : la condition ci-dessous exigeait
+  // `masterVocalBlob && selected` pour afficher l'écran — si l'un des deux
+  // était manquant au mauvais moment (aucune trace JS, aucun crash mémoire,
+  // juste un état React qui ne matchait aucune branche), RIEN ne s'affichait :
+  // ni erreur, ni écran de secours, ni log. Un vrai écran noir silencieux.
+  // Ce filet de sécurité garantit qu'il y a TOUJOURS quelque chose de visible
+  // + un log précis pour savoir exactement ce qui manquait si ça revient.
+  if (screen === 'master' && (!masterVocalBlob || !selected)) {
+    addLog(`⚠️ Écran Masteriser demandé mais incomplet : masterVocalBlob=${!!masterVocalBlob} selected=${!!selected} → retour au mixeur`);
+    setScreen('mixer');
+    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex items-center justify-center text-white/60 text-sm">Retour au mixeur…</div></>;
+  }
   if (screen === 'master' && masterVocalBlob && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
   if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Comp Editor" onReset={() => setScreen('mixer')}><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {
               // Persister les régions dans les pistes du projet
