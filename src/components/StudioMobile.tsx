@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.415';
+const BUILD_VERSION = 'v7.6.416';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1234,7 +1234,25 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex items-center justify-center text-white/60 text-sm">Retour au mixeur…</div></>;
   }
   if (screen === 'master' && masterVocalBlob && selected) {
-    try { (window as any).__breadcrumb?.(`🖼️ Construction JSX écran Master démarrée (vocalBlob=${masterVocalBlob.size}B)`); } catch {}
+    // FIX BOUCLE INFINIE DE RENDU (v7.6.416) : le log a montré que ce point
+    // pouvait être atteint 10 fois d'affilée en une seule seconde — une vraie
+    // boucle de rendu React, pas un crash mémoire ni une erreur simple. Ce
+    // disjoncteur détecte le cas et casse la boucle en forçant un retour au
+    // mixeur avec un message clair, au lieu de laisser le téléphone tourner
+    // en rond indéfiniment jusqu'à ce que le navigateur tue la page (ce qui
+    // produisait l'écran noir "Script error." sans aucune trace exploitable).
+    const w = window as any;
+    const now = Date.now();
+    if (!w.__masterRenderAttempts) w.__masterRenderAttempts = [];
+    w.__masterRenderAttempts = w.__masterRenderAttempts.filter((t: number) => now - t < 1000);
+    w.__masterRenderAttempts.push(now);
+    if (w.__masterRenderAttempts.length > 5) {
+      breadcrumb(`🛑 BOUCLE DÉTECTÉE : ${w.__masterRenderAttempts.length} tentatives de rendu Master en <1s → arrêt forcé`);
+      w.__masterRenderAttempts = [];
+      setScreen('mixer'); setMasterVocalBlob(null); setMasterInstBlob(null);
+      return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex flex-col items-center justify-center gap-3 px-6 text-center"><p className="text-[40px]">🛑</p><p className="text-white font-bebas text-xl tracking-widest">BOUCLE DÉTECTÉE</p><p className="text-zinc-500 text-[11px]">L'écran de mastering n'arrivait pas à s'afficher correctement. Retour au mixeur — réessaie dans un instant.</p></div></>;
+    }
+    breadcrumb(`🖼️ Construction JSX écran Master démarrée (vocalBlob=${masterVocalBlob.size}B) [tentative ${w.__masterRenderAttempts.length}]`);
     return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
   }
   if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Comp Editor" onReset={() => setScreen('mixer')}><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {

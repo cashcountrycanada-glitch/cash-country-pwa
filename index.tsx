@@ -116,10 +116,8 @@ if (rootElement) {
   window.addEventListener('unhandledrejection', (e) => logCrash('unhandledrejection', e));
 
   root.render(
-    <React.StrictMode>
-      <RootErrorBoundary>
-        <StudioMobileWithSongs />
-      </RootErrorBoundary>
-    </React.StrictMode>
+    <RootErrorBoundary>
+      <StudioMobileWithSongs />
+    </RootErrorBoundary>
   );
 }
