@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.418';
+const BUILD_VERSION = 'v7.6.419';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -235,12 +235,21 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // l'exécution s'est rendue avant qu'un écran noir survienne, même si React
   // n'a jamais eu la chance de re-render après.
   const breadcrumb = (msg: string) => {
-    addLog(msg);
+    // FIX BOUCLE INFINIE (v7.6.419) : breadcrumb() appelait addLog() qui fait
+    // setDebugLog() — une mise à jour d'état React. Utilisé depuis le CORPS
+    // du rendu (comme dans les branches d'affichage plus bas), ça créait
+    // exactement le piège classique : rendu → setState → nouveau rendu →
+    // setState → boucle infinie. C'était la vraie cause de toute la boucle
+    // qu'on chassait depuis plusieurs versions — pas StrictMode, pas un
+    // crash mémoire, mais ce système de diagnostic lui-même. breadcrumb()
+    // n'écrit maintenant QUE dans localStorage (aucun setState), donc sûr
+    // à appeler depuis n'importe où, y compris pendant un rendu.
     try {
       const t = new Date().toISOString().slice(11,19);
       const existing = JSON.parse(localStorage.getItem('cc_breadcrumb_log') || '[]');
       existing.unshift(`[${t}] ${msg}`);
       localStorage.setItem('cc_breadcrumb_log', JSON.stringify(existing.slice(0, 15)));
+      console.log('[breadcrumb]', msg);
     } catch {}
   };
   (window as any).__breadcrumb = breadcrumb;
