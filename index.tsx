@@ -94,16 +94,25 @@ if (rootElement) {
   // elle remonte au navigateur et peut laisser un écran vide/noir sans trace
   // visible. On logge ici dans localStorage pour pouvoir diagnostiquer
   // même après un crash qui a fait disparaître l'UI (DebugPanel inclus).
-  const logCrash = (label: string, err: any) => {
+  const logCrash = (label: string, err: any, e?: any) => {
     try {
-      const msg = `[${new Date().toISOString().slice(11,19)}] ${label}: ${err?.message || err?.reason?.message || String(err?.reason ?? err)}`;
+      const baseMsg = err?.message || err?.reason?.message || String(err?.reason ?? err);
+      // FIX diagnostic "Script error." (v7.6.410) : ce message générique sans
+      // fichier/ligne apparaît quand l'erreur vient d'un script cross-origin —
+      // le navigateur masque les détails par sécurité. On capture ici tout ce
+      // qui est encore accessible (fichier, ligne, colonne, stack) pour ne
+      // rien perdre quand c'est disponible, même si "Script error." lui-même
+      // reste parfois impossible à détailler davantage côté JS.
+      const loc = e && (e.filename || e.lineno) ? ` @ ${e.filename || '?'}:${e.lineno ?? '?'}:${e.colno ?? '?'}` : '';
+      const stack = err?.stack ? ` | stack: ${String(err.stack).slice(0, 200)}` : '';
+      const msg = `[${new Date().toISOString().slice(11,19)}] ${label}: ${baseMsg}${loc}${stack}`;
       const existing = JSON.parse(localStorage.getItem('cc_crash_log') || '[]');
       existing.unshift(msg);
       localStorage.setItem('cc_crash_log', JSON.stringify(existing.slice(0, 10)));
       console.error('[CRASH]', msg, err);
     } catch {}
   };
-  window.addEventListener('error', (e) => logCrash('window.onerror', e.error || e));
+  window.addEventListener('error', (e) => logCrash('window.onerror', e.error || e, e));
   window.addEventListener('unhandledrejection', (e) => logCrash('unhandledrejection', e));
 
   root.render(

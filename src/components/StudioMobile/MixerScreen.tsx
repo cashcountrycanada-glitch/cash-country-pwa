@@ -299,7 +299,7 @@ export default function MixerScreen({
     // et donnant l'impression que le début de la chanson manquait. On décode
     // maintenant tout en amont et on ne programme le démarrage qu'une fois que
     // TOUT est prêt, avec un seul point de référence temporel partagé.
-    type Pending = { label: string; buffer: AudioBuffer; gainVal: number; panVal: number; delaySec: number; isInst: boolean; offsetSec: number };
+    type Pending = { label: string; buffer: AudioBuffer; gainVal: number; panVal: number; delaySec: number; isInst: boolean; offsetSec: number; isHarmony: boolean };
     const pending: Pending[] = [];
 
     for (const track of currentTracks) {
@@ -320,6 +320,7 @@ export default function MixerScreen({
           gainVal: Math.min(1.0, (track as any).gain ?? 1.0),
           panVal: (track as any).pan ?? 0,
           delaySec, isInst: false, offsetSec: 0,
+          isHarmony: !!(track as any).isGenerated,
         });
         dbg(`[Preview] ${label} → décodé (${(blob.size/1024).toFixed(0)}KB, ${buffer.duration.toFixed(1)}s)`);
       } catch (e: any) {
@@ -327,7 +328,12 @@ export default function MixerScreen({
       }
     }
 
-    if (hasInst && selected) {
+    // FIX "instrumental disparu du preview" (v7.6.409) : hasInst est un prop dérivé
+    // de audio.instUrl (état du lecteur), pas de la présence réelle du fichier en
+    // IndexedDB — il peut rester à `false` même quand l'instrumental existe bel et
+    // bien (ex: pas encore chargé dans le lecteur). On vérifie directement en IDB,
+    // qui est la vraie source de vérité, au lieu de se fier à ce prop.
+    if (selected) {
       try {
         const instBlobForPreview = await studioOfflineDB.getAudio(`inst_${selected.id}`);
         if (instBlobForPreview && instBlobForPreview.size > 100) {
@@ -336,7 +342,7 @@ export default function MixerScreen({
           pending.push({
             label: 'Instrumental', buffer,
             gainVal: previewInstVol > 0 ? previewInstVol : 0.7,
-            panVal: 0, delaySec: 0, isInst: true, offsetSec: instOffsetMs / 1000,
+            panVal: 0, delaySec: 0, isInst: true, offsetSec: instOffsetMs / 1000, isHarmony: false,
           });
           dbg(`[Preview] Instrumental → décodé (${(instBlobForPreview.size/1024).toFixed(0)}KB, ${buffer.duration.toFixed(1)}s)`);
         } else {
@@ -370,7 +376,18 @@ export default function MixerScreen({
       } else {
         const pan = ctx.createStereoPanner();
         pan.pan.value = p.panVal;
-        src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
+        if (p.isHarmony) {
+          // Même correctif que l'export (v7.6.409) : creux 300Hz + brillant 6kHz
+          // sur les harmonies uniquement, pour que l'écoute directe corresponde
+          // exactement à ce que donnera l'export.
+          const cut = ctx.createBiquadFilter();
+          cut.type = 'peaking'; cut.frequency.value = 300; cut.Q.value = 1.0; cut.gain.value = -4;
+          const shelf = ctx.createBiquadFilter();
+          shelf.type = 'highshelf'; shelf.frequency.value = 6000; shelf.gain.value = 3;
+          src.connect(gain); gain.connect(cut); cut.connect(shelf); shelf.connect(pan); pan.connect(ctx.destination);
+        } else {
+          src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
+        }
         src.start(anchor + p.delaySec);
       }
       srcs.push(src);
@@ -423,7 +440,7 @@ export default function MixerScreen({
 
       const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 9, 3: 12, 4: 14, 5: 7 };
       const probeCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      type Item = { label: string; buffer: AudioBuffer; gainVal: number; panVal: number; delaySec: number; isInst: boolean; offsetSec: number };
+      type Item = { label: string; buffer: AudioBuffer; gainVal: number; panVal: number; delaySec: number; isInst: boolean; offsetSec: number; isHarmony: boolean };
       const items: Item[] = [];
 
       for (const track of currentTracks) {
@@ -442,12 +459,15 @@ export default function MixerScreen({
             gainVal: Math.min(1.0, (track as any).gain ?? 1.0),
             panVal: (track as any).pan ?? 0,
             delaySec, isInst: false, offsetSec: 0,
+            isHarmony: !!(track as any).isGenerated,
           });
           dbg(`[ExportPreview] ${label} → décodé (${(blob.size / 1024).toFixed(0)}KB, gain=${Math.min(1.0, (track as any).gain ?? 1.0)})`);
         } catch (e: any) { dbg(`[ExportPreview] ${label} → EXCEPTION: ${e?.message}`); }
       }
 
-      if (hasInst && selected) {
+      // FIX "instrumental disparu du preview" (v7.6.409) : même correctif que
+      // pour l'écoute directe — on vérifie l'IDB directement au lieu du prop hasInst.
+      if (selected) {
         try {
           const instBlobForPreview = await studioOfflineDB.getAudio(`inst_${selected.id}`);
           if (instBlobForPreview && instBlobForPreview.size > 100) {
@@ -456,7 +476,7 @@ export default function MixerScreen({
             items.push({
               label: 'Instrumental', buffer,
               gainVal: previewInstVol > 0 ? previewInstVol : 0.7,
-              panVal: 0, delaySec: 0, isInst: true, offsetSec: instOffsetMs / 1000,
+              panVal: 0, delaySec: 0, isInst: true, offsetSec: instOffsetMs / 1000, isHarmony: false,
             });
             dbg(`[ExportPreview] Instrumental → décodé`);
           }
@@ -478,7 +498,21 @@ export default function MixerScreen({
           else src.start(0, -it.offsetSec);
         } else {
           const pan = offline.createStereoPanner(); pan.pan.value = it.panVal;
-          src.connect(gain); gain.connect(pan); pan.connect(offline.destination);
+          if (it.isHarmony) {
+            // FIX MIX BOUEUX (v7.6.409) : l'analyse spectrale du preview a montré
+            // 67,9% de l'énergie concentrée entre 150-500 Hz — les harmonies étant
+            // des copies pitch-shiftées de la même voix, elles gardent les mêmes
+            // formants et s'empilent toutes dans cette zone. On creuse un peu le
+            // low-mid et on redonne un peu de brillant en haut, SEULEMENT sur les
+            // couches d'harmonie — la voix principale n'est pas touchée.
+            const cut = offline.createBiquadFilter();
+            cut.type = 'peaking'; cut.frequency.value = 300; cut.Q.value = 1.0; cut.gain.value = -4;
+            const shelf = offline.createBiquadFilter();
+            shelf.type = 'highshelf'; shelf.frequency.value = 6000; shelf.gain.value = 3;
+            src.connect(gain); gain.connect(cut); cut.connect(shelf); shelf.connect(pan); pan.connect(offline.destination);
+          } else {
+            src.connect(gain); gain.connect(pan); pan.connect(offline.destination);
+          }
           src.start(it.delaySec);
         }
       }
