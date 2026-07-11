@@ -443,6 +443,14 @@ export default function MixerScreen({
       type Item = { label: string; buffer: AudioBuffer; gainVal: number; panVal: number; delaySec: number; isInst: boolean; offsetSec: number; isHarmony: boolean };
       const items: Item[] = [];
 
+      // FIX CRASH SILENCIEUX "Script error." (v7.6.414) : probeCtx n'était fermé
+      // qu'en fin de bloc, jamais dans un finally — une exception imprévue le
+      // laissait ouvert indéfiniment. iOS Safari limite le nombre de contextes
+      // audio simultanés (~4-6) ; un contexte qui fuit ici peut faire déborder
+      // cette limite plus tard (ex: à l'ouverture de Masteriser), ce qui plante
+      // silencieusement sans trace JS exploitable (le crash observé). Le
+      // try/finally garantit maintenant la fermeture dans tous les cas.
+      try {
       for (const track of currentTracks) {
         const label = `"${track.trackLabel || track.id}" (idx=${track.trackIndex ?? '?'})`;
         if ((track as any).muted) { dbg(`[ExportPreview] ${label} → SKIP (muted)`); continue; }
@@ -482,7 +490,9 @@ export default function MixerScreen({
           }
         } catch (e: any) { dbg(`[ExportPreview] Instrumental → EXCEPTION: ${e?.message}`); }
       }
-      await probeCtx.close();
+      } finally {
+        await probeCtx.close().catch(() => {});
+      }
 
       if (items.length === 0) { alert('Aucune piste décodable à exporter.'); return; }
 

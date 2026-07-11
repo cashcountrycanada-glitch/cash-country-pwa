@@ -252,10 +252,13 @@ async function renderOfflineSegmented(
 }
 
 async function decodeBlob(blob: Blob): Promise<AudioBuffer> {
+  try { (window as any).__breadcrumb?.('🔊 decodeBlob : création AudioContext...'); } catch {}
   const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  try { (window as any).__breadcrumb?.(`🔊 decodeBlob : AudioContext créé (state=${ctx.state}), décodage ${blob.size}B...`); } catch {}
   try {
     const ab  = await blob.arrayBuffer();
     const buf = await ctx.decodeAudioData(ab);
+    try { (window as any).__breadcrumb?.(`🔊 decodeBlob : décodage réussi (${buf.duration.toFixed(1)}s)`); } catch {}
     return buf;
   } finally {
     ctx.close();
@@ -1013,9 +1016,17 @@ export default function MasteringEngine({
 
   // Analyser l'entrée au montage
   useEffect(() => {
+    // FIX CRASH SILENCIEUX "Script error." (v7.6.414) : iOS Safari limite le
+    // nombre de contextes audio simultanés (~4-6). Si un contexte de preview
+    // (Mixer/TrackCard) est resté ouvert par erreur, il grignote cette limite
+    // et peut faire planter silencieusement la création du contexte ici même
+    // (aucune trace JS exploitable — exactement le symptôme observé). On
+    // ferme donc proactivement tout contexte de preview connu avant de
+    // commencer, pour libérer un maximum de marge.
+    try { (window as any).__previewCtx?.close(); (window as any).__previewCtx = null; } catch {}
     decodeBlob(vocalBlob)
       .then(async buf => setInputLufs(Math.round((await analyzeLoudness(buf)) * 10) / 10))
-      .catch(() => {});
+      .catch((e: any) => { try { (window as any).__breadcrumb?.(`⚠️ decodeBlob/analyzeLoudness (montage) a échoué: ${e?.message}`); } catch {} });
     return () => {
       if (vocalUrlRef.current) URL.revokeObjectURL(vocalUrlRef.current);
       if (fullUrlRef.current)  URL.revokeObjectURL(fullUrlRef.current);
