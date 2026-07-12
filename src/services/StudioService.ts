@@ -413,7 +413,7 @@ function getOfflineDB() {
   return studioOfflineDB;
 }
 
-async function audioBufferToBlob(buffer: AudioBuffer, onProgress?: (pct: number) => void): Promise<Blob> {
+export async function audioBufferToBlob(buffer: AudioBuffer, onProgress?: (pct: number) => void): Promise<Blob> {
   // Encodage WAV chunked — évite l'OOM iOS sur les gros buffers (>20 MB)
   return audioBufferToWavBlobChunked(buffer, onProgress);
 }

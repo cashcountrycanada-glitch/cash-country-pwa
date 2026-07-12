@@ -28,7 +28,7 @@ import {
   ChevronLeft, Play, Pause, Send, Share2,
   CheckCircle2, Loader2, Zap, Mic, Music2, AlertCircle,
 } from 'lucide-react';
-import { studioService, MobileRecording } from '../../services/StudioService';
+import { studioService, MobileRecording, audioBufferToBlob as audioBufferToWavBlobReliable } from '../../services/StudioService';
 import { studioOfflineDB } from '../../services/StudioOfflineDB';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -646,71 +646,18 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
 }
 
 // Convertir AudioBuffer → Blob mp4 (iOS natif) — 256 kbps pour la qualité
+// FIX "Lecture impossible (NotSupportedError)" + "Erreur export MP3 NotAllowedError"
+// (v7.6.422) : cette fonction utilisait MediaRecorder + lecture en temps réel
+// pour produire un blob audio/mp4 — une méthode connue pour être capricieuse
+// sur iOS Safari (permissions, formats, timing). Le reste du projet utilise
+// déjà un encodeur WAV fiable et 100% hors-ligne (aucune lecture en temps
+// réel, aucun MediaRecorder, aucun risque de permission) — on le réutilise
+// ici au lieu de garder une copie locale périmée.
 async function audioBufferToBlob(
   buffer: AudioBuffer,
   onProgress?: (pct: number) => void
 ): Promise<Blob> {
-  const mimeType = isIOS() ? 'audio/mp4'
-    : MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus'
-    : 'audio/mp4';
-
-  const ctx  = new (window.AudioContext || (window as any).webkitAudioContext)();
-  const dest = ctx.createMediaStreamDestination();
-  const src  = ctx.createBufferSource();
-  src.buffer = buffer; src.connect(dest);
-
-  const recOpts: MediaRecorderOptions = {};
-  if (mimeType) recOpts.mimeType = mimeType;
-  recOpts.audioBitsPerSecond = 256000; // 256 kbps — qualité maximale AAC
-  const recorder = new MediaRecorder(dest.stream, recOpts);
-  const chunks: Blob[] = [];
-  recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-
-  const totalMs = (buffer.duration + 0.5) * 1000;
-  let progressTimer: ReturnType<typeof setInterval> | null = null;
-  const startTime = Date.now();
-
-  return new Promise((resolve, reject) => {
-    recorder.onstop = () => {
-      if (progressTimer) clearInterval(progressTimer);
-      onProgress?.(100);
-      ctx.close().catch(() => {});
-      resolve(new Blob(chunks, { type: chunks[0]?.type || 'audio/mp4' }));
-    };
-    recorder.onerror = (e: any) => {
-      if (progressTimer) clearInterval(progressTimer);
-      ctx.close().catch(() => {});
-      reject(new Error(e?.error?.message || 'MediaRecorder error'));
-    };
-    try {
-      recorder.start();
-      src.start();
-      // Tick toutes les 500ms pour animer la progression
-      if (onProgress) {
-        progressTimer = setInterval(() => {
-          const elapsed = Date.now() - startTime;
-          const pct = Math.min(98, Math.round((elapsed / totalMs) * 100));
-          onProgress(pct);
-        }, 500);
-      }
-      // Arrêter via onended du BufferSource — fiable même si setTimeout throttlé iOS
-      src.onended = () => {
-        try { recorder.stop(); } catch {}
-        if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
-      };
-      // Fallback setTimeout au cas où onended ne se déclenche pas
-      setTimeout(() => {
-        if (recorder.state !== 'inactive') {
-          try { recorder.stop(); } catch {}
-        }
-        try { src.stop(); } catch {}
-      }, totalMs + 2000); // +2s de marge
-    } catch (e: any) {
-      if (progressTimer) clearInterval(progressTimer);
-      ctx.close().catch(() => {});
-      reject(e);
-    }
-  });
+  return audioBufferToWavBlobReliable(buffer, onProgress);
 }
 
 // Encodeur MP3 via lamejs
@@ -834,14 +781,13 @@ function encodeWAV(buffer: AudioBuffer): Blob {
 
 // Partage iOS via navigator.share — seule méthode qui marche en PWA
 async function shareFileIOS(blob: Blob, fileName: string, title: string): Promise<void> {
-  const file = new File([blob], fileName, { type: blob.type });
-
-  if (navigator.share && navigator.canShare?.({ files: [file] })) {
-    await navigator.share({ title, files: [file] });
-    return;
-  }
-
-  // Fallback : ouvrir dans Safari (iOS 13-14 ou navigateur sans share API)
+  // FIX "Erreur export MP3 : NotAllowedError" (v7.6.422) : navigator.share()
+  // exige d'être appelé quasi-immédiatement après un geste utilisateur direct.
+  // Ici, il était appelé APRÈS l'encodage MP3 (plusieurs secondes de calcul via
+  // lamejs) — Safari iOS considère alors que le "geste utilisateur" a expiré
+  // et bloque l'appel avec NotAllowedError, peu importe que le bouton ait bien
+  // été cliqué au départ. On utilise directement le téléchargement, qui lui
+  // n'a pas cette contrainte de délai et fonctionne de façon fiable.
   const url = URL.createObjectURL(blob);
   const a   = document.createElement('a');
   a.href = url; a.download = fileName; a.click();
@@ -1171,7 +1117,7 @@ export default function MasteringEngine({
         blob = await audioBufferToBlob(vocalMastered);
       }
       const safeTitle = songTitle.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
-      const fileName  = `VOCAL_${safeTitle}_${Date.now()}.mp4`;
+      const fileName  = `VOCAL_${safeTitle}_${Date.now()}.wav`;
 
       const fakeRec: MobileRecording = {
         id:          `STEM-${Date.now()}`,
@@ -1252,7 +1198,7 @@ export default function MasteringEngine({
     try {
       const source    = fullMastered || vocalMastered!;
       const safeTitle = songTitle.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
-      const fileName  = `${safeTitle}_MASTER.mp4`;
+      const fileName  = `${safeTitle}_MASTER.wav`;
 
       const mp4Blob = await audioBufferToBlob(source);
       await shareFileIOS(mp4Blob, fileName, `${songTitle} — Master MP4`);
@@ -1648,7 +1594,7 @@ export default function MasteringEngine({
                       ? <><Loader2 size={13} className="animate-spin"/> Encodage MP4… (~{Math.round(((fullMastered||vocalMastered)?.duration||0))}s)</>
                       : exportedMp4
                       ? <><CheckCircle2 size={13}/> MP4 partagé !</>
-                      : <><Share2 size={13}/> MP4 (AirDrop / iCloud)</>
+                      : <><Share2 size={13}/> WAV (AirDrop / iCloud)</>
                     }
                   </button>
                 </div>

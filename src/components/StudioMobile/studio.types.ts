@@ -325,6 +325,21 @@ export const FX_PRESETS: FxPreset[] = [
     compThreshold: -26, compRatio: 5, compAttack: 10, compRelease: 150, compKnee: 10,
     saturation: 0.18, reverb: 'studio', reverbMix: 0.18,
   },
+  {
+    // LUKE COMBS — inspiré du style général connu de sa voix (baryton grave,
+    // dynamique très naturelle et peu compressée, son "country moderne
+    // organique", quasi sans effet). Basé sur des caractéristiques stylistiques
+    // publiques, pas sur l'analyse d'un enregistrement protégé.
+    id: 'luke_combs',
+    label: 'Luke Combs',
+    emoji: '🤠',
+    description: 'Baryton grave, dynamique naturelle, son organique peu compresse',
+    color: '#b45309',
+    hpf: 68,
+    lowGain: 2.5, lowMidGain: -2.0, midGain: 2.0, highGain: 0.5, airGain: 0.5,
+    compThreshold: -24, compRatio: 2.2, compAttack: 35, compRelease: 380, compKnee: 14,
+    saturation: 0.15, reverb: 'room', reverbMix: 0.10, deverbAmount: 0.35,
+  },
 ];
 export const FX_PRESET_DEFAULT = FX_PRESETS[0]; // Clean
 
