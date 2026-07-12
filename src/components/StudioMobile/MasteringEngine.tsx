@@ -1029,6 +1029,14 @@ export default function MasteringEngine({
     // (aucune trace JS exploitable — exactement le symptôme observé). On
     // ferme donc proactivement tout contexte de preview connu avant de
     // commencer, pour libérer un maximum de marge.
+    // FIX CRASH SILENCIEUX "Script error." #2 (v7.6.421) : __previewCtx
+    // n'était pas le seul contexte permanent en vie — __warmContext (créé
+    // au démarrage de l'app pour stabiliser le micro, StudioMobile.tsx
+    // ~L493) reste ouvert TOUTE la session, y compris ici. Il grignote lui
+    // aussi la limite iOS. On le ferme ici en plus de __previewCtx ;
+    // preWarmMic() le recrée automatiquement dès qu'il détecte state==='closed',
+    // donc aucun impact sur le micro au retour à l'écran d'enregistrement.
+    try { (window as any).__warmContext?.close(); (window as any).__warmContext = null; } catch {}
     try { (window as any).__previewCtx?.close(); (window as any).__previewCtx = null; } catch {}
     decodeBlob(vocalBlob)
       .then(async buf => setInputLufs(Math.round((await analyzeLoudness(buf)) * 10) / 10))
