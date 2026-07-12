@@ -20,9 +20,10 @@ import MixerScreen     from './StudioMobile/MixerScreen';
 import RecordingsList  from './StudioMobile/RecordingsList';
 import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
+import MasteringBoot from './StudioMobile/MasteringBoot';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.424';
+const BUILD_VERSION = 'v7.6.425';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1290,7 +1291,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex flex-col items-center justify-center gap-3 px-6 text-center"><p className="text-[40px]">🛑</p><p className="text-white font-bebas text-xl tracking-widest">BOUCLE DÉTECTÉE</p><p className="text-zinc-500 text-[11px]">L'écran de mastering n'arrivait pas à s'afficher correctement. Retour au mixeur — réessaie dans un instant.</p></div></>;
     }
     breadcrumb(`🖼️ Construction JSX écran Master démarrée (vocalBlob=${masterVocalBlob.size}B) [tentative ${w.__masterRenderAttempts.length}]`);
-    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
+    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringBoot vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
   }
   if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Comp Editor" onReset={() => setScreen('mixer')}><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {
               // Persister les régions dans les pistes du projet

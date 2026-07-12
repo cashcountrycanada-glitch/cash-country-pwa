@@ -95,6 +95,7 @@ const MODULE_ORDER = [
   'components/StudioMobile/RecordingCard.tsx',
   'components/StudioMobile/CompEditor.tsx',
   'components/StudioMobile/MasteringEngine.tsx',
+  'components/StudioMobile/MasteringBoot.tsx',
   'components/StudioMobile/SongSelector.tsx',
 ];
 
