@@ -989,6 +989,24 @@ export default function MasteringEngine({
   const [progress, setProgress]           = useState(0);
   const [progressLabel, setProgressLabel] = useState('');
 
+  // Init visible au montage (v7.6.423) : étapes affichées À L'ÉCRAN, pas
+  // seulement dans le panneau debug — si un crash survient entre deux
+  // étapes, la dernière étape affichée reste visible au lieu d'un écran
+  // noir total, ce qui permet de savoir exactement où ça bloque.
+  const [initStep, setInitStep]   = useState(0);
+  const [initLabel, setInitLabel] = useState('Fermeture des contextes audio…');
+  const [initDone, setInitDone]   = useState(false);
+  const INIT_STEPS = [
+    'Fermeture contexte micro…',
+    'Fermeture contexte preview…',
+    'Décodage de la voix…',
+    'Analyse du volume…',
+    'Prêt',
+  ];
+  // Laisse le navigateur peindre l'étape courante avant de continuer
+  const paintYield = () => new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+
+
   // Résultats
   const [vocalMastered, setVocalMastered]     = useState<AudioBuffer | null>(null); // Mode A
   const [fullMastered, setFullMastered]       = useState<AudioBuffer | null>(null); // Mode B
@@ -1036,11 +1054,47 @@ export default function MasteringEngine({
     // aussi la limite iOS. On le ferme ici en plus de __previewCtx ;
     // preWarmMic() le recrée automatiquement dès qu'il détecte state==='closed',
     // donc aucun impact sur le micro au retour à l'écran d'enregistrement.
-    try { (window as any).__warmContext?.close(); (window as any).__warmContext = null; } catch {}
-    try { (window as any).__previewCtx?.close(); (window as any).__previewCtx = null; } catch {}
-    decodeBlob(vocalBlob)
-      .then(async buf => setInputLufs(Math.round((await analyzeLoudness(buf)) * 10) / 10))
-      .catch((e: any) => { try { (window as any).__breadcrumb?.(`⚠️ decodeBlob/analyzeLoudness (montage) a échoué: ${e?.message}`); } catch {} });
+    // FIX CRASH SILENCIEUX "Script error." #3 (v7.6.422) : les deux fixes
+    // précédents fermaient __warmContext/__previewCtx SANS attendre — or
+    // ctx.close() est asynchrone, et sur iOS le "slot" audio n'est libéré
+    // qu'une fois cette Promise résolue. decodeBlob() ci-dessous créait le
+    // nouveau contexte dans le même tick synchrone, AVANT que les fermetures
+    // précédentes n'aient réellement terminé côté OS → les deux correctifs
+    // précédents n'avaient donc aucun effet réel. On attend maintenant
+    // explicitement la fermeture complète avant de continuer.
+    // FIX CRASH SILENCIEUX "Script error." #4 (v7.6.423) : chaque étape est
+    // maintenant affichée À L'ÉCRAN (initStep/initLabel) avec une pause de
+    // rendu (paintYield) avant de passer à la suivante. Si un crash survient,
+    // la dernière étape peinte à l'écran indique précisément où — plus besoin
+    // d'aller chercher dans le panneau debug.
+    const breadcrumb2 = (m: string) => { try { (window as any).__breadcrumb?.(m); } catch {} };
+    (async () => {
+      try {
+        setInitStep(0); setInitLabel(INIT_STEPS[0]); breadcrumb2(`🔧 Init étape 0: ${INIT_STEPS[0]}`);
+        await paintYield();
+        try { await (window as any).__warmContext?.close(); } catch {}
+        (window as any).__warmContext = null;
+
+        setInitStep(1); setInitLabel(INIT_STEPS[1]); breadcrumb2(`🔧 Init étape 1: ${INIT_STEPS[1]}`);
+        await paintYield();
+        try { await (window as any).__previewCtx?.close(); } catch {}
+        (window as any).__previewCtx = null;
+
+        setInitStep(2); setInitLabel(INIT_STEPS[2]); breadcrumb2(`🔧 Init étape 2: ${INIT_STEPS[2]}`);
+        await paintYield();
+        const buf = await decodeBlob(vocalBlob);
+
+        setInitStep(3); setInitLabel(INIT_STEPS[3]); breadcrumb2(`🔧 Init étape 3: ${INIT_STEPS[3]}`);
+        await paintYield();
+        setInputLufs(Math.round((await analyzeLoudness(buf)) * 10) / 10);
+
+        setInitStep(4); setInitLabel(INIT_STEPS[4]); breadcrumb2(`🔧 Init étape 4: ${INIT_STEPS[4]}`);
+        setInitDone(true);
+      } catch (e: any) {
+        breadcrumb2(`⚠️ decodeBlob/analyzeLoudness (montage) a échoué à l'étape "${initLabel}": ${e?.message}`);
+        setInitDone(true); // ne bloque pas l'écran — l'utilisateur peut quand même masteriser
+      }
+    })();
     return () => {
       if (vocalUrlRef.current) URL.revokeObjectURL(vocalUrlRef.current);
       if (fullUrlRef.current)  URL.revokeObjectURL(fullUrlRef.current);
@@ -1350,8 +1404,22 @@ export default function MasteringEngine({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pt-4 pb-8 space-y-5" style={{ WebkitOverflowScrolling: 'touch' }}>
+      {/* Barre d'init visible (v7.6.423) — reste affichée jusqu'à 'Prêt' */}
+      {!initDone && (
+        <div className="shrink-0 px-5 py-3 bg-zinc-950 border-b border-zinc-900 space-y-1.5">
+          <div className="flex justify-between items-center">
+            <span className="text-[10px] text-zinc-400 font-black uppercase tracking-widest flex items-center gap-2">
+              <Loader2 size={12} className="animate-spin"/> {initLabel}
+            </span>
+            <span className="text-[10px] font-black text-orange-400">{initStep + 1}/{INIT_STEPS.length}</span>
+          </div>
+          <div className="h-1.5 bg-zinc-900 rounded-full overflow-hidden">
+            <div className="h-full bg-orange-500 transition-all duration-300" style={{ width: `${((initStep + 1) / INIT_STEPS.length) * 100}%` }} />
+          </div>
+        </div>
+      )}
 
+      <div className="flex-1 overflow-y-auto px-5 pt-4 pb-8 space-y-5" style={{ WebkitOverflowScrolling: 'touch' }}>
         {/* Explication des 2 modes */}
         <div className="grid grid-cols-2 gap-2">
           <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-3">
