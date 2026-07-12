@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.423';
+const BUILD_VERSION = 'v7.6.424';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -223,7 +223,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
 
   const addLog = (msg: string) => {
     const t = new Date().toISOString().slice(11,19);
-    setDebugLog(prev => [`[${t}] ${msg}`, ...prev].slice(0, 20));
+    setDebugLog(prev => [`[${t}] ${msg}`, ...prev].slice(0, 150));
   };
   (window as any).__addLog = addLog;
 
@@ -248,7 +248,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       const t = new Date().toISOString().slice(11,19);
       const existing = JSON.parse(localStorage.getItem('cc_breadcrumb_log') || '[]');
       existing.unshift(`[${t}] ${msg}`);
-      localStorage.setItem('cc_breadcrumb_log', JSON.stringify(existing.slice(0, 15)));
+      localStorage.setItem('cc_breadcrumb_log', JSON.stringify(existing.slice(0, 150)));
       console.log('[breadcrumb]', msg);
     } catch {}
   };
