@@ -1080,6 +1080,7 @@ export default function MasteringEngine({
         }
       });
       vocalUrlRef.current = URL.createObjectURL(vBlob);
+      try { (window as any).__breadcrumb?.(`💿 Voix masterisée encodée : ${vBlob.size}B, type=${vBlob.type}`); } catch {}
       setProgress(55);
 
       // 3. Si instrumental disponible → mixer + masteriser (Mode B)
@@ -1131,12 +1132,24 @@ export default function MasteringEngine({
     if (!playRef.current) return;
     if (playing === type) { playRef.current.pause(); setPlaying(null); return; }
     const url = type === 'vocal' ? vocalUrlRef.current : fullUrlRef.current;
-    if (!url) return;
+    if (!url) { try { (window as any).__breadcrumb?.(`⛔ playAudio('${type}') : URL vide, rien à jouer`); } catch {} return; }
     playRef.current.src = url;
     playRef.current.load();
-    playRef.current.play().catch(() => {});
+    playRef.current.play().then(() => {
+      try { (window as any).__breadcrumb?.(`▶️ playAudio('${type}') OK — url=${url.slice(0,40)}`); } catch {}
+    }).catch((e: any) => {
+      // FIX "bouton play ne joue rien" (v7.6.421) : cette erreur était avalée
+      // silencieusement — impossible de savoir pourquoi la lecture échouait.
+      try { (window as any).__breadcrumb?.(`⛔ playAudio('${type}') ÉCHEC: ${e?.name}: ${e?.message}`); } catch {}
+      console.error('[MasteringEngine] Lecture échouée:', e);
+      alert(`Lecture impossible (${e?.name || 'erreur'}). Le fichier a peut-être été mal encodé — essaie de refaire la masterisation.`);
+    });
     setPlaying(type);
     playRef.current.onended = () => setPlaying(null);
+    playRef.current.onerror = () => {
+      try { (window as any).__breadcrumb?.(`⛔ <audio> onerror pendant lecture '${type}': code=${playRef.current?.error?.code}`); } catch {}
+      setPlaying(null);
+    };
   };
 
   // ── MODE A : Envoyer au Mac ───────────────────────────────────────────────

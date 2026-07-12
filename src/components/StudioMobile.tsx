@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.421';
+const BUILD_VERSION = 'v7.6.422';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -220,6 +220,11 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [masterVocalBlob, setMasterVocalBlob] = useState<Blob | null>(null);
   const [masterInstBlob, setMasterInstBlob] = useState<Blob | null>(null);
+  // FIX "instrumental introuvable dans le Mixer" (v7.6.421) : le Mixer recevait
+  // masterInstBlob comme prop instBlob — cette variable ne se remplit QU'APRÈS
+  // avoir déjà cliqué Masteriser une fois (poule et œuf). Le Mixer a besoin de
+  // son propre state, chargé dès qu'une chanson est sélectionnée.
+  const [mixerInstBlob, setMixerInstBlob] = useState<Blob | null>(null);
 
   const addLog = (msg: string) => {
     const t = new Date().toISOString().slice(11,19);
@@ -1246,6 +1251,29 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // FIX même bug que hasInst dans MixerScreen (v7.6.412) : audio.instUrl reflète
   // l'état du lecteur, pas la présence réelle du fichier. On vérifie l'IDB direct.
   const getInstBlob = async (): Promise<Blob | null> => { try { return await studioOfflineDB.getAudio(`inst_${selected?.id}`); } catch { return null; } };
+
+  // FIX "instrumental introuvable" (v7.6.421) : charge l'instrumental dès la
+  // sélection d'une chanson. Si absent du cache local, le télécharge à la
+  // demande (GitHub Releases via /api/media/, toujours disponible — plus
+  // besoin du Mac depuis le fix de downloadStem ci-dessus).
+  useEffect(() => {
+    if (!selected) { setMixerInstBlob(null); return; }
+    let cancelled = false;
+    (async () => {
+      let blob = await getInstBlob();
+      if (!blob && apiSongs.length > 0) {
+        breadcrumb(`🎸 Instrumental absent du cache pour ${selected.id} → téléchargement à la demande...`);
+        try {
+          await offline.cacheSongForOffline(selected, apiSongs, false);
+          blob = await getInstBlob();
+        } catch (e: any) {
+          breadcrumb(`⚠️ Téléchargement instrumental à la demande a échoué: ${e?.message}`);
+        }
+      }
+      if (!cancelled) setMixerInstBlob(blob);
+    })();
+    return () => { cancelled = true; };
+  }, [selected?.id]);
   const pendingCount = recordings.filter(r => !r.transferred).length;
 
   // FIX ÉCRAN NOIR MASTERISATION (v7.6.412) : la condition ci-dessous exigeait
@@ -1325,7 +1353,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     }
   };
 
-  if (screen === 'mixer' && selected && project) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><MixerScreen selected={selected} project={project} playingId={audio.playingId} isMixing={isMixing} mixProgress={mixProgress} mixLabel={mixLabel} mixDone={mixDone} isOnline={offline.isOnline} uploading={uploading} uploadDone={uploadDone} playRef={audio.playRef} instBlob={masterInstBlob} hasInst={!!audio.instUrl} instOffsetMs={audio.instOffsetMs} takeSlot={takeSlot} previewInstVol={audio.previewInstVol} onPreviewInstVol={audio.setPreviewInstVol} onInstOffset={audio.adjustInstOffset} onAutoSync={handleAutoSync} autoSyncing={autoSyncing} onBack={() => setScreen('record')} onGoSongs={() => setScreen('songs')} onAddTrack={() => setScreen('record')} onPlay={audio.playRecording} onMute={handleMuteTrack} onSolo={handleSoloTrack} onVolume={handleVolumeTrack} onPan={handlePanTrack} onDelete={handleDeleteTrack} onMix={(ids) => handleMix(ids)} onPlayMix={() => project?.mixedDataUrl && audio.playMix(project.mixedDataUrl)} onMasterize={async (vocalBlob, _) => { const ib = await getInstBlob(); handleMasterize(vocalBlob, ib); }} onUploadMix={handleUploadMix} onGoComp={(takes) => { setCompTakes(takes); setScreen('comp'); }} onProjectUpdate={(up) => { setProject(up); studioService.saveProject(up); const needsReload = up.tracks.some(t => !t.dataUrl && !String(t.dataUrl ?? '').startsWith('opfs:')); if (needsReload) reloadRecordings(); }} /></>;
+  if (screen === 'mixer' && selected && project) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><MixerScreen selected={selected} project={project} playingId={audio.playingId} isMixing={isMixing} mixProgress={mixProgress} mixLabel={mixLabel} mixDone={mixDone} isOnline={offline.isOnline} uploading={uploading} uploadDone={uploadDone} playRef={audio.playRef} instBlob={mixerInstBlob} hasInst={!!mixerInstBlob} instOffsetMs={audio.instOffsetMs} takeSlot={takeSlot} previewInstVol={audio.previewInstVol} onPreviewInstVol={audio.setPreviewInstVol} onInstOffset={audio.adjustInstOffset} onAutoSync={handleAutoSync} autoSyncing={autoSyncing} onBack={() => setScreen('record')} onGoSongs={() => setScreen('songs')} onAddTrack={() => setScreen('record')} onPlay={audio.playRecording} onMute={handleMuteTrack} onSolo={handleSoloTrack} onVolume={handleVolumeTrack} onPan={handlePanTrack} onDelete={handleDeleteTrack} onMix={(ids) => handleMix(ids)} onPlayMix={() => project?.mixedDataUrl && audio.playMix(project.mixedDataUrl)} onMasterize={async (vocalBlob, _) => { const ib = await getInstBlob(); handleMasterize(vocalBlob, ib); }} onUploadMix={handleUploadMix} onGoComp={(takes) => { setCompTakes(takes); setScreen('comp'); }} onProjectUpdate={(up) => { setProject(up); studioService.saveProject(up); const needsReload = up.tracks.some(t => !t.dataUrl && !String(t.dataUrl ?? '').startsWith('opfs:')); if (needsReload) reloadRecordings(); }} /></>;
   if (screen === 'record' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><RecordScreen selected={selected} project={project} currentPreset={currentPreset} reverb={reverb} isRecording={recorder.isRecording} isSaving={recorder.isSaving} duration={recorder.duration} analyser={recorder.analyser} vuLevel={recorder.vuLevel} monitoring={recorder.monitoring} permError={recorder.permError} httpsUrl={offline.httpsUrl} inputGain={recorder.inputGain} onInputGainChange={recorder.setInputGain} monitorVol={recorder.monitorVol} onMonitorVolChange={recorder.setMonitorVol} recInstVol={recorder.recInstVol} onRecInstVolChange={recorder.setRecInstVol} instUrl={audio.instUrl} instLoading={audio.instLoading} instCached={audio.instCached} vocalGuideUrl={audio.vocalGuideUrl} vocalLoading={audio.vocalLoading} vocalCached={audio.vocalCached} vocalGuideVol={audio.vocalGuideVol} showLyrics={showLyrics} instRef={audio.instRef} vocalGuideRef={audio.vocalGuideRef} getInstPlaybackTime={audio.getInstPlaybackTime} onRefreshSong={handleRefreshSong} onPreWarmMic={recorder.preWarmMic} onBack={() => { if (isPreviewingRef.current) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); try { (window as any).__instBufSrc?.stop(); } catch {} (window as any).__instBufSrc = null; (window as any).__instCtxActive = false; try { (window as any).__vocalBufSrc?.stop(); } catch {} (window as any).__vocalBufSrc = null; isPreviewingRef.current = false; setIsPreviewing(false); } setScreen('songs'); clearSongMemory(); setSelected(null); }} onGoMixer={() => { if (isPreviewingRef.current) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); try { (window as any).__instBufSrc?.stop(); } catch {} (window as any).__instBufSrc = null; (window as any).__instCtxActive = false; try { (window as any).__vocalBufSrc?.stop(); } catch {} (window as any).__vocalBufSrc = null; isPreviewingRef.current = false; setIsPreviewing(false); } setScreen('mixer'); }} onPresetChange={setCurrentPreset} onReverbChange={setReverb} takeSlot={takeSlot} onTakeSlotChange={handleTakeSlotChange} slotTakes={slotTakes} onSlotGuide={handleSlotGuide} slotGuideActive={slotGuideActive}
         onStartRecording={() => { if (isPreviewingRef.current) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); try { (window as any).__instBufSrc?.stop(); } catch {} (window as any).__instBufSrc = null; (window as any).__instCtxActive = false; try { (window as any).__vocalBufSrc?.stop(); } catch {} (window as any).__vocalBufSrc = null; isPreviewingRef.current = false; setIsPreviewing(false); } if (selected && project) recorder.startRecording(selected, project); }} onStopRecording={() => { if (selected && project) recorder.stopRecording(selected, project, handleRecordingSaved); }} onToggleMonitor={recorder.toggleMonitoring} onVocalVolumeChange={audio.setVocalGuideVol} onToggleLyrics={() => setShowLyrics(v => !v)} onPreviewStems={handlePreviewStems} isPreviewing={isPreviewing} audioDevices={recorder.audioDevices} selectedDevice={recorder.selectedDevice} onSelectDevice={recorder.setSelectedDevice} onRefreshDevices={recorder.refreshDevices} punchIn={recorder.punchIn} punchOut={recorder.punchOut} onSetPunchIn={recorder.setPunchIn} onSetPunchOut={recorder.setPunchOut} stemDuration={audio.instRef.current?.duration || 0} sections={(project?.sections as any[] ?? [])} autoSelectReason={recorder.autoSelectReason} activeDeviceLabel={recorder.activeDeviceLabel} onPlayRaw={audio.playRecording} playingId={audio.playingId} /></>;
   if (screen === 'recordings') return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><RecordingsList recordings={recordings} pendingCount={pendingCount} playingId={audio.playingId} uploading={uploading} uploadDone={uploadDone} isOnline={offline.isOnline} playRef={audio.playRef} onBack={() => setScreen('songs')} onPlay={audio.playRecording} onUpload={handleUploadRecording} onDelete={handleDeleteRecording} /></>;

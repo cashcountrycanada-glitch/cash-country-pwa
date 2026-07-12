@@ -344,11 +344,14 @@ export function useStudioOffline(): OfflineResult {
       return true;
     }
 
-    // Vérifier que l'URL Mac est configurée AVANT de tenter le téléchargement
-    const macUrl = ((window as any).__CC_MAC_URL as string) || '';
-    if (!macUrl.startsWith('http')) {
-      throw new Error(`Adresse Mac non configurée — configure l'URL du Mac dans les paramètres pour télécharger les stems`);
-    }
+    // FIX "instrumental introuvable en mode autonome" (v7.6.421) : ce garde-fou
+    // bloquait tout téléchargement si le Mac n'était pas configuré — pourtant
+    // getMediaUrl() utilise déjà une URL RELATIVE (/api/media/...) quand aucun
+    // Mac n'est configuré, qui pointe automatiquement vers le serveur actuel
+    // (Railway/Render), lequel relaie vers GitHub Releases où les stems sont
+    // TOUJOURS disponibles. Le blocage empêchait donc un téléchargement qui
+    // aurait fonctionné normalement. Retiré — le téléchargement autonome via
+    // GitHub est maintenant le comportement par défaut, comme prévu.
 
     const urlToFetch = getMediaUrlFallbacks(fileName)[0];
     log(`⬇️ ${type === 'instrumental' ? '🎸' : '🎤'} Téléchargement: ${fileName}`);
