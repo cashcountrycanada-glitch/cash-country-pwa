@@ -20,10 +20,9 @@ import MixerScreen     from './StudioMobile/MixerScreen';
 import RecordingsList  from './StudioMobile/RecordingsList';
 import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
-import MasteringBoot from './StudioMobile/MasteringBoot';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.425';
+const BUILD_VERSION = 'v7.6.421';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -224,7 +223,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
 
   const addLog = (msg: string) => {
     const t = new Date().toISOString().slice(11,19);
-    setDebugLog(prev => [`[${t}] ${msg}`, ...prev].slice(0, 150));
+    setDebugLog(prev => [`[${t}] ${msg}`, ...prev].slice(0, 20));
   };
   (window as any).__addLog = addLog;
 
@@ -249,7 +248,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       const t = new Date().toISOString().slice(11,19);
       const existing = JSON.parse(localStorage.getItem('cc_breadcrumb_log') || '[]');
       existing.unshift(`[${t}] ${msg}`);
-      localStorage.setItem('cc_breadcrumb_log', JSON.stringify(existing.slice(0, 150)));
+      localStorage.setItem('cc_breadcrumb_log', JSON.stringify(existing.slice(0, 15)));
       console.log('[breadcrumb]', msg);
     } catch {}
   };
@@ -1256,19 +1255,9 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // ni erreur, ni écran de secours, ni log. Un vrai écran noir silencieux.
   // Ce filet de sécurité garantit qu'il y a TOUJOURS quelque chose de visible
   // + un log précis pour savoir exactement ce qui manquait si ça revient.
-  // FIX BOUCLE INFINIE #2 (v7.6.420) : même piège que celui corrigé pour
-  // breadcrumb() en v7.6.419 (voir commentaire plus haut), mais laissé
-  // intact ici — addLog() (setState) était appelé DIRECTEMENT dans le
-  // corps du rendu, dans cette branche précise. Toute la logique est
-  // conservée à l'identique, juste déplacée dans un useEffect pour ne
-  // plus déclencher de setState pendant le rendu lui-même.
-  useEffect(() => {
-    if (screen === 'master' && (!masterVocalBlob || !selected)) {
-      addLog(`⚠️ Écran Masteriser demandé mais incomplet : masterVocalBlob=${!!masterVocalBlob} selected=${!!selected} → retour au mixeur`);
-      setScreen('mixer');
-    }
-  }, [screen, masterVocalBlob, selected]);
   if (screen === 'master' && (!masterVocalBlob || !selected)) {
+    addLog(`⚠️ Écran Masteriser demandé mais incomplet : masterVocalBlob=${!!masterVocalBlob} selected=${!!selected} → retour au mixeur`);
+    setScreen('mixer');
     return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex items-center justify-center text-white/60 text-sm">Retour au mixeur…</div></>;
   }
   if (screen === 'master' && masterVocalBlob && selected) {
@@ -1291,7 +1280,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex flex-col items-center justify-center gap-3 px-6 text-center"><p className="text-[40px]">🛑</p><p className="text-white font-bebas text-xl tracking-widest">BOUCLE DÉTECTÉE</p><p className="text-zinc-500 text-[11px]">L'écran de mastering n'arrivait pas à s'afficher correctement. Retour au mixeur — réessaie dans un instant.</p></div></>;
     }
     breadcrumb(`🖼️ Construction JSX écran Master démarrée (vocalBlob=${masterVocalBlob.size}B) [tentative ${w.__masterRenderAttempts.length}]`);
-    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringBoot vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
+    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
   }
   if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Comp Editor" onReset={() => setScreen('mixer')}><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {
               // Persister les régions dans les pistes du projet

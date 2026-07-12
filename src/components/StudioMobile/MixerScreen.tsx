@@ -944,28 +944,55 @@ export default function MixerScreen({
     crumb(`🖱️ Bouton Masteriser cliqué — mixedDataUrl=${project?.mixedDataUrl ? project.mixedDataUrl.slice(0,30) : 'VIDE'}`);
     if (!project?.mixedDataUrl) { crumb(`⛔ handleMasterize STOP — project.mixedDataUrl est vide, bouton n'a rien fait`); return; }
     const url = project.mixedDataUrl;
+
+    // FIX ÉCRAN NOIR MASTERISATION (v7.6.420) — NOUVELLE APPROCHE : au lieu de
+    // garder le mix en mémoire React et de basculer d'écran dans le même arbre
+    // de composants (des dizaines de hooks/effets/contextes audio déjà actifs
+    // du mixeur), on sauvegarde le mix dans le stockage permanent puis on
+    // navigue vers une page FRAÎCHE dédiée à la masterisation. Cette page
+    // démarre à zéro : aucun contexte audio hérité, aucun état React du
+    // mixeur, aucun risque d'interférence avec ce qui tournait avant. Le
+    // bug exact qu'on chassait restait invisible même avec un traçage
+    // poussé — cette approche le contourne complètement plutôt que de
+    // continuer à deviner.
+    let masterBlob: Blob | null = null;
     if (url.startsWith('blob:')) {
-      // blob: URL → essayer __mixBlob mémoire d'abord
       const memBlob = (window as any).__mixBlob as Blob | undefined;
-      if (memBlob && memBlob.size > 100) { crumb(`✅ Mix trouvé en mémoire (__mixBlob, ${memBlob.size}B) → onMasterize`); onMasterize(memBlob, instBlob); return; }
-      // Tenter fetch (valide si même session)
-      try {
-        const b = await fetch(url).then(r => r.blob());
-        if (b && b.size > 100) { crumb(`✅ Mix trouvé via fetch blob: (${b.size}B) → onMasterize`); onMasterize(b, instBlob); return; }
-      } catch (e: any) { crumb(`⚠️ fetch blob: a échoué: ${e?.message}`); }
-      // blob: URL morte — chercher le dernier mix dans IDB
-      try {
-        const db = studioOfflineDB;
-        const fromDb = await db.getAudio(`mix_${project.id}`).catch(() => null);
-        if (fromDb && fromDb.size > 100) { crumb(`✅ Mix trouvé en IDB (mix_${project.id}, ${fromDb.size}B) → onMasterize`); onMasterize(fromDb, instBlob); return; }
-      } catch {}
-      crumb(`⛔ handleMasterize STOP — mix introuvable partout (mémoire/fetch/IDB)`);
-      alert('Mix introuvable — veuillez relancer le mixage avant de masteriser.');
+      if (memBlob && memBlob.size > 100) { masterBlob = memBlob; crumb(`✅ Mix trouvé en mémoire (__mixBlob, ${memBlob.size}B)`); }
+      if (!masterBlob) {
+        try {
+          const b = await fetch(url).then(r => r.blob());
+          if (b && b.size > 100) { masterBlob = b; crumb(`✅ Mix trouvé via fetch blob: (${b.size}B)`); }
+        } catch (e: any) { crumb(`⚠️ fetch blob: a échoué: ${e?.message}`); }
+      }
+      if (!masterBlob) {
+        try {
+          const fromDb = await studioOfflineDB.getAudio(`mix_${project.id}`).catch(() => null);
+          if (fromDb && fromDb.size > 100) { masterBlob = fromDb; crumb(`✅ Mix trouvé en IDB (mix_${project.id}, ${fromDb.size}B)`); }
+        } catch {}
+      }
     } else {
       const resolved = await studioService.resolveBlobAsync(url);
-      if (resolved) { crumb(`✅ Mix résolu via resolveBlobAsync (${resolved.size}B) → onMasterize`); onMasterize(resolved, instBlob); }
-      else { crumb(`⛔ handleMasterize STOP — resolveBlobAsync a retourné null pour dataUrl legacy`); console.warn('[Masterize] Blob mix introuvable'); }
+      if (resolved) { masterBlob = resolved; crumb(`✅ Mix résolu via resolveBlobAsync (${resolved.size}B)`); }
     }
+    if (!masterBlob) {
+      crumb(`⛔ handleMasterize STOP — mix introuvable partout`);
+      alert('Mix introuvable — veuillez relancer le mixage avant de masteriser.');
+      return;
+    }
+    try {
+      // Toujours re-sauvegarder sous une clé stable et prévisible : la page
+      // fraîche de masterisation ira chercher exactement cette clé.
+      await studioOfflineDB.saveAudio(`master_pending_${project.id}`, masterBlob, { type: 'master_pending', savedAt: Date.now() });
+      if (instBlob) await studioOfflineDB.saveAudio(`master_pending_inst_${project.id}`, instBlob, { type: 'master_pending_inst', savedAt: Date.now() });
+      crumb(`💾 Mix sauvegardé sous master_pending_${project.id} (${masterBlob.size}B) — navigation vers page fraîche`);
+    } catch (e: any) {
+      crumb(`⛔ Échec sauvegarde IDB avant navigation: ${e?.message}`);
+      alert("Erreur de préparation du mastering — réessaie dans un instant.");
+      return;
+    }
+    const base = window.location.origin + window.location.pathname;
+    window.location.href = `${base}?master=${encodeURIComponent(project.id)}&songId=${encodeURIComponent(selected.id)}&hasInst=${instBlob ? '1' : '0'}&instOffsetMs=${encodeURIComponent(instOffsetMs)}`;
   };
 
   const hasAnyHarmony = HARMONY_DEFS.some(h => tracks.some(t => t.trackIndex === h.trackIndex));
