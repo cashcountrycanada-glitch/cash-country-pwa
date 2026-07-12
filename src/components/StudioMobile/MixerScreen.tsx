@@ -377,14 +377,18 @@ export default function MixerScreen({
         const pan = ctx.createStereoPanner();
         pan.pan.value = p.panVal;
         if (p.isHarmony) {
-          // Même correctif que l'export (v7.6.409) : creux 300Hz + brillant 6kHz
-          // sur les harmonies uniquement, pour que l'écoute directe corresponde
-          // exactement à ce que donnera l'export.
+          // v7.6.409 : creux 300Hz + brillant 6kHz sur les harmonies.
+          // v7.6.425 : + présence 500-2000Hz ajoutée après analyse du stem vocal
+          // original de la chanson (référence : ~49% de l'énergie dans cette
+          // zone contre ~28% mesuré sur notre mix voix+harmonies). Ce boost
+          // rapproche l'équilibre spectral des harmonies de cette cible mesurée.
           const cut = ctx.createBiquadFilter();
           cut.type = 'peaking'; cut.frequency.value = 300; cut.Q.value = 1.0; cut.gain.value = -4;
+          const presence = ctx.createBiquadFilter();
+          presence.type = 'peaking'; presence.frequency.value = 1200; presence.Q.value = 0.9; presence.gain.value = 2.5;
           const shelf = ctx.createBiquadFilter();
           shelf.type = 'highshelf'; shelf.frequency.value = 6000; shelf.gain.value = 3;
-          src.connect(gain); gain.connect(cut); cut.connect(shelf); shelf.connect(pan); pan.connect(ctx.destination);
+          src.connect(gain); gain.connect(cut); cut.connect(presence); presence.connect(shelf); shelf.connect(pan); pan.connect(ctx.destination);
         } else {
           src.connect(gain); gain.connect(pan); pan.connect(ctx.destination);
         }
@@ -515,11 +519,16 @@ export default function MixerScreen({
             // formants et s'empilent toutes dans cette zone. On creuse un peu le
             // low-mid et on redonne un peu de brillant en haut, SEULEMENT sur les
             // couches d'harmonie — la voix principale n'est pas touchée.
+            // v7.6.425 : + présence 500-2000Hz, calibrée sur l'analyse du vrai
+            // stem vocal original de la chanson (cible mesurée ~49% dans cette
+            // zone, contre ~28% sur notre mix avant ce correctif).
             const cut = offline.createBiquadFilter();
             cut.type = 'peaking'; cut.frequency.value = 300; cut.Q.value = 1.0; cut.gain.value = -4;
+            const presence = offline.createBiquadFilter();
+            presence.type = 'peaking'; presence.frequency.value = 1200; presence.Q.value = 0.9; presence.gain.value = 2.5;
             const shelf = offline.createBiquadFilter();
             shelf.type = 'highshelf'; shelf.frequency.value = 6000; shelf.gain.value = 3;
-            src.connect(gain); gain.connect(cut); cut.connect(shelf); shelf.connect(pan); pan.connect(offline.destination);
+            src.connect(gain); gain.connect(cut); cut.connect(presence); presence.connect(shelf); shelf.connect(pan); pan.connect(offline.destination);
           } else {
             src.connect(gain); gain.connect(pan); pan.connect(offline.destination);
           }
