@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.419';
+const BUILD_VERSION = 'v7.6.420';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1255,9 +1255,19 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // ni erreur, ni écran de secours, ni log. Un vrai écran noir silencieux.
   // Ce filet de sécurité garantit qu'il y a TOUJOURS quelque chose de visible
   // + un log précis pour savoir exactement ce qui manquait si ça revient.
+  // FIX BOUCLE INFINIE #2 (v7.6.420) : même piège que celui corrigé pour
+  // breadcrumb() en v7.6.419 (voir commentaire plus haut), mais laissé
+  // intact ici — addLog() (setState) était appelé DIRECTEMENT dans le
+  // corps du rendu, dans cette branche précise. Toute la logique est
+  // conservée à l'identique, juste déplacée dans un useEffect pour ne
+  // plus déclencher de setState pendant le rendu lui-même.
+  useEffect(() => {
+    if (screen === 'master' && (!masterVocalBlob || !selected)) {
+      addLog(`⚠️ Écran Masteriser demandé mais incomplet : masterVocalBlob=${!!masterVocalBlob} selected=${!!selected} → retour au mixeur`);
+      setScreen('mixer');
+    }
+  }, [screen, masterVocalBlob, selected]);
   if (screen === 'master' && (!masterVocalBlob || !selected)) {
-    addLog(`⚠️ Écran Masteriser demandé mais incomplet : masterVocalBlob=${!!masterVocalBlob} selected=${!!selected} → retour au mixeur`);
-    setScreen('mixer');
     return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex items-center justify-center text-white/60 text-sm">Retour au mixeur…</div></>;
   }
   if (screen === 'master' && masterVocalBlob && selected) {
