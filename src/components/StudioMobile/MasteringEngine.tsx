@@ -498,22 +498,18 @@ async function stereoWiden(buf: AudioBuffer, widthGain: number = 1.3): Promise<A
   return offline.startRendering();
 }
 
-// Masterisation professionnelle — 3 étapes séquentielles
-// Étape 1 : Noise gate + saturation douce + EQ correctif
-// Étape 2 : Compression + EQ musical
+// Masterisation professionnelle — 3 étapes séquentielles (VOIX SEULE)
+// Étape 1 : Noise gate + saturation douce
+// Étape 2 : EQ musical + de-esser + compression multibande
 // Étape 3 : Stereo widening + gain makeup + limiteur transparent
-// FIX "qualité instrumentale dégradée" (v7.6.427) : cette chaîne était conçue
-// pour une VOIX seule (gate de bruit calibré sur le silence entre phrases
-// vocales, saturation pensée pour une voix, compression multibande avec des
-// réglages d'attaque/relâche pensés pour la dynamique vocale) — mais elle
-// était appliquée telle quelle sur le MIX COMPLET (voix + batterie + basse +
-// guitares), ce qui dégrade l'instrumental (gate qui ne devrait pas s'y
-// appliquer, saturation en trop, compression qui écrase le punch de la
-// batterie). Le paramètre isFullMix adoucit la chaîne pour ce cas précis :
-// pas de noise gate, moins de saturation, compression plus douce — tout en
-// gardant l'EQ, l'élargissement stéréo et le ciblage LUFS/True Peak qui,
-// eux, sont légitimes sur un mix complet.
-async function masterAudio(buf: AudioBuffer, s: MasterSettings, isFullMix: boolean = false): Promise<AudioBuffer> {
+// FIX (v7.6.429) : cette chaîne complète (gate, EQ 4 bandes, de-esser,
+// saturation, compression multibande, stereo widening) est calibrée pour une
+// voix brute et n'est plus appliquée qu'à Mode A (voix seule). Le mix complet
+// (Mode B) utilise désormais finalizeFullMix() — la voix a déjà eu ce
+// traitement ici, et l'instrumental FLAC est déjà masterisé (Tunee) avant
+// d'être séparé de la voix, donc il n'a pas besoin (et ne doit pas recevoir)
+// une deuxième couche d'EQ/compression/de-esser/élargissement stéréo.
+async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBuffer> {
 
   // ── ÉTAPE 1 : Traitement canal par canal (noise gate + saturation) ──────────
   const sr  = buf.sampleRate;
@@ -526,12 +522,8 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings, isFullMix: boole
   const step1Buf = offline1.createBuffer(ch, len, sr);
   for (let c = 0; c < ch; c++) {
     let data = new Float32Array(buf.getChannelData(c));
-    // Le gate de bruit (silence entre phrases) n'a pas sa place sur un mix
-    // complet — l'instrumental remplit déjà les silences vocaux.
-    if (!isFullMix) data = await applyNoiseGate(data, -65, 150, sr);
-    // Saturation réduite de moitié sur le mix complet — l'instrumental a déjà
-    // son propre caractère, pas besoin de la même coloration que sur la voix seule.
-    const driveAmt = (0.12 + Math.abs(s.lowGain) * 0.01) * (isFullMix ? 0.5 : 1);
+    data = await applyNoiseGate(data, -65, 150, sr);
+    const driveAmt = 0.12 + Math.abs(s.lowGain) * 0.01;
     data = await applySaturation(data, driveAmt);
     step1Buf.getChannelData(c).set(data);
   }
@@ -572,15 +564,10 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings, isFullMix: boole
   // approximation Linkwitz-Riley simple).
   const lowXover = 200, highXover = 3000;
 
-  // Facteur d'adoucissement : sur le mix complet, on garde plus de dynamique
-  // (surtout la batterie/basse) — un mix bien produit n'a pas besoin d'être
-  // compressé aussi fort qu'une voix seule pour sonner "collé".
-  const fullMixSoften = isFullMix ? 0.7 : 1.0;
-
   const lowLp1 = offline1.createBiquadFilter(); lowLp1.type = 'lowpass'; lowLp1.frequency.value = lowXover; lowLp1.Q.value = 0.707;
   const lowLp2 = offline1.createBiquadFilter(); lowLp2.type = 'lowpass'; lowLp2.frequency.value = lowXover; lowLp2.Q.value = 0.707;
   const lowComp = offline1.createDynamicsCompressor();
-  lowComp.threshold.value = s.threshold - 2; lowComp.ratio.value = Math.min(s.ratio * 0.7 * fullMixSoften, 4);
+  lowComp.threshold.value = s.threshold - 2; lowComp.ratio.value = Math.min(s.ratio * 0.7, 4);
   lowComp.attack.value = 0.030; lowComp.release.value = Math.max(s.release / 1000, 0.25); lowComp.knee.value = 6;
 
   const midHp1 = offline1.createBiquadFilter(); midHp1.type = 'highpass'; midHp1.frequency.value = lowXover; midHp1.Q.value = 0.707;
@@ -588,13 +575,13 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings, isFullMix: boole
   const midLp1 = offline1.createBiquadFilter(); midLp1.type = 'lowpass'; midLp1.frequency.value = highXover; midLp1.Q.value = 0.707;
   const midLp2 = offline1.createBiquadFilter(); midLp2.type = 'lowpass'; midLp2.frequency.value = highXover; midLp2.Q.value = 0.707;
   const midComp = offline1.createDynamicsCompressor();
-  midComp.threshold.value = s.threshold; midComp.ratio.value = s.ratio * fullMixSoften;
+  midComp.threshold.value = s.threshold; midComp.ratio.value = s.ratio;
   midComp.attack.value = s.attack / 1000; midComp.release.value = s.release / 1000; midComp.knee.value = 5;
 
   const highHp1 = offline1.createBiquadFilter(); highHp1.type = 'highpass'; highHp1.frequency.value = highXover; highHp1.Q.value = 0.707;
   const highHp2 = offline1.createBiquadFilter(); highHp2.type = 'highpass'; highHp2.frequency.value = highXover; highHp2.Q.value = 0.707;
   const highComp = offline1.createDynamicsCompressor();
-  highComp.threshold.value = s.threshold + 3; highComp.ratio.value = Math.min(s.ratio * 0.6 * fullMixSoften, 3);
+  highComp.threshold.value = s.threshold + 3; highComp.ratio.value = Math.min(s.ratio * 0.6, 3);
   highComp.attack.value = 0.004; highComp.release.value = Math.max(s.release / 1000 * 0.6, 0.08); highComp.knee.value = 8;
 
   const bandSum = offline1.createGain(); // point de sommation des 3 bandes
@@ -624,17 +611,28 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings, isFullMix: boole
   compressed = null; // libère le buffer pré-widening, plus besoin
 
   // ── ÉTAPE 3 : LUFS targeting + True Peak limiting broadcast-compliant ──────
+  return applyLoudnessTargetingAndLimiter(widened, compressedLufs, s);
+}
+
+// Étape finale partagée : ajuste le gain vers targetLufs puis applique un
+// limiteur True Peak transparent (seuil = ceiling, attaque 0.3ms). Extraite
+// de masterAudio() pour pouvoir être réutilisée SEULE par finalizeFullMix()
+// (v7.6.429) — cette étape ne fait ni EQ ni compression ni saturation, donc
+// elle ne recolore pas un signal déjà masterisé (ex: instrumental Tunee).
+async function applyLoudnessTargetingAndLimiter(
+  inputBuf: AudioBuffer, inputLufs: number, s: MasterSettings
+): Promise<AudioBuffer> {
   // Cap à 20dB max pour éviter un gain excessif sur silence/voix très douce
-  let gainDb = Math.min(s.targetLufs - compressedLufs, 20);
+  let gainDb = Math.min(s.targetLufs - inputLufs, 20);
   await new Promise<void>(r => setTimeout(r, 100)); // laisse le GC respirer avant la boucle
 
   // Boucle de correction True Peak (max 3 itérations — converge toujours)
   // À chaque itération : appliquer le gain, mesurer True Peak, réajuster si nécessaire
-  let finalBuf: AudioBuffer = widened;
+  let finalBuf: AudioBuffer = inputBuf;
   for (let iter = 0; iter < 3; iter++) {
     if (iter > 0) await new Promise<void>(r => setTimeout(r, 100)); // pause GC entre itérations
-    const offline2 = new OfflineAudioContext(2, widened.length, widened.sampleRate);
-    const s2src    = offline2.createBufferSource(); s2src.buffer = widened;
+    const offline2 = new OfflineAudioContext(2, inputBuf.length, inputBuf.sampleRate);
+    const s2src    = offline2.createBufferSource(); s2src.buffer = inputBuf;
 
     // High-pass final 20Hz
     const hpfFinal = offline2.createBiquadFilter();
@@ -679,6 +677,24 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings, isFullMix: boole
     }
   }
   return finalBuf;
+}
+
+// ── Mode B (mix complet) : finalisation SANS re-masterisation ──────────────
+// FIX "on remasterise l'instrumental de Tunee par-dessus son propre mastering"
+// (v7.6.429) : l'instrumental FLAC est déjà masterisé (Tunee) avant d'être
+// séparé de la voix — il a déjà sa balance tonale, sa compression et son
+// limiteur. Le repasser dans masterAudio() (EQ 4 bandes, de-esser, saturation,
+// compression multibande, stereo widening) recolore un signal qui n'en a pas
+// besoin, et double-traite les mêmes fréquences qui ont déjà été shape par le
+// mastering d'origine (voir aussi le fix v7.6.428 côté voix : même symptôme,
+// autre stem). La voix a déjà été masterisée dans son mode dédié (Mode A) et
+// mixée ici à son niveau final ; l'instrumental est déjà masterisé.
+// Il ne reste donc plus qu'à sécuriser le mix final : ajuster le gain global
+// vers le targetLufs et poser un limiteur True Peak transparent pour éviter
+// que la somme des deux pistes dépasse le ceiling — rien de plus.
+async function finalizeFullMix(buf: AudioBuffer, s: MasterSettings): Promise<AudioBuffer> {
+  const inputLufs = await analyzeLoudness(buf);
+  return applyLoudnessTargetingAndLimiter(buf, inputLufs, s);
 }
 
 // Convertir AudioBuffer → Blob mp4 (iOS natif) — 256 kbps pour la qualité
@@ -1045,7 +1061,20 @@ export default function MasteringEngine({
       // 2. Masteriser la voix seule (Mode A)
       setProgressLabel('Masterisation voix...'); setProgress(30);
       const vocalM = await masterAudio(vocalRaw, settings);
-      vocalRaw = null; // FIX mémoire : relâché dès que possible, plus besoin après ce point
+      // FIX "voix horrible" (v7.6.428) : vocalRaw n'est PLUS libéré ici. Avant
+      // ce correctif, le Mode B (mix complet) réutilisait vocalM — la voix
+      // DÉJÀ masterisée (EQ + de-esser + saturation + compression multibande +
+      // limiteur True Peak) — comme source pour le mixage avec l'instrumental,
+      // puis renvoyait le résultat dans masterAudio() une SECONDE fois. La voix
+      // se retrouvait donc traitée deux fois par toute la chaîne : EQ doublé
+      // (graves/presence/aigus additionnés deux fois), de-esser doublé (~-9dB
+      // cumulés à 7.5-9.5kHz → voix étouffée), compression multibande doublée,
+      // et surtout limiteur True Peak doublé (la voix déjà collée au ceiling
+      // se refait limiter par-dessus → écrasement des transitoires, dureté).
+      // L'instrumental n'était lui masterisé qu'une fois, d'où le déséquilibre
+      // audible (voix "horrible", mix étouffé/bosselé dans les graves).
+      // Le fix : on garde vocalRaw (non masterisé) pour le mixage du Mode B,
+      // et seul le mix complet passe par masterAudio() — une seule fois.
       setVocalMastered(vocalM);
       setOutputVocalLufs(Math.round((await analyzeLoudness(vocalM)) * 10) / 10);
 
@@ -1071,12 +1100,23 @@ export default function MasteringEngine({
         let instRaw: AudioBuffer | null = await decodeBlob(instBlob);
 
         setProgressLabel('Mixage vocal + instrumental...'); setProgress(70);
-        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalM, instRaw, instGainDb, instOffsetMs);
+        // FIX "voix horrible" (v7.6.428) : mixer avec vocalRaw (voix NON
+        // masterisée), pas vocalM — sinon la voix est masterisée deux fois
+        // (voir commentaire plus haut). mixVocalWithInst normalise chaque
+        // signal indépendamment à -1dBFS avant mixage, donc utiliser la voix
+        // brute ici ne change rien au niveau, seulement à la qualité.
+        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalRaw!, instRaw, instGainDb, instOffsetMs);
         instRaw = null; // FIX mémoire : relâché dès que possible
+        vocalRaw = null; // FIX mémoire : plus besoin après le mixage, relâché ici
 
-        setProgressLabel('Masterisation du mix complet...'); setProgress(80);
+        setProgressLabel('Finalisation du mix complet...'); setProgress(80);
         await new Promise<void>(r => setTimeout(r, 150)); // pause GC avant la 2e passe lourde
-        const fullM = await masterAudio(fullRaw, settings, true);
+        // FIX "on remasterise l'instrumental déjà masterisé" (v7.6.429) :
+        // finalizeFullMix() ne fait QUE l'ajustement de loudness + le
+        // limiteur True Peak de sécurité — pas d'EQ/compression/de-esser/
+        // widening qui recolorerait l'instrumental Tunee déjà masterisé (voir
+        // commentaire détaillé au-dessus de la fonction).
+        const fullM = await finalizeFullMix(fullRaw, settings);
         fullRaw = null; // FIX mémoire : relâché dès que possible, avant l'encodage
         setFullMastered(fullM);
         setOutputFullLufs(Math.round((await analyzeLoudness(fullM)) * 10) / 10);
