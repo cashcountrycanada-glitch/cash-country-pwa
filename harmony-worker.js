@@ -502,15 +502,13 @@ function doubleTrack(mono,sr){
     return out;
   };
   const lightShift = (view, semi, sr) => rbPitchShift(view, semi, sr);
-  // FIX v6 "trop discret" (v7.6.431) : 3 cents (0.03 ST) restait très en
-  // dessous de la fourchette naturelle d'une vraie double prise humaine —
-  // un chanteur qui se re-chante rarement retombe pile sur la même hauteur
-  // à quelques cents près, l'écart réel tourne plutôt autour de 5-8 cents.
-  // On monte à 6 cents (0.06 ST), toujours loin des 10 cents qui posaient
-  // problème historiquement (voir FIX précédents), mais assez pour que la
-  // texture "deux voix" s'entende clairement au lieu de juste épaissir.
-  const sL = fitLength(processChunked(mono, 0.06, sr, undefined, lightShift));
-  const sR = fitLength(processChunked(mono, -0.06, sr, undefined, lightShift));
+  // FIX v7 "on approche mais pas assez" (v7.6.432) : 6 cents a aidé mais
+  // reste encore un peu discret d'après le test. On monte à 8 cents (0.08 ST)
+  // — encore sous les 10 cents qui posaient problème historiquement (voir
+  // FIX v3 plus haut : "toujours 3 voix / écho"), mais on s'en rapproche.
+  // Si ça part vers l'écho/chorus, revenir à 6-7 cents plutôt que réessayer 10.
+  const sL = fitLength(processChunked(mono, 0.08, sr, undefined, lightShift));
+  const sR = fitLength(processChunked(mono, -0.08, sr, undefined, lightShift));
   // FIX v3 "toujours 3 voix / écho" : réduire un délai FIXE, aussi court
   // soit-il, ne suffit pas — un délai statique et parfaitement périodique se
   // lit toujours comme une réflexion numérique (comb filtering), pas comme
@@ -539,36 +537,36 @@ function doubleTrack(mono,sr){
   // de délai trop large ressemble à un chorus marqué (chaque copie "ondule"
   // audiblement en hauteur), ce qui ajoutait aussi à l'impression de
   // deuxième voix, en plus du désaccord corrigé plus haut.
-  const baseDelayL = 0.016 * sr, modDepthL = 0.002 * sr, modRateL = 0.5; // Hz — ~14-18ms
-  const baseDelayR = 0.024 * sr, modDepthR = 0.0025 * sr, modRateR = 0.7; // ~21.5-26.5ms
+  // FIX v7 "on approche mais pas assez" (v7.6.432) : délais et étalement
+  // stéréo encore un cran plus larges — on reste dans la zone pro Abbey
+  // Road (15-35ms) documentée plus haut, mais vers le haut de la fourchette
+  // pour mieux séparer les deux voix à l'oreille.
+  const baseDelayL = 0.019 * sr, modDepthL = 0.002 * sr, modRateL = 0.5; // Hz — ~17-21ms
+  const baseDelayR = 0.029 * sr, modDepthR = 0.0025 * sr, modRateR = 0.7; // ~26.5-31.5ms
   const maxDelay = Math.ceil(Math.max(baseDelayL + modDepthL, baseDelayR + modDepthR)) + 2;
   const outLen = len + maxDelay;
   const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
-  // FIX v6 "trop discret" (v7.6.431) : la voix principale (dry, 0.70) était
-  // nettement plus forte que la double (wet, 0.55 × répartition 0.72/0.28 =
-  // 0.396 max par canal, soit environ -5dB sous le dry) — la double
-  // épaississait la voix sans vraiment s'entendre comme une seconde voix.
-  // On rapproche les deux : dry 0.70→0.62, wet 0.55→0.70 (× 0.80/0.20 de
-  // répartition, un peu plus large aussi) → présence quasi égale, comme
-  // deux vraies prises superposées plutôt qu'une voix + un soutien discret.
-  for(let i=0;i<len;i++){outL[i]+=mono[i]*0.62;outR[i]+=mono[i]*0.62;}
+  // FIX v7 : dry encore réduit (0.62→0.55), wet encore monté (0.70→0.82),
+  // étalement stéréo élargi (0.80/0.20→0.85/0.15) — la double doit maintenant
+  // ressortir clairement à l'oreille, pas juste épaissir en arrière-plan.
+  for(let i=0;i<len;i++){outL[i]+=mono[i]*0.55;outR[i]+=mono[i]*0.55;}
   for (let i = 0; i < len; i++) {
     const t = i / sr;
     const dL = baseDelayL + modDepthL * Math.sin(2 * Math.PI * modRateL * t);
     const dR = baseDelayR + modDepthR * Math.sin(2 * Math.PI * modRateR * t + 1.7);
-    const sVal = readInterp(sL, i) * 0.70;
-    const rVal = readInterp(sR, i) * 0.70;
+    const sVal = readInterp(sL, i) * 0.82;
+    const rVal = readInterp(sR, i) * 0.82;
     const idxL = i + dL, idxR = i + dR;
     const fL = Math.floor(idxL), fR = Math.floor(idxR);
     if (fL >= 0 && fL + 1 < outLen) {
       const frac = idxL - fL;
-      outL[fL]   += sVal * 0.80 * (1 - frac); outL[fL+1]   += sVal * 0.80 * frac;
-      outR[fL]   += sVal * 0.20 * (1 - frac); outR[fL+1]   += sVal * 0.20 * frac;
+      outL[fL]   += sVal * 0.85 * (1 - frac); outL[fL+1]   += sVal * 0.85 * frac;
+      outR[fL]   += sVal * 0.15 * (1 - frac); outR[fL+1]   += sVal * 0.15 * frac;
     }
     if (fR >= 0 && fR + 1 < outLen) {
       const frac = idxR - fR;
-      outL[fR]   += rVal * 0.20 * (1 - frac); outL[fR+1]   += rVal * 0.20 * frac;
-      outR[fR]   += rVal * 0.80 * (1 - frac); outR[fR+1]   += rVal * 0.80 * frac;
+      outL[fR]   += rVal * 0.15 * (1 - frac); outL[fR+1]   += rVal * 0.15 * frac;
+      outR[fR]   += rVal * 0.85 * (1 - frac); outR[fR+1]   += rVal * 0.85 * frac;
     }
   }
   let peak=0;

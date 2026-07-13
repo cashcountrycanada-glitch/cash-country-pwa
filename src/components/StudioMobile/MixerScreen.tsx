@@ -966,7 +966,6 @@ export default function MixerScreen({
     const crumb = (m: string) => { try { (window as any).__breadcrumb?.(m); } catch {} };
     crumb(`🖱️ Bouton Masteriser cliqué — mixedDataUrl=${project?.mixedDataUrl ? project.mixedDataUrl.slice(0,30) : 'VIDE'}`);
     if (!project?.mixedDataUrl) { crumb(`⛔ handleMasterize STOP — project.mixedDataUrl est vide, bouton n'a rien fait`); return; }
-    const url = project.mixedDataUrl;
 
     // FIX ÉCRAN NOIR MASTERISATION (v7.6.420) — NOUVELLE APPROCHE : au lieu de
     // garder le mix en mémoire React et de basculer d'écran dans le même arbre
@@ -978,29 +977,28 @@ export default function MixerScreen({
     // bug exact qu'on chassait restait invisible même avec un traçage
     // poussé — cette approche le contourne complètement plutôt que de
     // continuer à deviner.
+    //
+    // FIX "instrumental mixé deux fois à la masterisation" (v7.6.432) : on ne
+    // lit PLUS project.mixedDataUrl / __mixBlob / mix_${project.id} ici — ces
+    // trois sources contiennent l'instrumental (ajouté pour le Preview/Écoute
+    // dans handleMix côté StudioMobile.tsx). MasteringEngine mixe déjà l'inst
+    // séparément (mixVocalWithInst) ; réutiliser un vocalBlob qui l'a déjà
+    // dedans le faisait apparaître deux fois dans le master final, en plus de
+    // faire passer "voix seule" (masterAudio Mode A) sur un signal qui
+    // contenait déjà toute la musique. On lit maintenant __vocalMixBlob /
+    // vocalmix_${project.id} — la version voix-only produite en parallèle.
     let masterBlob: Blob | null = null;
-    if (url.startsWith('blob:')) {
-      const memBlob = (window as any).__mixBlob as Blob | undefined;
-      if (memBlob && memBlob.size > 100) { masterBlob = memBlob; crumb(`✅ Mix trouvé en mémoire (__mixBlob, ${memBlob.size}B)`); }
-      if (!masterBlob) {
-        try {
-          const b = await fetch(url).then(r => r.blob());
-          if (b && b.size > 100) { masterBlob = b; crumb(`✅ Mix trouvé via fetch blob: (${b.size}B)`); }
-        } catch (e: any) { crumb(`⚠️ fetch blob: a échoué: ${e?.message}`); }
-      }
-      if (!masterBlob) {
-        try {
-          const fromDb = await studioOfflineDB.getAudio(`mix_${project.id}`).catch(() => null);
-          if (fromDb && fromDb.size > 100) { masterBlob = fromDb; crumb(`✅ Mix trouvé en IDB (mix_${project.id}, ${fromDb.size}B)`); }
-        } catch {}
-      }
-    } else {
-      const resolved = await studioService.resolveBlobAsync(url);
-      if (resolved) { masterBlob = resolved; crumb(`✅ Mix résolu via resolveBlobAsync (${resolved.size}B)`); }
+    const memVocalBlob = (window as any).__vocalMixBlob as Blob | undefined;
+    if (memVocalBlob && memVocalBlob.size > 100) { masterBlob = memVocalBlob; crumb(`✅ Mix voix-only trouvé en mémoire (__vocalMixBlob, ${memVocalBlob.size}B)`); }
+    if (!masterBlob) {
+      try {
+        const fromDb = await studioOfflineDB.getAudio(`vocalmix_${project.id}`).catch(() => null);
+        if (fromDb && fromDb.size > 100) { masterBlob = fromDb; crumb(`✅ Mix voix-only trouvé en IDB (vocalmix_${project.id}, ${fromDb.size}B)`); }
+      } catch {}
     }
     if (!masterBlob) {
-      crumb(`⛔ handleMasterize STOP — mix introuvable partout`);
-      alert('Mix introuvable — veuillez relancer le mixage avant de masteriser.');
+      crumb(`⛔ handleMasterize STOP — mix voix-only introuvable`);
+      alert('Mix voix introuvable — veuillez relancer le mixage avant de masteriser.');
       return;
     }
     try {

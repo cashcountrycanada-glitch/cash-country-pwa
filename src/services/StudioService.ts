@@ -1652,13 +1652,24 @@ export const studioService = {
         const gainNode = offline.createGain();
         const tIdx = (m.track as any).trackIndex ?? 0;
         const isHarmonyLayer = tIdx >= 1 && tIdx <= 5;
+        // FIX "on approche mais pas assez" (v7.6.432) : le double tracking
+        // (idx=1, même mélodie à l'unisson) a besoin d'être BEAUCOUP plus
+        // proche du niveau de la voix principale qu'une harmonie classique
+        // (idx 2-5, notes différentes) — deux voix qui chantent la même
+        // ligne doivent sonner à peu près à égalité, alors qu'une harmonie
+        // trop forte peut vite sonner discordante. Plafond distinct et plus
+        // haut (0.95 au lieu de 0.85) et boost plus généreux (×1.6) pour le
+        // double uniquement ; les harmonies 2-5 gardent leur réglage inchangé.
+        const isDoubleTrack = tIdx === 1;
         // FIX "harmonies pas assez puissantes" (v7.6.427) : les harmonies
         // étaient si discrètes (gains 0.24-0.34 typiques) qu'on ne les
         // remarquait presque pas. Boost de 40% sur les harmonies uniquement,
         // plafonné pour ne jamais dépasser la voix principale — l'effet
         // "plusieurs chanteurs proches" recherché doit s'entendre clairement,
         // surtout dans les sections denses (refrains).
-        const baseGain = isHarmonyLayer
+        const baseGain = isDoubleTrack
+          ? Math.min(0.95, (m.track.gain ?? 1.0) * 1.6)
+          : isHarmonyLayer
           ? Math.min(0.85, (m.track.gain ?? 1.0) * 1.4)
           : Math.min(1.0, m.track.gain ?? 1.0);
 

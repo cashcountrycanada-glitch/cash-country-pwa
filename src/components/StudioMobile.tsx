@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.431';
+const BUILD_VERSION = 'v7.6.433';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1109,6 +1109,11 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
           }));
         mixProject = { ...project, tracks: [...project.tracks, ...layerTracks] };
       }
+      // FIX "instrumental mixé deux fois à la masterisation" (v7.6.432) :
+      // snapshot du projet voix-only AVANT que l'instrumental ne soit ajouté
+      // juste en dessous — c'est cette version (lead+harmonies+double, sans
+      // instrumental) qu'on va rendre séparément pour la masterisation.
+      const vocalOnlyProject = mixProject;
       // Inclure l'instrumental dans le mixdown (auparavant seulement ajouté au mastering,
       // ce qui donnait un "Mix vocal" muet côté musique lors du Preview/Re-mixer).
       // mixProject() gère déjà l'offset de sync + le pré-délai via isInstTrack — on
@@ -1179,9 +1184,30 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       }
       // Petit délai pour laisser React render l'overlay avant le traitement
       await new Promise(r => setTimeout(r, 80));
+      // FIX "instrumental mixé deux fois à la masterisation" (v7.6.432) :
+      // vocalOnlyProject (capturé plus haut, AVANT l'ajout de l'instrumental)
+      // contient uniquement voix lead + harmonies + double. On le rend ICI,
+      // séparément, et on le persiste sous une clé dédiée `vocalmix_${project.id}`
+      // — c'est CETTE version, sans instrumental, que handleMasterize
+      // (MixerScreen.tsx) utilise pour fournir vocalBlob à MasteringEngine.
+      // Avant ce fix, handleMasterize réutilisait project.mixedDataUrl — qui,
+      // dès qu'un instrumental était chargé (donc quasi toujours), contenait
+      // DÉJÀ l'instrumental (ajouté juste au-dessus, pour le Preview/Écoute).
+      // MasteringEngine masterisait alors ce mélange comme si c'était la voix
+      // seule, PUIS le remixait avec l'instrumental une seconde fois
+      // (mixVocalWithInst) — l'instrumental se retrouvait deux fois dans le
+      // master final.
+      const vocalOnlyBlob = await studioService.mixProject(vocalOnlyProject, (label, pct) => {
+        setMixLabel(label); setMixProgress(pct * 0.5);
+      }, instOffsetMs);
+      (window as any).__vocalMixBlob = vocalOnlyBlob;
+      if (project) {
+        studioOfflineDB.saveAudio(`vocalmix_${project.id}`, vocalOnlyBlob, {
+          type: 'vocalmix', songId: project.songId, savedAt: Date.now()
+        }).catch(() => {}); // non bloquant
+      }
       const mixBlob = await studioService.mixProject(mixProject, (label, pct) => {
-        setMixLabel(label);
-        setMixProgress(pct);
+        setMixLabel(label); setMixProgress(50 + pct * 0.5);
       }, instOffsetMs);
       (window as any).__lastMixIncludedInst = includedInst;
       // Stocker le blob mix en mémoire et utiliser une URL objet
