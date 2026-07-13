@@ -1647,9 +1647,17 @@ export const studioService = {
 
         const src = offline.createBufferSource(); src.buffer = buffer;
         const gainNode = offline.createGain();
-        const baseGain = Math.min(1.0, m.track.gain ?? 1.0);
         const tIdx = (m.track as any).trackIndex ?? 0;
         const isHarmonyLayer = tIdx >= 1 && tIdx <= 5;
+        // FIX "harmonies pas assez puissantes" (v7.6.427) : les harmonies
+        // étaient si discrètes (gains 0.24-0.34 typiques) qu'on ne les
+        // remarquait presque pas. Boost de 40% sur les harmonies uniquement,
+        // plafonné pour ne jamais dépasser la voix principale — l'effet
+        // "plusieurs chanteurs proches" recherché doit s'entendre clairement,
+        // surtout dans les sections denses (refrains).
+        const baseGain = isHarmonyLayer
+          ? Math.min(0.85, (m.track.gain ?? 1.0) * 1.4)
+          : Math.min(1.0, m.track.gain ?? 1.0);
 
         if (isHarmonyLayer && sections.length > 0) {
           // Automation de sections, convertie en temps RELATIFS à ce segment

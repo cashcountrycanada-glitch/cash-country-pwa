@@ -273,6 +273,22 @@ async function mixVocalWithInst(
   instGainDb: number = -3,
   instOffsetMs: number = 0,
 ): Promise<AudioBuffer> {
+  // FIX "instrumental silencieux en début de piste / semble ne jouer qu'avec
+  // la voix" (v7.6.426) : un instOffsetMs anormalement grand (ex: plusieurs
+  // secondes, provenant d'un Auto Sync buggé ou d'une valeur restée collée à
+  // un ancien projet) décale le DÉPART de l'instrumental d'autant — ce qui
+  // crée un vrai silence numérique en début de piste (pas juste une baisse de
+  // volume) et peut donner l'impression que l'instrumental "attend" la voix.
+  // Une vraie correction de sync ne dépasse jamais quelques centaines de ms —
+  // au-delà de 2 secondes, c'est presque certainement une valeur aberrante,
+  // pas une intention réelle. On l'ignore dans ce cas et on prévient.
+  const rawOffsetMs = instOffsetMs;
+  if (Math.abs(instOffsetMs) > 2000) {
+    try { (window as any).__breadcrumb?.(`⚠️ instOffsetMs aberrant ignoré: ${rawOffsetMs}ms (vocal=${vocalBuf.duration.toFixed(1)}s, inst=${instBuf.duration.toFixed(1)}s) → traité comme 0`); } catch {}
+    instOffsetMs = 0;
+  } else {
+    try { (window as any).__breadcrumb?.(`🎚️ mixVocalWithInst : instOffsetMs=${instOffsetMs}ms, vocal=${vocalBuf.duration.toFixed(1)}s, inst=${instBuf.duration.toFixed(1)}s`); } catch {}
+  }
   const sr       = Math.max(vocalBuf.sampleRate, instBuf.sampleRate);
   const offsetSec = instOffsetMs / 1000;
   const duration = Math.max(vocalBuf.duration, instBuf.duration + Math.abs(offsetSec));
@@ -486,7 +502,18 @@ async function stereoWiden(buf: AudioBuffer, widthGain: number = 1.3): Promise<A
 // Étape 1 : Noise gate + saturation douce + EQ correctif
 // Étape 2 : Compression + EQ musical
 // Étape 3 : Stereo widening + gain makeup + limiteur transparent
-async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBuffer> {
+// FIX "qualité instrumentale dégradée" (v7.6.427) : cette chaîne était conçue
+// pour une VOIX seule (gate de bruit calibré sur le silence entre phrases
+// vocales, saturation pensée pour une voix, compression multibande avec des
+// réglages d'attaque/relâche pensés pour la dynamique vocale) — mais elle
+// était appliquée telle quelle sur le MIX COMPLET (voix + batterie + basse +
+// guitares), ce qui dégrade l'instrumental (gate qui ne devrait pas s'y
+// appliquer, saturation en trop, compression qui écrase le punch de la
+// batterie). Le paramètre isFullMix adoucit la chaîne pour ce cas précis :
+// pas de noise gate, moins de saturation, compression plus douce — tout en
+// gardant l'EQ, l'élargissement stéréo et le ciblage LUFS/True Peak qui,
+// eux, sont légitimes sur un mix complet.
+async function masterAudio(buf: AudioBuffer, s: MasterSettings, isFullMix: boolean = false): Promise<AudioBuffer> {
 
   // ── ÉTAPE 1 : Traitement canal par canal (noise gate + saturation) ──────────
   const sr  = buf.sampleRate;
@@ -499,8 +526,12 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const step1Buf = offline1.createBuffer(ch, len, sr);
   for (let c = 0; c < ch; c++) {
     let data = new Float32Array(buf.getChannelData(c));
-    data = await applyNoiseGate(data, -65, 150, sr);
-    const driveAmt = 0.12 + Math.abs(s.lowGain) * 0.01;
+    // Le gate de bruit (silence entre phrases) n'a pas sa place sur un mix
+    // complet — l'instrumental remplit déjà les silences vocaux.
+    if (!isFullMix) data = await applyNoiseGate(data, -65, 150, sr);
+    // Saturation réduite de moitié sur le mix complet — l'instrumental a déjà
+    // son propre caractère, pas besoin de la même coloration que sur la voix seule.
+    const driveAmt = (0.12 + Math.abs(s.lowGain) * 0.01) * (isFullMix ? 0.5 : 1);
     data = await applySaturation(data, driveAmt);
     step1Buf.getChannelData(c).set(data);
   }
@@ -541,10 +572,15 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   // approximation Linkwitz-Riley simple).
   const lowXover = 200, highXover = 3000;
 
+  // Facteur d'adoucissement : sur le mix complet, on garde plus de dynamique
+  // (surtout la batterie/basse) — un mix bien produit n'a pas besoin d'être
+  // compressé aussi fort qu'une voix seule pour sonner "collé".
+  const fullMixSoften = isFullMix ? 0.7 : 1.0;
+
   const lowLp1 = offline1.createBiquadFilter(); lowLp1.type = 'lowpass'; lowLp1.frequency.value = lowXover; lowLp1.Q.value = 0.707;
   const lowLp2 = offline1.createBiquadFilter(); lowLp2.type = 'lowpass'; lowLp2.frequency.value = lowXover; lowLp2.Q.value = 0.707;
   const lowComp = offline1.createDynamicsCompressor();
-  lowComp.threshold.value = s.threshold - 2; lowComp.ratio.value = Math.min(s.ratio * 0.7, 4);
+  lowComp.threshold.value = s.threshold - 2; lowComp.ratio.value = Math.min(s.ratio * 0.7 * fullMixSoften, 4);
   lowComp.attack.value = 0.030; lowComp.release.value = Math.max(s.release / 1000, 0.25); lowComp.knee.value = 6;
 
   const midHp1 = offline1.createBiquadFilter(); midHp1.type = 'highpass'; midHp1.frequency.value = lowXover; midHp1.Q.value = 0.707;
@@ -552,13 +588,13 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const midLp1 = offline1.createBiquadFilter(); midLp1.type = 'lowpass'; midLp1.frequency.value = highXover; midLp1.Q.value = 0.707;
   const midLp2 = offline1.createBiquadFilter(); midLp2.type = 'lowpass'; midLp2.frequency.value = highXover; midLp2.Q.value = 0.707;
   const midComp = offline1.createDynamicsCompressor();
-  midComp.threshold.value = s.threshold; midComp.ratio.value = s.ratio;
+  midComp.threshold.value = s.threshold; midComp.ratio.value = s.ratio * fullMixSoften;
   midComp.attack.value = s.attack / 1000; midComp.release.value = s.release / 1000; midComp.knee.value = 5;
 
   const highHp1 = offline1.createBiquadFilter(); highHp1.type = 'highpass'; highHp1.frequency.value = highXover; highHp1.Q.value = 0.707;
   const highHp2 = offline1.createBiquadFilter(); highHp2.type = 'highpass'; highHp2.frequency.value = highXover; highHp2.Q.value = 0.707;
   const highComp = offline1.createDynamicsCompressor();
-  highComp.threshold.value = s.threshold + 3; highComp.ratio.value = Math.min(s.ratio * 0.6, 3);
+  highComp.threshold.value = s.threshold + 3; highComp.ratio.value = Math.min(s.ratio * 0.6 * fullMixSoften, 3);
   highComp.attack.value = 0.004; highComp.release.value = Math.max(s.release / 1000 * 0.6, 0.08); highComp.knee.value = 8;
 
   const bandSum = offline1.createGain(); // point de sommation des 3 bandes
@@ -1040,7 +1076,7 @@ export default function MasteringEngine({
 
         setProgressLabel('Masterisation du mix complet...'); setProgress(80);
         await new Promise<void>(r => setTimeout(r, 150)); // pause GC avant la 2e passe lourde
-        const fullM = await masterAudio(fullRaw, settings);
+        const fullM = await masterAudio(fullRaw, settings, true);
         fullRaw = null; // FIX mémoire : relâché dès que possible, avant l'encodage
         setFullMastered(fullM);
         setOutputFullLufs(Math.round((await analyzeLoudness(fullM)) * 10) / 10);

@@ -315,12 +315,17 @@ export default function MixerScreen({
         const buffer = await ctx.decodeAudioData(ab);
         const tIdx = (track as any).trackIndex ?? 0;
         const delaySec = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) / 1000 : 0;
+        const isHarmonyTrack = !!(track as any).isGenerated;
+        // Même boost que le vrai mixage (v7.6.427) — cohérence preview/export
+        const gainVal = isHarmonyTrack
+          ? Math.min(0.85, ((track as any).gain ?? 1.0) * 1.4)
+          : Math.min(1.0, (track as any).gain ?? 1.0);
         pending.push({
           label, buffer,
-          gainVal: Math.min(1.0, (track as any).gain ?? 1.0),
+          gainVal,
           panVal: (track as any).pan ?? 0,
           delaySec, isInst: false, offsetSec: 0,
-          isHarmony: !!(track as any).isGenerated,
+          isHarmony: isHarmonyTrack,
         });
         dbg(`[Preview] ${label} → décodé (${(blob.size/1024).toFixed(0)}KB, ${buffer.duration.toFixed(1)}s)`);
       } catch (e: any) {
@@ -466,9 +471,13 @@ export default function MixerScreen({
           const buffer = await probeCtx.decodeAudioData(ab);
           const tIdx = (track as any).trackIndex ?? 0;
           const delaySec = tIdx > 0 ? (PRE_DELAYS[tIdx] ?? 30) / 1000 : 0;
+          const isHarmonyTrack = !!(track as any).isGenerated;
+          const gainVal = isHarmonyTrack
+            ? Math.min(0.85, ((track as any).gain ?? 1.0) * 1.4)
+            : Math.min(1.0, (track as any).gain ?? 1.0);
           items.push({
             label, buffer,
-            gainVal: Math.min(1.0, (track as any).gain ?? 1.0),
+            gainVal,
             panVal: (track as any).pan ?? 0,
             delaySec, isInst: false, offsetSec: 0,
             isHarmony: !!(track as any).isGenerated,
