@@ -502,8 +502,15 @@ function doubleTrack(mono,sr){
     return out;
   };
   const lightShift = (view, semi, sr) => rbPitchShift(view, semi, sr);
-  const sL = fitLength(processChunked(mono, 0.03, sr, undefined, lightShift));
-  const sR = fitLength(processChunked(mono, -0.03, sr, undefined, lightShift));
+  // FIX v6 "trop discret" (v7.6.431) : 3 cents (0.03 ST) restait très en
+  // dessous de la fourchette naturelle d'une vraie double prise humaine —
+  // un chanteur qui se re-chante rarement retombe pile sur la même hauteur
+  // à quelques cents près, l'écart réel tourne plutôt autour de 5-8 cents.
+  // On monte à 6 cents (0.06 ST), toujours loin des 10 cents qui posaient
+  // problème historiquement (voir FIX précédents), mais assez pour que la
+  // texture "deux voix" s'entende clairement au lieu de juste épaissir.
+  const sL = fitLength(processChunked(mono, 0.06, sr, undefined, lightShift));
+  const sR = fitLength(processChunked(mono, -0.06, sr, undefined, lightShift));
   // FIX v3 "toujours 3 voix / écho" : réduire un délai FIXE, aussi court
   // soit-il, ne suffit pas — un délai statique et parfaitement périodique se
   // lit toujours comme une réflexion numérique (comb filtering), pas comme
@@ -537,24 +544,31 @@ function doubleTrack(mono,sr){
   const maxDelay = Math.ceil(Math.max(baseDelayL + modDepthL, baseDelayR + modDepthR)) + 2;
   const outLen = len + maxDelay;
   const outL=new Float32Array(outLen),outR=new Float32Array(outLen);
-  for(let i=0;i<len;i++){outL[i]+=mono[i]*0.70;outR[i]+=mono[i]*0.70;}
+  // FIX v6 "trop discret" (v7.6.431) : la voix principale (dry, 0.70) était
+  // nettement plus forte que la double (wet, 0.55 × répartition 0.72/0.28 =
+  // 0.396 max par canal, soit environ -5dB sous le dry) — la double
+  // épaississait la voix sans vraiment s'entendre comme une seconde voix.
+  // On rapproche les deux : dry 0.70→0.62, wet 0.55→0.70 (× 0.80/0.20 de
+  // répartition, un peu plus large aussi) → présence quasi égale, comme
+  // deux vraies prises superposées plutôt qu'une voix + un soutien discret.
+  for(let i=0;i<len;i++){outL[i]+=mono[i]*0.62;outR[i]+=mono[i]*0.62;}
   for (let i = 0; i < len; i++) {
     const t = i / sr;
     const dL = baseDelayL + modDepthL * Math.sin(2 * Math.PI * modRateL * t);
     const dR = baseDelayR + modDepthR * Math.sin(2 * Math.PI * modRateR * t + 1.7);
-    const sVal = readInterp(sL, i) * 0.55;
-    const rVal = readInterp(sR, i) * 0.55;
+    const sVal = readInterp(sL, i) * 0.70;
+    const rVal = readInterp(sR, i) * 0.70;
     const idxL = i + dL, idxR = i + dR;
     const fL = Math.floor(idxL), fR = Math.floor(idxR);
     if (fL >= 0 && fL + 1 < outLen) {
       const frac = idxL - fL;
-      outL[fL]   += sVal * 0.72 * (1 - frac); outL[fL+1]   += sVal * 0.72 * frac;
-      outR[fL]   += sVal * 0.28 * (1 - frac); outR[fL+1]   += sVal * 0.28 * frac;
+      outL[fL]   += sVal * 0.80 * (1 - frac); outL[fL+1]   += sVal * 0.80 * frac;
+      outR[fL]   += sVal * 0.20 * (1 - frac); outR[fL+1]   += sVal * 0.20 * frac;
     }
     if (fR >= 0 && fR + 1 < outLen) {
       const frac = idxR - fR;
-      outL[fR]   += rVal * 0.28 * (1 - frac); outL[fR+1]   += rVal * 0.28 * frac;
-      outR[fR]   += rVal * 0.72 * (1 - frac); outR[fR+1]   += rVal * 0.72 * frac;
+      outL[fR]   += rVal * 0.20 * (1 - frac); outL[fR+1]   += rVal * 0.20 * frac;
+      outR[fR]   += rVal * 0.80 * (1 - frac); outR[fR+1]   += rVal * 0.80 * frac;
     }
   }
   let peak=0;

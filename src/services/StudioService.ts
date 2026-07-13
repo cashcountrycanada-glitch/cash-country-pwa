@@ -1550,9 +1550,12 @@ export const studioService = {
       startSec: number; bufferReadOffsetSec: number; isInstTrack: boolean;
     };
     const metas: TrackMeta[] = [];
-    // FIX délais trop longs (voir même fix dans MixerScreen.tsx Preview) :
-    // 5-15ms recommandé pour l'empilement d'harmonies, pas 35-51ms.
-    const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 9, 3: 12, 4: 14, 5: 7 };
+    // FIX "délai des harmonies appliqué deux fois" (v7.6.430) : voir même fix
+    // dans MixerScreen.tsx Preview — chaque harmonie a déjà son délai cuit
+    // dans son audio (harmony-worker.js, profile.timingMs), ce PRE_DELAYS
+    // ajoutait un second délai par-dessus. Repassé à 0 pour les harmonies,
+    // comme pour trackIndex 1 (double tracking) qui l'était déjà.
+    const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
 
     for (let i = 0; i < activeTracks.length; i++) {
       const track = activeTracks[i];
@@ -1870,7 +1873,14 @@ export const studioService = {
 
       // 1. Double tracking — unisson, épaisseur naturelle humaine
       // Cash et Elvis rechanaient systématiquement leurs propres voix
-      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.34, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
+      // FIX "trop discret" (v7.6.431) : gain 0.34 le laissait plus discret
+      // que les harmonies elles-mêmes après boost mixdown (0.34×1.4=0.48 vs
+      // jusqu'à 0.45 pour les harmonies — proche mais pas dominant), alors
+      // qu'un double doit se sentir au moins autant qu'une harmonie. Monté
+      // à 0.55 (0.55×1.4=0.77, sous le plafond 0.85) — combiné au rééquilibrage
+      // dry/wet dans doubleTrack() (harmony-worker.js), l'effet doit
+      // maintenant clairement s'entendre plutôt que juste épaissir.
+      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.55, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
 
       // 2. +2 ST — seconde majeure, signature Alan Jackson (remplace l'ancien +5 ST/quarte,
       // hors zone sûre ±3 ST)

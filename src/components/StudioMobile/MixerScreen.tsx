@@ -280,14 +280,19 @@ export default function MixerScreen({
     (window as any).__previewCtx = ctx;
     setIsPreviewing(true);
 
-    // FIX délais trop longs : la recherche sur l'empilement d'harmonies (pas
-    // un simple doublage à l'unisson) recommande 5-15ms entre les parties —
-    // au-delà de ~30ms le cerveau commence à percevoir un écho distinct
-    // plutôt qu'une fusion naturelle. Les anciennes valeurs (35-51ms)
-    // dépassaient ce seuil. trackIndex 1 (Double tracking) à 0 : son délai
-    // interne est déjà géré dans le fichier généré (doubleTrack()) — un
-    // délai supplémentaire ici recréait le bug "écho / 3 voix" déjà corrigé.
-    const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 9, 3: 12, 4: 14, 5: 7 };
+    // FIX "délai des harmonies appliqué deux fois" (v7.6.430) : chaque
+    // harmonie a DÉJÀ son propre délai calibré et différencié ("cuit" dans
+    // son fichier audio) au moment de la génération dans harmony-worker.js
+    // (profile.timingMs : 18/32/12/26 ms selon la piste — voir LAYER_PROFILES).
+    // Ce PRE_DELAYS ici en ajoutait un SECOND par-dessus (9/12/14/7 ms),
+    // sans que les deux mécanismes se "voient" — total réel jusqu'à 44ms sur
+    // la piste 3, au-delà du seuil d'écho perceptible (~30ms) documenté
+    // juste ici. Résultat : au lieu de fusionner comme des voix multiples
+    // proches, certaines harmonies se détachaient comme un écho distinct.
+    // trackIndex 1 (Double tracking) était déjà à 0 pour la même raison —
+    // les harmonies 2-5 le sont maintenant aussi, le timing différencié par
+    // piste vient uniquement de harmony-worker.js.
+    const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
 
     // ── ÉTAPE 1 : tout décoder D'ABORD, ne rien démarrer encore ────────────────
     // FIX désync/"chanson incomplète" : décoder un fichier de 3-4 min prend de
