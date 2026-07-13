@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.433';
+const BUILD_VERSION = 'v7.6.434';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1198,7 +1198,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       // (mixVocalWithInst) — l'instrumental se retrouvait deux fois dans le
       // master final.
       const vocalOnlyBlob = await studioService.mixProject(vocalOnlyProject, (label, pct) => {
-        setMixLabel(label); setMixProgress(pct * 0.5);
+        setMixLabel(label); setMixProgress(pct * 0.3);
       }, instOffsetMs);
       (window as any).__vocalMixBlob = vocalOnlyBlob;
       if (project) {
@@ -1206,8 +1206,35 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
           type: 'vocalmix', songId: project.songId, savedAt: Date.now()
         }).catch(() => {}); // non bloquant
       }
+
+      // FIX "on veut pouvoir comparer les deux techniques" (v7.6.434) : en plus
+      // du mix voix "Classique" ci-dessus, on rend AUSSI la variante "Bus
+      // partagé" (technique country traditionnel : lead+double+harmonies
+      // envoyés à niveaux différents vers UNE reverb plate partagée EQ'd,
+      // au lieu d'une reverb insert par piste). Les deux versions sont
+      // sauvegardées séparément — le choix se fait à l'écoute, par chanson,
+      // au moment de Masteriser (voir toggle dans MixerScreen.tsx).
+      setMixLabel('Bus partagé — mix des envois...'); setMixProgress(32);
+      try {
+        const sendBusBlob = await studioService.buildVocalSendBus(vocalOnlyProject, (label, pct) => {
+          setMixLabel(label); setMixProgress(30 + pct * 0.2);
+        }, instOffsetMs);
+        setMixLabel('Bus partagé — réverbération...'); setMixProgress(52);
+        await new Promise<void>(r => setTimeout(r, 100)); // pause GC avant le DSP reverb
+        const busBlob = await studioService.applySharedReverbBus(vocalOnlyBlob, sendBusBlob);
+        (window as any).__vocalMixBusBlob = busBlob;
+        if (project) {
+          studioOfflineDB.saveAudio(`vocalmix_bus_${project.id}`, busBlob, {
+            type: 'vocalmix_bus', songId: project.songId, savedAt: Date.now()
+          }).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[Mix] Bus partagé non généré:', e);
+        // Non bloquant : la version Classique reste disponible même si le bus échoue
+      }
+
       const mixBlob = await studioService.mixProject(mixProject, (label, pct) => {
-        setMixLabel(label); setMixProgress(50 + pct * 0.5);
+        setMixLabel(label); setMixProgress(60 + pct * 0.4);
       }, instOffsetMs);
       (window as any).__lastMixIncludedInst = includedInst;
       // Stocker le blob mix en mémoire et utiliser une URL objet

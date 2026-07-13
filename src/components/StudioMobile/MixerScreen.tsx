@@ -197,6 +197,17 @@ export default function MixerScreen({
   const [generatePct, setGeneratePct]         = useState(0);
   const [generatedDone, setGeneratedDone]     = useState<Set<number>>(new Set());
   const [mixWaveform, setMixWaveform]         = useState<number[]>([]);
+  // FIX "pouvoir comparer les deux techniques" (v7.6.434) : choix du style
+  // vocal pour la Masterisation, persisté par chanson (localStorage) — les
+  // deux versions (Classique / Bus partagé) sont déjà rendues lors du
+  // Mixage, ce toggle choisit juste laquelle nourrit MasteringEngine.
+  const [vocalStyle, setVocalStyle] = useState<'classic' | 'bus'>(() => {
+    try { return (localStorage.getItem(`vocalStyle_${project?.id}`) as 'classic' | 'bus') || 'classic'; }
+    catch { return 'classic'; }
+  });
+  useEffect(() => {
+    try { if (project?.id) localStorage.setItem(`vocalStyle_${project.id}`, vocalStyle); } catch {}
+  }, [vocalStyle, project?.id]);
   const [showStack, setShowStack]             = useState(false);
   const [showSections, setShowSections]       = useState(false);
   const [sections, setSections]               = useState<SectionMarker[]>(
@@ -988,13 +999,27 @@ export default function MixerScreen({
     // contenait déjà toute la musique. On lit maintenant __vocalMixBlob /
     // vocalmix_${project.id} — la version voix-only produite en parallèle.
     let masterBlob: Blob | null = null;
-    const memVocalBlob = (window as any).__vocalMixBlob as Blob | undefined;
-    if (memVocalBlob && memVocalBlob.size > 100) { masterBlob = memVocalBlob; crumb(`✅ Mix voix-only trouvé en mémoire (__vocalMixBlob, ${memVocalBlob.size}B)`); }
+    const wantBus = vocalStyle === 'bus';
+    const memVocalBlob = ((wantBus ? (window as any).__vocalMixBusBlob : (window as any).__vocalMixBlob)) as Blob | undefined;
+    if (memVocalBlob && memVocalBlob.size > 100) { masterBlob = memVocalBlob; crumb(`✅ Mix voix-only (${vocalStyle}) trouvé en mémoire (${memVocalBlob.size}B)`); }
     if (!masterBlob) {
       try {
-        const fromDb = await studioOfflineDB.getAudio(`vocalmix_${project.id}`).catch(() => null);
-        if (fromDb && fromDb.size > 100) { masterBlob = fromDb; crumb(`✅ Mix voix-only trouvé en IDB (vocalmix_${project.id}, ${fromDb.size}B)`); }
+        const key = wantBus ? `vocalmix_bus_${project.id}` : `vocalmix_${project.id}`;
+        const fromDb = await studioOfflineDB.getAudio(key).catch(() => null);
+        if (fromDb && fromDb.size > 100) { masterBlob = fromDb; crumb(`✅ Mix voix-only (${vocalStyle}) trouvé en IDB (${key}, ${fromDb.size}B)`); }
       } catch {}
+    }
+    // FIX repli : si "Bus partagé" a été choisi mais n'a jamais été rendu
+    // (ex. généré avant le fix v7.6.434, ou échec silencieux du DSP reverb),
+    // on retombe sur la version Classique plutôt que de bloquer l'export.
+    if (!masterBlob && wantBus) {
+      crumb(`⚠️ Bus partagé introuvable — repli sur Classique`);
+      const memClassic = (window as any).__vocalMixBlob as Blob | undefined;
+      if (memClassic && memClassic.size > 100) masterBlob = memClassic;
+      else {
+        const fromDb = await studioOfflineDB.getAudio(`vocalmix_${project.id}`).catch(() => null);
+        if (fromDb && fromDb.size > 100) masterBlob = fromDb;
+      }
     }
     if (!masterBlob) {
       crumb(`⛔ handleMasterize STOP — mix voix-only introuvable`);
@@ -1811,6 +1836,27 @@ export default function MixerScreen({
                   ) : (
                     <div className="h-12 bg-zinc-900 rounded-lg animate-pulse"/>
                   )}
+                </div>
+
+                {/* Style vocal — Classique vs Bus partagé (v7.6.434) */}
+                <div className="px-4 pb-2 pt-1">
+                  <div className="flex rounded-lg overflow-hidden border border-white/10">
+                    <button onClick={() => setVocalStyle('classic')}
+                      className={`flex-1 py-2 text-[11px] font-bold uppercase tracking-wide transition-all ${
+                        vocalStyle === 'classic' ? 'bg-purple-500/25 text-purple-300' : 'text-zinc-500 active:bg-white/5'}`}>
+                      Classique
+                    </button>
+                    <button onClick={() => setVocalStyle('bus')}
+                      className={`flex-1 py-2 text-[11px] font-bold uppercase tracking-wide transition-all ${
+                        vocalStyle === 'bus' ? 'bg-purple-500/25 text-purple-300' : 'text-zinc-500 active:bg-white/5'}`}>
+                      Bus partagé
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 mt-1 px-0.5">
+                    {vocalStyle === 'classic'
+                      ? 'Réverbération par piste — chaque voix traitée individuellement.'
+                      : 'Reverb plate partagée (lead+double+harmonies) — son "country traditionnel", plus cohésif.'}
+                  </p>
                 </div>
 
                 {/* Actions */}

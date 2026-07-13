@@ -735,6 +735,128 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════
+// BUS DE RÉVERBÉRATION PARTAGÉ (v7.6.434) — technique "country traditionnel"
+// ═══════════════════════════════════════════════════════════════════════
+// Portage direct du moteur de reverb Schroeder/Moorer déjà éprouvé dans
+// fx-worker.js (utilisé là-bas en INSERT, piste par piste). Ici on l'utilise
+// en BUS PARTAGÉ : un seul passage de reverb, alimenté par un mix "send"
+// (lead + double + harmonies, pondérés différemment), plutôt qu'une reverb
+// indépendante par piste — c'est la technique documentée par l'utilisateur
+// (bus unique = cohésion/glue, chaque voix dans le même espace acoustique).
+// Fonctions pures, sans API Worker — utilisables directement ici.
+function _busMakeDelay(size: number) { return { buf: new Float32Array(size), ptr: 0, size }; }
+function _busDelayRead(d: any) { return d.buf[d.ptr]; }
+function _busDelayWrite(d: any, v: number) { d.buf[d.ptr] = v; d.ptr = (d.ptr + 1) % d.size; }
+function _busComb(d: any, input: number, feedback: number, damp: number) {
+  const delayed = _busDelayRead(d);
+  const filtered = delayed * (1 - damp) + (d._last || 0) * damp;
+  d._last = filtered;
+  _busDelayWrite(d, input + filtered * feedback);
+  return filtered;
+}
+function _busAllpass(d: any, input: number, coeff: number) {
+  const delayed = _busDelayRead(d);
+  const out = -input * coeff + delayed;
+  _busDelayWrite(d, input + delayed * coeff);
+  return out;
+}
+function _busHPF(data: Float32Array, fcHz: number, sr: number): Float32Array {
+  if (fcHz <= 0) return data;
+  const wc = 2 * Math.PI * fcHz / sr, k = Math.tan(wc / 2);
+  const norm = 1 / (1 + Math.SQRT2 * k + k * k);
+  const b0 = norm, b1 = -2 * norm, b2 = norm;
+  const a1 = 2 * (k * k - 1) * norm, a2 = (1 - Math.SQRT2 * k + k * k) * norm;
+  const out = new Float32Array(data.length);
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < data.length; i++) {
+    const x0 = data[i], y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    out[i] = y0; x2 = x1; x1 = x0; y2 = y1; y1 = y0;
+  }
+  return out;
+}
+// Coupe-haut Butterworth 2nd ordre — pour le grain "vintage" du retour de
+// reverb (6-8kHz), miroir de _busHPF (formules RBJ standard).
+function _busLPF(data: Float32Array, fcHz: number, sr: number): Float32Array {
+  if (fcHz <= 0 || fcHz >= sr / 2) return data;
+  const wc = 2 * Math.PI * fcHz / sr, k = Math.tan(wc / 2);
+  const norm = 1 / (1 + Math.SQRT2 * k + k * k);
+  const b0 = k * k * norm, b1 = 2 * b0, b2 = b0;
+  const a1 = 2 * (k * k - 1) * norm, a2 = (1 - Math.SQRT2 * k + k * k) * norm;
+  const out = new Float32Array(data.length);
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < data.length; i++) {
+    const x0 = data[i], y0 = b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+    out[i] = y0; x2 = x1; x1 = x0; y2 = y1; y1 = y0;
+  }
+  return out;
+}
+const _BUS_COMB_MS = { L: [29.7, 37.1, 41.1, 43.7], R: [30.1, 37.5, 41.5, 44.1] };
+const _BUS_AP_MS    = { L: [5.0, 1.7], R: [5.1, 1.8] };
+const _BUS_PARAMS    = { feedback: 0.82, damp: 0.14, preDelayMs: 4, erDecay: 0.60 }; // preset "plate"
+function _busReverbChannel(input: Float32Array, combMs: number[], apMs: number[], sr: number) {
+  const len = input.length;
+  const { feedback, damp, preDelayMs } = _BUS_PARAMS;
+  const preD = Math.max(1, Math.round(preDelayMs * sr / 1000));
+  const preBuf = new Float32Array(preD); let prePtr = 0;
+  const combs = combMs.map(ms => _busMakeDelay(Math.round(ms * sr / 1000)));
+  const allpasses = apMs.map(ms => _busMakeDelay(Math.round(ms * sr / 1000)));
+  const out = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const preSig = preBuf[prePtr]; preBuf[prePtr] = input[i]; prePtr = (prePtr + 1) % preD;
+    let combSum = 0;
+    for (const c of combs) combSum += _busComb(c, preSig, feedback, damp);
+    combSum /= combs.length;
+    let sig = combSum;
+    for (const ap of allpasses) sig = _busAllpass(ap, sig, 0.5);
+    out[i] = sig;
+  }
+  return out;
+}
+function _busEarlyReflections(input: Float32Array, sr: number, erDecay: number) {
+  const tapsMs = [5.0, 11.0, 17.3, 23.0, 31.7, 40.2, 55.0];
+  const out = new Float32Array(input.length);
+  for (let t = 0; t < tapsMs.length; t++) {
+    const d = Math.round(tapsMs[t] * sr / 1000);
+    const g = erDecay * Math.pow(0.75, t);
+    for (let i = d; i < input.length; i++) out[i] += input[i - d] * g;
+  }
+  return out;
+}
+// Reverb "plate" 100% wet (mix=1.0) — c'est cette sortie qu'on utilise comme
+// retour du bus partagé, mélangé nous-mêmes à l'amplitude voulue plus haut
+// dans la chaîne (pas de dosage dry/wet ici, juste le rendu de la salle).
+function _busPlateReverbWet(dL: Float32Array, dR: Float32Array, sr: number): { L: Float32Array; R: Float32Array } {
+  const len = dL.length;
+  const hpf = (sig: Float32Array) => _busHPF(sig, 120, sr);
+  const inL = hpf(dL), inR = hpf(dR);
+  const feedL = new Float32Array(len), feedR = new Float32Array(len);
+  for (let i = 0; i < len; i++) { feedL[i] = inL[i] * 0.85 + inR[i] * 0.15; feedR[i] = inR[i] * 0.85 + inL[i] * 0.15; }
+  const erL = _busEarlyReflections(feedL, sr, _BUS_PARAMS.erDecay);
+  const erR = _busEarlyReflections(feedR, sr, _BUS_PARAMS.erDecay);
+  const wetL = _busReverbChannel(feedL, _BUS_COMB_MS.L, _BUS_AP_MS.L, sr);
+  const wetR = _busReverbChannel(feedR, _BUS_COMB_MS.R, _BUS_AP_MS.R, sr);
+  let peakW = 0; for (let i = 0; i < len; i++) peakW = Math.max(peakW, Math.abs(wetL[i]), Math.abs(wetR[i]));
+  let peakER = 0; for (let i = 0; i < len; i++) peakER = Math.max(peakER, Math.abs(erL[i]), Math.abs(erR[i]));
+  const nW = peakW > 0.001 ? 1.0 / peakW : 0;
+  const nER = peakER > 0.001 ? 0.6 / peakER : 0;
+  const outL = new Float32Array(len), outR = new Float32Array(len);
+  const erAmt = 0.30;
+  for (let i = 0; i < len; i++) {
+    outL[i] = wetL[i] * nW * (1 - erAmt) + erL[i] * nER * erAmt;
+    outR[i] = wetR[i] * nW * (1 - erAmt) + erR[i] * nER * erAmt;
+  }
+  // FIX EQ "vintage" (technique documentée) : coupe-bas 350Hz (évite la boue,
+  // le bus reçoit déjà des voix qui ont leurs propres basses) + coupe-haut
+  // 7000Hz (simule la bande passante limitée des chambres d'écho d'époque —
+  // c'est ce filtrage qui donne le caractère "chaud" plutôt que "brillant").
+  return {
+    L: _busLPF(_busHPF(outL, 350, sr), 7000, sr),
+    R: _busLPF(_busHPF(outR, 350, sr), 7000, sr),
+  };
+}
+
+
 export const studioService = {
   // Wrapper public pour audioBufferToBlob (fonction privée du module) — permet
   // à d'autres écrans (ex: export debug du Preview Mix) d'encoder un
@@ -1723,6 +1845,66 @@ export const studioService = {
 
     onProgress?.('Terminé ✓', 100);
     return encBlob;
+  },
+
+  // ── Bus de réverbération partagé — technique "country traditionnel" ───────
+  // Étape 1 : rendre un mix "send" séparé — mêmes pistes, mêmes pan/timing
+  // que le mix voix normal, mais avec le gain de CHAQUE piste remplacé par
+  // son niveau d'envoi vers le bus (lead modéré, double plus bas, harmonies
+  // le plus bas — hiérarchie Lead > Double > Harmonies documentée). Réutilise
+  // mixProject() tel quel : aucun risque de régression sur le rendu normal.
+  async buildVocalSendBus(
+    vocalOnlyProject: TrackProject,
+    onProgress?: (label: string, pct: number) => void,
+    instOffsetMs: number = 0,
+    sends: { lead: number; double: number; harmony: number } = { lead: 0.55, double: 0.40, harmony: 0.22 }
+  ): Promise<Blob> {
+    const sendTracks = vocalOnlyProject.tracks.map(t => {
+      const tIdx = (t as any).trackIndex ?? 0;
+      const sendGain = tIdx === 0 ? sends.lead : tIdx === 1 ? sends.double : (tIdx >= 2 && tIdx <= 5) ? sends.harmony : 0;
+      return { ...t, gain: sendGain };
+    });
+    const sendProject: TrackProject = { ...vocalOnlyProject, tracks: sendTracks };
+    return this.mixProject(sendProject, onProgress, instOffsetMs);
+  },
+
+  // Étape 2 : passer le bus "send" dans UNE reverb partagée (preset plate,
+  // EQ'd 350Hz-7000Hz pour le grain vintage), puis mélanger le retour avec
+  // le mix voix sec (dryBlob) inchangé. C'est ce mélange qui donne l'effet
+  // "toutes les voix dans le même espace" au lieu d'une reverb par piste.
+  async applySharedReverbBus(dryBlob: Blob, sendBusBlob: Blob, wetAmount: number = 0.22): Promise<Blob> {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    let dryBuf: AudioBuffer, sendBuf: AudioBuffer;
+    try {
+      dryBuf  = await ctx.decodeAudioData(await dryBlob.arrayBuffer());
+      sendBuf = await ctx.decodeAudioData(await sendBusBlob.arrayBuffer());
+    } finally { await ctx.close(); }
+
+    const sr = dryBuf.sampleRate;
+    const len = dryBuf.length;
+    const dL = dryBuf.getChannelData(0), dR = dryBuf.numberOfChannels > 1 ? dryBuf.getChannelData(1) : dL;
+    const sL0 = sendBuf.getChannelData(0), sR0 = sendBuf.numberOfChannels > 1 ? sendBuf.getChannelData(1) : sL0;
+    // Le bus send peut être légèrement plus court/long (arrondis de rendu) —
+    // on aligne sur la longueur du mix sec, qui fait référence.
+    const sL = new Float32Array(len), sR = new Float32Array(len);
+    const n = Math.min(len, sL0.length);
+    sL.set(sL0.subarray(0, n)); sR.set(sR0.subarray(0, n));
+
+    const wet = _busPlateReverbWet(sL, sR, sr);
+
+    const outL = new Float32Array(len), outR = new Float32Array(len);
+    for (let i = 0; i < len; i++) {
+      outL[i] = dL[i] + wet.L[i] * wetAmount;
+      outR[i] = dR[i] + wet.R[i] * wetAmount;
+    }
+    let peak = 0;
+    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(outL[i]), Math.abs(outR[i]));
+    if (peak > 0.97) { const g = 0.97 / peak; for (let i = 0; i < len; i++) { outL[i] *= g; outR[i] *= g; } }
+
+    const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const outBuf = outCtx.createBuffer(2, len, sr);
+    outBuf.getChannelData(0).set(outL); outBuf.getChannelData(1).set(outR);
+    try { return await audioBufferToBlob(outBuf); } finally { await outCtx.close(); }
   },
   async mixComp(takes: Take[], gain = 1.0): Promise<Blob> {
     const allRegions = takes.flatMap(take => take.regions.map(r => ({ ...r, recording: take.recording }))).sort((a, b) => a.startSec - b.startSec);
