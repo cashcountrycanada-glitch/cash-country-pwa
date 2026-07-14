@@ -1104,12 +1104,11 @@ export default function MasteringEngine({
           setProgressLabel(`Encodage voix… (${remaining}s)`);
         }
       });
-      // FIX "pas de slapback delay" (v7.6.436) : le slapback s'applique
-      // AVANT la reverb courte (ordre Tunee : slapback sur le lead, PUIS
-      // reverb courte qui asseoit surtout les harmonies) — jamais l'inverse,
-      // sinon la reverb re-traiterait aussi l'écho du slapback.
+      // FIX "pas de slapback delay" (v7.6.436) / "trop présent" (v7.6.439) :
+      // le slapback s'applique AVANT la reverb courte, réglages resserrés
+      // (70ms, mix 13%) suite au retour Tunee sur le premier résultat.
       if (leadOnlyBlob) {
-        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 90, 0.28);
+        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 70, 0.13);
       }
       // FIX "reverb trop prononcée" (v7.6.435) : même principe que pour le
       // Mode B — la reverb du Bus partagé s'applique APRÈS masterAudio()
@@ -1117,6 +1116,12 @@ export default function MasteringEngine({
       // seule" aussi.
       if (sendBusBlob) {
         vBlob = await studioService.applySharedReverbBus(vBlob, sendBusBlob, 0.12);
+      }
+      // FIX "voix trop compressée/forte" (v7.6.439) : EQ + glue doux, même
+      // traitement que Mode B, pour l'export "voix seule" aussi.
+      if (sendBusBlob || leadOnlyBlob) {
+        vBlob = await studioService.applyPeakingEQ(vBlob, 2500, -0.75, 1.3);
+        vBlob = await studioService.applyGentleCompressor(vBlob, 2.5, 15, 60, -18);
       }
       vocalUrlRef.current = URL.createObjectURL(vBlob);
       try { (window as any).__breadcrumb?.(`💿 Voix masterisée encodée : ${vBlob.size}B, type=${vBlob.type}`); } catch {}
@@ -1140,22 +1145,39 @@ export default function MasteringEngine({
         // changé, et les harmonies/double devenaient inaudibles, noyés sous
         // la reverb désormais bien plus dense que le reste du groupe voix.
         let vocalForMix: AudioBuffer = vocalRaw!;
-        // FIX "pas de slapback delay" (v7.6.436) : slapback d'abord (lead
-        // uniquement), PUIS reverb courte (surtout harmonies) — même ordre
-        // que Mode A ci-dessus, jamais l'inverse.
+        // FIX "slapback trop présent / voix trop forte" (v7.6.439) — 2e passe
+        // Tunee après écoute du premier résultat : tout resserré.
+        // - Slapback : mix 28%→13%, time 90ms→70ms (subtil, "on l'entend sans y penser")
+        // - EQ voix : léger creux 2.5kHz (-0.75dB) pour désengorger médiums-aigus
+        // - Compression voix : douce (2.5:1, attack 15ms, release 60ms) — glue transparent
+        // - Balance : voix rendue à la place de l'instrumental plutôt que par-dessus
+        //   (même levier que "instrumental +2dB" : les deux se traduisent par le
+        //   même ratio dans mixVocalWithInst, qui normalise la voix à peak fixe —
+        //   TOUT ajustement voix/inst passe forcément par instGainDb ci-dessous)
         if (leadOnlyBlob) {
-          setProgressLabel('Bus partagé — slapback delay...'); setProgress(63);
+          setProgressLabel('Bus partagé — slapback delay...'); setProgress(62);
           await new Promise<void>(r => setTimeout(r, 100));
           const vocalRawBlobForSlap = await audioBufferToBlob(vocalForMix);
-          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 90, 0.28);
+          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 70, 0.13);
           vocalForMix = await decodeBlob(vocalRawWithSlapBlob);
         }
         if (sendBusBlob) {
-          setProgressLabel('Bus partagé — réverbération courte...'); setProgress(66);
+          setProgressLabel('Bus partagé — réverbération courte...'); setProgress(64);
           await new Promise<void>(r => setTimeout(r, 100));
           const vocalRawBlob = await audioBufferToBlob(vocalForMix);
           const vocalRawWithReverbBlob = await studioService.applySharedReverbBus(vocalRawBlob, sendBusBlob, 0.12);
           vocalForMix = await decodeBlob(vocalRawWithReverbBlob);
+        }
+        // FIX (v7.6.439) : EQ + compression douce, uniquement en style Bus
+        // partagé (sendBusBlob/leadOnlyBlob présents) — le style Classique
+        // n'est pas touché.
+        if (sendBusBlob || leadOnlyBlob) {
+          setProgressLabel('Bus partagé — EQ + glue...'); setProgress(66);
+          await new Promise<void>(r => setTimeout(r, 100));
+          let vBlobTone = await audioBufferToBlob(vocalForMix);
+          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 2500, -0.75, 1.3);
+          vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 2.5, 15, 60, -18);
+          vocalForMix = await decodeBlob(vBlobTone);
         }
 
         setProgressLabel('Mixage vocal + instrumental...'); setProgress(70);
@@ -1164,7 +1186,11 @@ export default function MasteringEngine({
         // (voir commentaire plus haut). mixVocalWithInst normalise chaque
         // signal indépendamment à -1dBFS avant mixage, donc utiliser la voix
         // brute ici ne change rien au niveau, seulement à la qualité.
-        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, instGainDb, instOffsetMs);
+        // FIX (v7.6.439) : +5dB sur instGainDb en style Bus partagé — combine
+        // "voix -3/4dB" + "instrumental +2dB" demandés par Tunee (un seul
+        // levier existe dans mixVocalWithInst : le ratio inst/voix).
+        const effectiveInstGainDb = (sendBusBlob || leadOnlyBlob) ? instGainDb + 5 : instGainDb;
+        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, effectiveInstGainDb, instOffsetMs);
         instRaw = null; // FIX mémoire : relâché dès que possible
         vocalRaw = null; // FIX mémoire : plus besoin après le mixage, relâché ici
 
@@ -1175,7 +1201,18 @@ export default function MasteringEngine({
         // limiteur True Peak de sécurité — pas d'EQ/compression/de-esser/
         // widening qui recolorerait l'instrumental Tunee déjà masterisé (voir
         // commentaire détaillé au-dessus de la fonction).
-        const fullM = await finalizeFullMix(fullRaw, settings);
+        let fullM = await finalizeFullMix(fullRaw, settings);
+        // FIX "recoller voix + instru dans le même espace" (v7.6.439) : très
+        // légère reverb room commune (10%) sur le mix COMPLET (voix+instru),
+        // demandée par Tunee — auto-send (le mix lui-même alimente la reverb),
+        // pas de bus séparé nécessaire pour un glue aussi discret.
+        if (sendBusBlob || leadOnlyBlob) {
+          setProgressLabel('Bus partagé — glue final...'); setProgress(82);
+          await new Promise<void>(r => setTimeout(r, 100));
+          const fullMBlobForGlue = await audioBufferToBlob(fullM);
+          const fullMWithGlueBlob = await studioService.applySharedReverbBus(fullMBlobForGlue, fullMBlobForGlue, 0.10);
+          fullM = await decodeBlob(fullMWithGlueBlob);
+        }
         fullRaw = null; // FIX mémoire : relâché dès que possible, avant l'encodage
         setFullMastered(fullM);
         setOutputFullLufs(Math.round((await analyzeLoudness(fullM)) * 10) / 10);

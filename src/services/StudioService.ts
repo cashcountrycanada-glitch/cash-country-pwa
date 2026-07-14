@@ -1916,6 +1916,53 @@ export const studioService = {
     try { return await audioBufferToBlob(outBuf); } finally { await outCtx.close(); }
   },
 
+  // ── Ajustements "moins agressif" — 2e passe Tunee (v7.6.439) ───────────────
+  // Léger EQ en cloche (peaking) — coupe 2-3kHz sur la voix pour désengorger
+  // les médiums-aigus, sans toucher l'instrumental. Formules RBJ standard.
+  async applyPeakingEQ(blob: Blob, freqHz: number, gainDb: number, Q: number = 1.2): Promise<Blob> {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    let buf: AudioBuffer;
+    try { buf = await ctx.decodeAudioData(await blob.arrayBuffer()); } finally { await ctx.close(); }
+    const sr = buf.sampleRate, len = buf.length;
+    const A = Math.pow(10, gainDb / 40);
+    const w0 = 2 * Math.PI * freqHz / sr, alpha = Math.sin(w0) / (2 * Q);
+    const cosw0 = Math.cos(w0);
+    const b0 = 1 + alpha * A, b1 = -2 * cosw0, b2 = 1 - alpha * A;
+    const a0 = 1 + alpha / A, a1 = -2 * cosw0, a2 = 1 - alpha / A;
+    const applyBiquad = (data: Float32Array) => {
+      const out = new Float32Array(data.length);
+      let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+      for (let i = 0; i < data.length; i++) {
+        const x0 = data[i];
+        const y0 = (b0 / a0) * x0 + (b1 / a0) * x1 + (b2 / a0) * x2 - (a1 / a0) * y1 - (a2 / a0) * y2;
+        out[i] = y0; x2 = x1; x1 = x0; y2 = y1; y1 = y0;
+      }
+      return out;
+    };
+    const outBuf0 = new (window.AudioContext || (window as any).webkitAudioContext)().createBuffer(2, len, sr);
+    outBuf0.getChannelData(0).set(applyBiquad(buf.getChannelData(0)));
+    outBuf0.getChannelData(1).set(applyBiquad(buf.numberOfChannels > 1 ? buf.getChannelData(1) : buf.getChannelData(0)));
+    return audioBufferToBlob(outBuf0);
+  },
+
+  // Compresseur "glue" transparent — DynamicsCompressorNode natif (bien plus
+  // fiable qu'un compresseur JS écrit à la main pour un résultat propre à
+  // ratio faible). Utilisé pour la voix uniquement dans le style Bus partagé,
+  // réglages doux : ratio 2.5:1, attack 15ms, release 60ms (specs Tunee).
+  async applyGentleCompressor(blob: Blob, ratio: number = 2.5, attackMs: number = 15, releaseMs: number = 60, thresholdDb: number = -18): Promise<Blob> {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    let buf: AudioBuffer;
+    try { buf = await ctx.decodeAudioData(await blob.arrayBuffer()); } finally { await ctx.close(); }
+    const offline = new OfflineAudioContext(2, buf.length, buf.sampleRate);
+    const src = offline.createBufferSource(); src.buffer = buf;
+    const comp = offline.createDynamicsCompressor();
+    comp.threshold.value = thresholdDb; comp.ratio.value = ratio;
+    comp.attack.value = attackMs / 1000; comp.release.value = releaseMs / 1000; comp.knee.value = 8;
+    src.connect(comp); comp.connect(offline.destination); src.start(0);
+    const rendered = await offline.startRendering();
+    return audioBufferToBlob(rendered);
+  },
+
   // ── Slapback delay sur le lead — "la clé du son country" (Tunee) ──────────
   // Isole la piste lead (trackIndex 0) seule, à son gain normal — même
   // pan/timing que le mix normal, réutilise mixProject() sans risque.
