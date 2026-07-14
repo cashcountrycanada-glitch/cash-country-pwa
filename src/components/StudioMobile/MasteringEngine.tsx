@@ -58,6 +58,10 @@ export interface MasteringProps {
   // lieu des phrases vocales — ça écrase les harmonies/double et gonfle le
   // 250-500Hz au détriment de l'instrumental une fois tout remixé.
   sendBusBlob?: Blob | null;
+  // FIX "pas de slapback delay" (v7.6.436) : lead isolé (trackIndex 0 seul,
+  // sans double/harmonies) — nécessaire pour taper le slapback delay
+  // uniquement sur le lead, sans écho parasite sur le reste du groupe voix.
+  leadOnlyBlob?: Blob | null;
   // L'instrumental à mixer pour l'export publication (null si non disponible)
   instBlob:     Blob | null;
   // Décalage Auto Sync détecté dans le mixer (ms) — appliqué entre la voix
@@ -977,7 +981,7 @@ function db(v: number) { return v >= 0 ? `+${v.toFixed(1)} dB` : `${v.toFixed(1)
 // ── Composant principal ───────────────────────────────────────────────────────
 
 export default function MasteringEngine({
-  vocalBlob, sendBusBlob = null, instBlob, instOffsetMs = 0, songTitle, songId, onBack, onStemReady, isOnline,
+  vocalBlob, sendBusBlob = null, leadOnlyBlob = null, instBlob, instOffsetMs = 0, songTitle, songId, onBack, onStemReady, isOnline,
 }: MasteringProps) {
   // FIX DIAGNOSTIC (v7.6.415) : trace synchrone à l'instant précis où React
   // commence à exécuter le rendu de ce composant — avant tout hook, avant tout
@@ -1100,6 +1104,13 @@ export default function MasteringEngine({
           setProgressLabel(`Encodage voix… (${remaining}s)`);
         }
       });
+      // FIX "pas de slapback delay" (v7.6.436) : le slapback s'applique
+      // AVANT la reverb courte (ordre Tunee : slapback sur le lead, PUIS
+      // reverb courte qui asseoit surtout les harmonies) — jamais l'inverse,
+      // sinon la reverb re-traiterait aussi l'écho du slapback.
+      if (leadOnlyBlob) {
+        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 90, 0.28);
+      }
       // FIX "reverb trop prononcée" (v7.6.435) : même principe que pour le
       // Mode B — la reverb du Bus partagé s'applique APRÈS masterAudio()
       // (donc sur vocalM déjà traitée), jamais avant, pour l'export "voix
@@ -1129,10 +1140,20 @@ export default function MasteringEngine({
         // changé, et les harmonies/double devenaient inaudibles, noyés sous
         // la reverb désormais bien plus dense que le reste du groupe voix.
         let vocalForMix: AudioBuffer = vocalRaw!;
-        if (sendBusBlob) {
-          setProgressLabel('Bus partagé — réverbération...'); setProgress(65);
+        // FIX "pas de slapback delay" (v7.6.436) : slapback d'abord (lead
+        // uniquement), PUIS reverb courte (surtout harmonies) — même ordre
+        // que Mode A ci-dessus, jamais l'inverse.
+        if (leadOnlyBlob) {
+          setProgressLabel('Bus partagé — slapback delay...'); setProgress(63);
           await new Promise<void>(r => setTimeout(r, 100));
-          const vocalRawBlob = await audioBufferToBlob(vocalRaw!);
+          const vocalRawBlobForSlap = await audioBufferToBlob(vocalForMix);
+          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 90, 0.28);
+          vocalForMix = await decodeBlob(vocalRawWithSlapBlob);
+        }
+        if (sendBusBlob) {
+          setProgressLabel('Bus partagé — réverbération courte...'); setProgress(66);
+          await new Promise<void>(r => setTimeout(r, 100));
+          const vocalRawBlob = await audioBufferToBlob(vocalForMix);
           const vocalRawWithReverbBlob = await studioService.applySharedReverbBus(vocalRawBlob, sendBusBlob, 0.12);
           vocalForMix = await decodeBlob(vocalRawWithReverbBlob);
         }

@@ -793,7 +793,11 @@ function _busLPF(data: Float32Array, fcHz: number, sr: number): Float32Array {
 }
 const _BUS_COMB_MS = { L: [29.7, 37.1, 41.1, 43.7], R: [30.1, 37.5, 41.5, 44.1] };
 const _BUS_AP_MS    = { L: [5.0, 1.7], R: [5.1, 1.8] };
-const _BUS_PARAMS    = { feedback: 0.82, damp: 0.14, preDelayMs: 4, erDecay: 0.60 }; // preset "plate"
+// FIX "reverb trop longue/humide → sonne folk pas country" (v7.6.436) :
+// preset "plate" (RT60 ~1.2s) remplacé par preset "room" serré (RT60 ~800ms,
+// damping plus fort = décroissance plus rapide en haut du spectre) — la
+// reverb ne doit plus qu'assoir légèrement les harmonies, pas créer d'espace.
+const _BUS_PARAMS    = { feedback: 0.74, damp: 0.30, preDelayMs: 3, erDecay: 0.40 }; // preset "room" court
 function _busReverbChannel(input: Float32Array, combMs: number[], apMs: number[], sr: number) {
   const len = input.length;
   const { feedback, damp, preDelayMs } = _BUS_PARAMS;
@@ -1853,11 +1857,16 @@ export const studioService = {
   // son niveau d'envoi vers le bus (lead modéré, double plus bas, harmonies
   // le plus bas — hiérarchie Lead > Double > Harmonies documentée). Réutilise
   // mixProject() tel quel : aucun risque de régression sur le rendu normal.
+  // FIX "reverb trop longue/humide, pas de slapback" (v7.6.436) : d'après
+  // l'analyse Tunee, le lead ne doit PLUS être envoyé à la reverb — il reçoit
+  // un slapback delay séparé (voir buildLeadOnlyMix + applySlapbackDelay
+  // plus bas). Seuls double et harmonies alimentent encore ce bus, avec la
+  // reverb courte "room" (voir _BUS_PARAMS).
   async buildVocalSendBus(
     vocalOnlyProject: TrackProject,
     onProgress?: (label: string, pct: number) => void,
     instOffsetMs: number = 0,
-    sends: { lead: number; double: number; harmony: number } = { lead: 0.55, double: 0.40, harmony: 0.22 }
+    sends: { lead: number; double: number; harmony: number } = { lead: 0, double: 0.15, harmony: 0.35 }
   ): Promise<Blob> {
     const sendTracks = vocalOnlyProject.tracks.map(t => {
       const tIdx = (t as any).trackIndex ?? 0;
@@ -1896,6 +1905,68 @@ export const studioService = {
     for (let i = 0; i < len; i++) {
       outL[i] = dL[i] + wet.L[i] * wetAmount;
       outR[i] = dR[i] + wet.R[i] * wetAmount;
+    }
+    let peak = 0;
+    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(outL[i]), Math.abs(outR[i]));
+    if (peak > 0.97) { const g = 0.97 / peak; for (let i = 0; i < len; i++) { outL[i] *= g; outR[i] *= g; } }
+
+    const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const outBuf = outCtx.createBuffer(2, len, sr);
+    outBuf.getChannelData(0).set(outL); outBuf.getChannelData(1).set(outR);
+    try { return await audioBufferToBlob(outBuf); } finally { await outCtx.close(); }
+  },
+
+  // ── Slapback delay sur le lead — "la clé du son country" (Tunee) ──────────
+  // Isole la piste lead (trackIndex 0) seule, à son gain normal — même
+  // pan/timing que le mix normal, réutilise mixProject() sans risque.
+  async buildLeadOnlyMix(
+    vocalOnlyProject: TrackProject,
+    onProgress?: (label: string, pct: number) => void,
+    instOffsetMs: number = 0
+  ): Promise<Blob> {
+    const leadOnlyTracks = vocalOnlyProject.tracks.map(t => {
+      const tIdx = (t as any).trackIndex ?? 0;
+      return { ...t, gain: tIdx === 0 ? (t.gain ?? 1.0) : 0 };
+    });
+    const leadOnlyProject: TrackProject = { ...vocalOnlyProject, tracks: leadOnlyTracks };
+    return this.mixProject(leadOnlyProject, onProgress, instOffsetMs);
+  },
+
+  // Slapback classique : UNE seule répétition (pas de feedback/boucle), délai
+  // court (70-120ms, 90ms par défaut), mix modéré — le son "Sun Records"
+  // caractéristique de Cash/Elvis/du country traditionnel, différent d'un
+  // vrai echo/delay répété. FIX (v7.6.436) : élément clé identifié manquant
+  // par l'analyse Tunee — remplace la reverb longue sur le lead.
+  async applySlapbackDelay(dryBlob: Blob, leadOnlyBlob: Blob, delayMs: number = 90, mix: number = 0.28): Promise<Blob> {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    let dryBuf: AudioBuffer, leadBuf: AudioBuffer;
+    try {
+      dryBuf  = await ctx.decodeAudioData(await dryBlob.arrayBuffer());
+      leadBuf = await ctx.decodeAudioData(await leadOnlyBlob.arrayBuffer());
+    } finally { await ctx.close(); }
+
+    const sr = dryBuf.sampleRate;
+    const len = dryBuf.length;
+    const dL = dryBuf.getChannelData(0), dR = dryBuf.numberOfChannels > 1 ? dryBuf.getChannelData(1) : dL;
+    const lL0 = leadBuf.getChannelData(0), lR0 = leadBuf.numberOfChannels > 1 ? leadBuf.getChannelData(1) : lL0;
+    const n = Math.min(len, lL0.length);
+    const lL = new Float32Array(len), lR = new Float32Array(len);
+    lL.set(lL0.subarray(0, n)); lR.set(lR0.subarray(0, n));
+
+    // Léger filtrage du tap slapback (coupe-bas/coupe-haut) — un vrai
+    // slapback à bande (tape echo) n'est jamais aussi large-bande que le
+    // signal direct, ça lui donne son caractère "vintage" plutôt qu'un
+    // simple doublon numérique.
+    const tapL = _busLPF(_busHPF(lL, 200, sr), 8000, sr);
+    const tapR = _busLPF(_busHPF(lR, 200, sr), 8000, sr);
+
+    const delaySamples = Math.round(delayMs * sr / 1000);
+    const outL = new Float32Array(len), outR = new Float32Array(len);
+    for (let i = 0; i < len; i++) {
+      const di = i - delaySamples;
+      const tap = di >= 0 ? 1 : 0;
+      outL[i] = dL[i] + (tap ? tapL[di] * mix : 0);
+      outR[i] = dR[i] + (tap ? tapR[di] * mix : 0);
     }
     let peak = 0;
     for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(outL[i]), Math.abs(outR[i]));
@@ -2081,13 +2152,24 @@ export const studioService = {
 
       // 3. -3 ST — tierce grave, couleur Johnny Cash (remplace l'ancienne octave -12ST,
       // le pire cas historique pour les artefacts ET les crashs mémoire iOS)
-      { trackIndex: 3, trackLabel: 'Layer -3 ST',     pitch: -3,  gain: 0.32, pan: 0.0,   emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
+      // FIX "seulement 2 harmonies détectées au lieu de 4" (v7.6.437) : pan
+      // était à 0.0 (centre) — exactement la position du lead vocal. Le pitch
+      // (±2/±3 demi-tons) est volontairement resserré pour rester dans la
+      // zone où Rubber Band ne dégrade pas (contrainte technique du
+      // pitch-shifter, pas un choix arbitraire) — donc la séparation entre
+      // les 2 paires (2&4 au-dessus, 3&5 en dessous) doit passer par le
+      // panoramique plutôt que par plus d'écart de hauteur. La paire du
+      // dessus (2: +0.35 / 4: -0.35) était déjà bien séparée ; celle du
+      // dessous ne l'était pas — piste 3 recentrée à -0.55 (gauche dur),
+      // hors du centre occupé par le lead, et piste 5 repoussée à +0.55
+      // (droite dur), loin de la piste 2 (+0.35) au lieu de la chevaucher.
+      { trackIndex: 3, trackLabel: 'Layer -3 ST',     pitch: -3,  gain: 0.32, pan: -0.55,  emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
 
       // 4. +3 ST — tierce, puissance Garth Brooks (remplace l'ancien +7 ST/quinte)
       { trackIndex: 4, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.24, pan: -0.35, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
 
       // 5. -2 ST — seconde grave, chaleur Elvis (remplace l'ancien -5 ST/quarte grave)
-      { trackIndex: 5, trackLabel: 'Layer -2 ST',     pitch: -2,  gain: 0.25, pan: 0.30,  emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 5, trackLabel: 'Layer -2 ST',     pitch: -2,  gain: 0.25, pan: 0.55,  emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
     ];
     // Si targetTrackIndex spécifié → générer seulement cette harmonie
     const layers = targetTrackIndex !== undefined

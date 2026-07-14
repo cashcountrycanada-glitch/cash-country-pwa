@@ -1042,6 +1042,12 @@ export default function MixerScreen({
         if (sendBusBlob && sendBusBlob.size > 100) {
           await studioOfflineDB.saveAudio(`master_pending_sendbus_${project.id}`, sendBusBlob, { type: 'master_pending_sendbus', savedAt: Date.now() });
         }
+        // FIX "pas de slapback delay" (v7.6.436)
+        const leadOnlyBlob = ((window as any).__vocalLeadOnlyBlob as Blob | undefined)
+          ?? await studioOfflineDB.getAudio(`vocalleadonly_${project.id}`).catch(() => null);
+        if (leadOnlyBlob && leadOnlyBlob.size > 100) {
+          await studioOfflineDB.saveAudio(`master_pending_leadonly_${project.id}`, leadOnlyBlob, { type: 'master_pending_leadonly', savedAt: Date.now() });
+        }
       }
       crumb(`💾 Mix sauvegardé sous master_pending_${project.id} (${masterBlob.size}B) — navigation vers page fraîche`);
     } catch (e: any) {

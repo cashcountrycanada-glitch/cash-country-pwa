@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.435';
+const BUILD_VERSION = 'v7.6.438';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -608,7 +608,25 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       ...t,
       gain: t.gain && t.gain > 1.0 ? 1.0 : t.gain,
     }));
-    const cleanedProj = { ...proj, tracks: normalizedTracks };
+    // FIX "harmonies 3&5 pas séparées en pan" (v7.6.438) : migration
+    // automatique — l'utilisateur ne devrait pas avoir à régénérer ou
+    // régler un slider à la main juste pour une valeur de panoramique.
+    // Toute piste trackIndex 3 encore à son ANCIEN pan par défaut (0.0,
+    // centre — superposé au lead) passe à -0.55 ; toute piste trackIndex 5
+    // encore à son ancien pan (0.30) passe à +0.55. Ne touche QUE les
+    // pistes encore à la valeur par défaut d'origine — si l'utilisateur a
+    // déjà réglé le pan à la main pour une chanson, ce réglage est respecté
+    // et n'est jamais écrasé.
+    const repannedTracks = normalizedTracks.map((t: any) => {
+      if (t.trackIndex === 3 && t.isGenerated && Math.abs((t.pan ?? 0) - 0.0) < 0.001) {
+        return { ...t, pan: -0.55 };
+      }
+      if (t.trackIndex === 5 && t.isGenerated && Math.abs((t.pan ?? 0) - 0.30) < 0.001) {
+        return { ...t, pan: 0.55 };
+      }
+      return t;
+    });
+    const cleanedProj = { ...proj, tracks: repannedTracks };
     // Toujours sauvegarder pour purger localStorage des doublons
     studioService.saveProject(cleanedProj);
     setProject(cleanedProj);
@@ -1229,7 +1247,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       setMixLabel('Bus partagé — mix des envois...'); setMixProgress(32);
       try {
         const sendBusBlob = await studioService.buildVocalSendBus(vocalOnlyProject, (label, pct) => {
-          setMixLabel(label); setMixProgress(30 + pct * 0.3);
+          setMixLabel(label); setMixProgress(30 + pct * 0.15);
         }, instOffsetMs);
         (window as any).__vocalSendBusBlob = sendBusBlob;
         if (project) {
@@ -1240,6 +1258,26 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       } catch (e) {
         console.warn('[Mix] Bus d\'envoi non généré:', e);
         // Non bloquant : la version Classique reste disponible même si le bus échoue
+      }
+
+      // FIX "pas de slapback delay" (v7.6.436) : d'après l'analyse Tunee, le
+      // lead a besoin d'un slapback (écho unique 90ms) plutôt que d'une
+      // reverb — ça nécessite le lead ISOLÉ (sans double/harmonies) pour ne
+      // taper que sur sa propre voix. Rendu séparément ici, appliqué par
+      // MasteringEngine (voir applySlapbackDelay).
+      setMixLabel('Bus partagé — isolation du lead...'); setMixProgress(46);
+      try {
+        const leadOnlyBlob = await studioService.buildLeadOnlyMix(vocalOnlyProject, (label, pct) => {
+          setMixLabel(label); setMixProgress(45 + pct * 0.15);
+        }, instOffsetMs);
+        (window as any).__vocalLeadOnlyBlob = leadOnlyBlob;
+        if (project) {
+          studioOfflineDB.saveAudio(`vocalleadonly_${project.id}`, leadOnlyBlob, {
+            type: 'vocalleadonly', songId: project.songId, savedAt: Date.now()
+          }).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('[Mix] Lead isolé non généré (slapback désactivé):', e);
       }
 
       const mixBlob = await studioService.mixProject(mixProject, (label, pct) => {

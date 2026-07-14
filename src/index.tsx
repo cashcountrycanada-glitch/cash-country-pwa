@@ -138,7 +138,7 @@ function StudioMobileWithSongs() {
 // stockage permanent puis navigue ici via URL (?master=...) — cette page
 // démarre à zéro : aucun état hérité, aucun risque d'interférence.
 function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs, vocalStyle }: { projectId: string; songId: string; hasInst: boolean; instOffsetMs: number; vocalStyle: 'classic' | 'bus' }) {
-  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'error'; vocalBlob?: Blob; instBlob?: Blob | null; sendBusBlob?: Blob | null; songTitle?: string; error?: string }>({ status: 'loading' });
+  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'error'; vocalBlob?: Blob; instBlob?: Blob | null; sendBusBlob?: Blob | null; leadOnlyBlob?: Blob | null; songTitle?: string; error?: string }>({ status: 'loading' });
 
   useEffect(() => {
     (async () => {
@@ -156,12 +156,17 @@ function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs, vocalSt
         const sendBusBlob = vocalStyle === 'bus'
           ? await studioOfflineDB.getAudio(`master_pending_sendbus_${projectId}`).catch(() => null)
           : null;
+        // FIX "pas de slapback delay" (v7.6.436) : lead isolé, pour l'écho
+        // slapback (voir MasteringEngine.tsx / applySlapbackDelay).
+        const leadOnlyBlob = vocalStyle === 'bus'
+          ? await studioOfflineDB.getAudio(`master_pending_leadonly_${projectId}`).catch(() => null)
+          : null;
         let songTitle = 'Chanson';
         try {
           const r = await fetch(`/api/songs/${encodeURIComponent(songId)}`);
           if (r.ok) { const s = await r.json(); songTitle = s?.title || s?.name || songTitle; }
         } catch {}
-        setState({ status: 'ready', vocalBlob, instBlob, sendBusBlob, songTitle });
+        setState({ status: 'ready', vocalBlob, instBlob, sendBusBlob, leadOnlyBlob, songTitle });
       } catch (e: any) {
         setState({ status: 'error', error: e?.message || String(e) });
       }
@@ -193,6 +198,7 @@ function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs, vocalSt
     <MasteringEngine
       vocalBlob={state.vocalBlob!}
       sendBusBlob={state.sendBusBlob ?? null}
+      leadOnlyBlob={state.leadOnlyBlob ?? null}
       instBlob={state.instBlob ?? null}
       instOffsetMs={instOffsetMs}
       songTitle={state.songTitle || 'Chanson'}
