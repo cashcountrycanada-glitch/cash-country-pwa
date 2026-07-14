@@ -137,8 +137,8 @@ function StudioMobileWithSongs() {
 // se charge sur une page FRAÎCHE et isolée. Le mixeur sauvegarde le mix en
 // stockage permanent puis navigue ici via URL (?master=...) — cette page
 // démarre à zéro : aucun état hérité, aucun risque d'interférence.
-function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs }: { projectId: string; songId: string; hasInst: boolean; instOffsetMs: number }) {
-  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'error'; vocalBlob?: Blob; instBlob?: Blob | null; songTitle?: string; error?: string }>({ status: 'loading' });
+function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs, vocalStyle }: { projectId: string; songId: string; hasInst: boolean; instOffsetMs: number; vocalStyle: 'classic' | 'bus' }) {
+  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'error'; vocalBlob?: Blob; instBlob?: Blob | null; sendBusBlob?: Blob | null; songTitle?: string; error?: string }>({ status: 'loading' });
 
   useEffect(() => {
     (async () => {
@@ -149,17 +149,24 @@ function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs }: { pro
           return;
         }
         const instBlob = hasInst ? await studioOfflineDB.getAudio(`master_pending_inst_${projectId}`).catch(() => null) : null;
+        // FIX "reverb Bus partagé écrase le mix" (v7.6.435) : bus d'envoi SEC,
+        // récupéré uniquement si le style "Bus partagé" a été choisi dans le
+        // Mixer. Passé à MasteringEngine, qui applique la reverb lui-même,
+        // après la masterisation (voir MasteringEngine.tsx).
+        const sendBusBlob = vocalStyle === 'bus'
+          ? await studioOfflineDB.getAudio(`master_pending_sendbus_${projectId}`).catch(() => null)
+          : null;
         let songTitle = 'Chanson';
         try {
           const r = await fetch(`/api/songs/${encodeURIComponent(songId)}`);
           if (r.ok) { const s = await r.json(); songTitle = s?.title || s?.name || songTitle; }
         } catch {}
-        setState({ status: 'ready', vocalBlob, instBlob, songTitle });
+        setState({ status: 'ready', vocalBlob, instBlob, sendBusBlob, songTitle });
       } catch (e: any) {
         setState({ status: 'error', error: e?.message || String(e) });
       }
     })();
-  }, [projectId, songId, hasInst]);
+  }, [projectId, songId, hasInst, vocalStyle]);
 
   const goBack = () => { window.location.href = window.location.origin + window.location.pathname; };
 
@@ -185,6 +192,7 @@ function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs }: { pro
   return (
     <MasteringEngine
       vocalBlob={state.vocalBlob!}
+      sendBusBlob={state.sendBusBlob ?? null}
       instBlob={state.instBlob ?? null}
       instOffsetMs={instOffsetMs}
       songTitle={state.songTitle || 'Chanson'}
@@ -205,6 +213,7 @@ if (rootElement) {
   const _masterSongId = _masterParams.get('songId');
   const _masterHasInst = _masterParams.get('hasInst') === '1';
   const _masterInstOffsetMs = Number(_masterParams.get('instOffsetMs') || '0') || 0;
+  const _masterVocalStyle = (_masterParams.get('vocalStyle') === 'bus' ? 'bus' : 'classic') as 'classic' | 'bus';
 
   // FIX CRASH ÉCRAN NOIR (v7.6.420) : <React.StrictMode> était encore actif ici
   // (ce fichier n'avait jamais reçu ce correctif car un doublon à la racine du
@@ -214,7 +223,7 @@ if (rootElement) {
   root.render(
     <RootErrorBoundary>
       {_masterProjectId && _masterSongId
-        ? <MasteringStandalone projectId={_masterProjectId} songId={_masterSongId} hasInst={_masterHasInst} instOffsetMs={_masterInstOffsetMs} />
+        ? <MasteringStandalone projectId={_masterProjectId} songId={_masterSongId} hasInst={_masterHasInst} instOffsetMs={_masterInstOffsetMs} vocalStyle={_masterVocalStyle} />
         : <StudioMobileWithSongs />}
     </RootErrorBoundary>
   );

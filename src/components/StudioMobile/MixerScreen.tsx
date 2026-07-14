@@ -1031,6 +1031,18 @@ export default function MixerScreen({
       // fraîche de masterisation ira chercher exactement cette clé.
       await studioOfflineDB.saveAudio(`master_pending_${project.id}`, masterBlob, { type: 'master_pending', savedAt: Date.now() });
       if (instBlob) await studioOfflineDB.saveAudio(`master_pending_inst_${project.id}`, instBlob, { type: 'master_pending_inst', savedAt: Date.now() });
+      // FIX "reverb Bus partagé écrase le mix" (v7.6.435) : si le style
+      // "Bus partagé" est sélectionné, on sauvegarde AUSSI le bus d'envoi
+      // SEC (sans reverb — voir vocalStyle plus haut) sous sa propre clé.
+      // MasteringStandalone (index.tsx) le récupère et l'applique APRÈS la
+      // masterisation, pas avant (voir MasteringEngine.tsx).
+      if (wantBus) {
+        const sendBusBlob = ((window as any).__vocalSendBusBlob as Blob | undefined)
+          ?? await studioOfflineDB.getAudio(`vocalsend_${project.id}`).catch(() => null);
+        if (sendBusBlob && sendBusBlob.size > 100) {
+          await studioOfflineDB.saveAudio(`master_pending_sendbus_${project.id}`, sendBusBlob, { type: 'master_pending_sendbus', savedAt: Date.now() });
+        }
+      }
       crumb(`💾 Mix sauvegardé sous master_pending_${project.id} (${masterBlob.size}B) — navigation vers page fraîche`);
     } catch (e: any) {
       crumb(`⛔ Échec sauvegarde IDB avant navigation: ${e?.message}`);
@@ -1038,7 +1050,7 @@ export default function MixerScreen({
       return;
     }
     const base = window.location.origin + window.location.pathname;
-    window.location.href = `${base}?master=${encodeURIComponent(project.id)}&songId=${encodeURIComponent(selected.id)}&hasInst=${instBlob ? '1' : '0'}&instOffsetMs=${encodeURIComponent(instOffsetMs)}`;
+    window.location.href = `${base}?master=${encodeURIComponent(project.id)}&songId=${encodeURIComponent(selected.id)}&hasInst=${instBlob ? '1' : '0'}&instOffsetMs=${encodeURIComponent(instOffsetMs)}&vocalStyle=${wantBus ? 'bus' : 'classic'}`;
   };
 
   const hasAnyHarmony = HARMONY_DEFS.some(h => tracks.some(t => t.trackIndex === h.trackIndex));

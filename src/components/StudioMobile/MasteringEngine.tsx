@@ -48,6 +48,16 @@ interface MasterSettings {
 export interface MasteringProps {
   // Le mix vocal (voix + harmonies, PAS l'instrumental)
   vocalBlob:    Blob;
+  // FIX "reverb trop prononcée / instrumental écrasé" (v7.6.435) : bus d'envoi
+  // SEC (lead+double+harmonies à niveaux différenciés, SANS reverb) — fourni
+  // uniquement si le style "Bus partagé" est sélectionné. La reverb est
+  // appliquée ICI, APRÈS masterAudio() (voir runMastering plus bas), jamais
+  // avant : la chaîne de mastering (gate/EQ/de-esser/compression multibande)
+  // est calibrée pour un signal sec, l'appliquer sur un signal déjà
+  // réverbéré la fait réagir à la queue de reverb (continue, soutenue) au
+  // lieu des phrases vocales — ça écrase les harmonies/double et gonfle le
+  // 250-500Hz au détriment de l'instrumental une fois tout remixé.
+  sendBusBlob?: Blob | null;
   // L'instrumental à mixer pour l'export publication (null si non disponible)
   instBlob:     Blob | null;
   // Décalage Auto Sync détecté dans le mixer (ms) — appliqué entre la voix
@@ -967,7 +977,7 @@ function db(v: number) { return v >= 0 ? `+${v.toFixed(1)} dB` : `${v.toFixed(1)
 // ── Composant principal ───────────────────────────────────────────────────────
 
 export default function MasteringEngine({
-  vocalBlob, instBlob, instOffsetMs = 0, songTitle, songId, onBack, onStemReady, isOnline,
+  vocalBlob, sendBusBlob = null, instBlob, instOffsetMs = 0, songTitle, songId, onBack, onStemReady, isOnline,
 }: MasteringProps) {
   // FIX DIAGNOSTIC (v7.6.415) : trace synchrone à l'instant précis où React
   // commence à exécuter le rendu de ce composant — avant tout hook, avant tout
@@ -1082,7 +1092,7 @@ export default function MasteringEngine({
       if (vocalUrlRef.current) URL.revokeObjectURL(vocalUrlRef.current);
       const encDurVocal = Math.round(vocalM.duration);
       setProgressLabel(`Encodage voix… (~${encDurVocal}s)`);
-      const vBlob = await audioBufferToBlob(vocalM, (pct) => {
+      let vBlob = await audioBufferToBlob(vocalM, (pct) => {
         // Plage 35→53% pendant l'encodage voix
         setProgress(35 + Math.round(pct * 0.18));
         if (pct < 100) {
@@ -1090,6 +1100,13 @@ export default function MasteringEngine({
           setProgressLabel(`Encodage voix… (${remaining}s)`);
         }
       });
+      // FIX "reverb trop prononcée" (v7.6.435) : même principe que pour le
+      // Mode B — la reverb du Bus partagé s'applique APRÈS masterAudio()
+      // (donc sur vocalM déjà traitée), jamais avant, pour l'export "voix
+      // seule" aussi.
+      if (sendBusBlob) {
+        vBlob = await studioService.applySharedReverbBus(vBlob, sendBusBlob, 0.12);
+      }
       vocalUrlRef.current = URL.createObjectURL(vBlob);
       try { (window as any).__breadcrumb?.(`💿 Voix masterisée encodée : ${vBlob.size}B, type=${vBlob.type}`); } catch {}
       setProgress(55);
@@ -1099,13 +1116,34 @@ export default function MasteringEngine({
         setProgressLabel("Chargement de l'instrumental..."); setProgress(60);
         let instRaw: AudioBuffer | null = await decodeBlob(instBlob);
 
+        // FIX "reverb trop prononcée / instrumental écrasé" (v7.6.435) :
+        // la reverb du Bus partagé est appliquée ICI, juste avant le mixage
+        // avec l'instrumental — jamais avant, au niveau du Mixage (voir
+        // commentaire sur sendBusBlob plus haut). Wet amount aussi réduit
+        // (0.22→0.12) : à 0.22 la reverb remplissait les silences entre les
+        // phrases avec une énergie continue qui, une fois vocalRaw
+        // peak-normalisé contre l'instrumental dans mixVocalWithInst,
+        // gonflait la présence globale de la voix (peak identique mais RMS
+        // bien plus haut à cause de la queue continue) — l'instrumental
+        // semblait "faible" alors que son propre traitement n'avait pas
+        // changé, et les harmonies/double devenaient inaudibles, noyés sous
+        // la reverb désormais bien plus dense que le reste du groupe voix.
+        let vocalForMix: AudioBuffer = vocalRaw!;
+        if (sendBusBlob) {
+          setProgressLabel('Bus partagé — réverbération...'); setProgress(65);
+          await new Promise<void>(r => setTimeout(r, 100));
+          const vocalRawBlob = await audioBufferToBlob(vocalRaw!);
+          const vocalRawWithReverbBlob = await studioService.applySharedReverbBus(vocalRawBlob, sendBusBlob, 0.12);
+          vocalForMix = await decodeBlob(vocalRawWithReverbBlob);
+        }
+
         setProgressLabel('Mixage vocal + instrumental...'); setProgress(70);
         // FIX "voix horrible" (v7.6.428) : mixer avec vocalRaw (voix NON
         // masterisée), pas vocalM — sinon la voix est masterisée deux fois
         // (voir commentaire plus haut). mixVocalWithInst normalise chaque
         // signal indépendamment à -1dBFS avant mixage, donc utiliser la voix
         // brute ici ne change rien au niveau, seulement à la qualité.
-        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalRaw!, instRaw, instGainDb, instOffsetMs);
+        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, instGainDb, instOffsetMs);
         instRaw = null; // FIX mémoire : relâché dès que possible
         vocalRaw = null; // FIX mémoire : plus besoin après le mixage, relâché ici
 

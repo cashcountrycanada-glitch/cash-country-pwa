@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.434';
+const BUILD_VERSION = 'v7.6.435';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -220,6 +220,12 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [masterVocalBlob, setMasterVocalBlob] = useState<Blob | null>(null);
   const [masterInstBlob, setMasterInstBlob] = useState<Blob | null>(null);
+  // FIX "reverb Bus partagé écrase le mix" (v7.6.435) : bus d'envoi SEC
+  // (lead+double+harmonies, sans reverb), transmis à MasteringEngine
+  // uniquement si le style "Bus partagé" est sélectionné dans le Mixer —
+  // null pour "Classique". La reverb est appliquée par MasteringEngine
+  // lui-même, après la masterisation, pas avant (voir MasteringEngine.tsx).
+  const [masterSendBusBlob, setMasterSendBusBlob] = useState<Blob | null>(null);
   // FIX "instrumental introuvable dans le Mixer" (v7.6.421) : le Mixer recevait
   // masterInstBlob comme prop instBlob — cette variable ne se remplit QU'APRÈS
   // avoir déjà cliqué Masteriser une fois (poule et œuf). Le Mixer a besoin de
@@ -1207,29 +1213,32 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         }).catch(() => {}); // non bloquant
       }
 
-      // FIX "on veut pouvoir comparer les deux techniques" (v7.6.434) : en plus
-      // du mix voix "Classique" ci-dessus, on rend AUSSI la variante "Bus
-      // partagé" (technique country traditionnel : lead+double+harmonies
-      // envoyés à niveaux différents vers UNE reverb plate partagée EQ'd,
-      // au lieu d'une reverb insert par piste). Les deux versions sont
-      // sauvegardées séparément — le choix se fait à l'écoute, par chanson,
-      // au moment de Masteriser (voir toggle dans MixerScreen.tsx).
+      // FIX "pouvoir comparer les deux techniques" (v7.6.434) : en plus
+      // du mix voix "Classique" ci-dessus, on rend AUSSI le bus d'envoi
+      // "Bus partagé" (technique country traditionnel : lead+double+harmonies
+      // à niveaux différents, SANS reverb à ce stade — voir MasteringEngine.tsx).
+      // FIX "reverb trop prononcée / instrumental écrasé" (v7.6.435) : la
+      // reverb n'est PLUS appliquée ici. Auparavant on rendait le bus ET la
+      // reverb au Mixage, AVANT toute masterisation — la reverb se retrouvait
+      // alors traitée par toute la suite (mastering + mixage instrumental)
+      // comme si elle faisait partie du signal sec, ce qui gonflait sa
+      // présence (queue continue, peak-normalisation trompeuse face à
+      // l'instrumental) et noyait les harmonies/double. On stocke maintenant
+      // uniquement le bus SEC — la reverb est appliquée par MasteringEngine,
+      // juste avant le mixage avec l'instrumental, après tout le reste.
       setMixLabel('Bus partagé — mix des envois...'); setMixProgress(32);
       try {
         const sendBusBlob = await studioService.buildVocalSendBus(vocalOnlyProject, (label, pct) => {
-          setMixLabel(label); setMixProgress(30 + pct * 0.2);
+          setMixLabel(label); setMixProgress(30 + pct * 0.3);
         }, instOffsetMs);
-        setMixLabel('Bus partagé — réverbération...'); setMixProgress(52);
-        await new Promise<void>(r => setTimeout(r, 100)); // pause GC avant le DSP reverb
-        const busBlob = await studioService.applySharedReverbBus(vocalOnlyBlob, sendBusBlob);
-        (window as any).__vocalMixBusBlob = busBlob;
+        (window as any).__vocalSendBusBlob = sendBusBlob;
         if (project) {
-          studioOfflineDB.saveAudio(`vocalmix_bus_${project.id}`, busBlob, {
-            type: 'vocalmix_bus', songId: project.songId, savedAt: Date.now()
+          studioOfflineDB.saveAudio(`vocalsend_${project.id}`, sendBusBlob, {
+            type: 'vocalsend', songId: project.songId, savedAt: Date.now()
           }).catch(() => {});
         }
       } catch (e) {
-        console.warn('[Mix] Bus partagé non généré:', e);
+        console.warn('[Mix] Bus d\'envoi non généré:', e);
         // Non bloquant : la version Classique reste disponible même si le bus échoue
       }
 
@@ -1283,9 +1292,9 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     } finally { setUploading(null); }
   };
 
-  const handleMasterize = (vocalBlob: Blob, instBlob: Blob | null) => {
-    breadcrumb(`🎛️ handleMasterize appelé : vocalBlob=${vocalBlob ? vocalBlob.size + 'B' : 'NULL'} instBlob=${instBlob ? instBlob.size + 'B' : 'null'} selected=${selected ? selected.id : 'NULL'}`);
-    setMasterVocalBlob(vocalBlob); setMasterInstBlob(instBlob); setScreen('master');
+  const handleMasterize = (vocalBlob: Blob, instBlob: Blob | null, sendBusBlob: Blob | null = null) => {
+    breadcrumb(`🎛️ handleMasterize appelé : vocalBlob=${vocalBlob ? vocalBlob.size + 'B' : 'NULL'} instBlob=${instBlob ? instBlob.size + 'B' : 'null'} sendBusBlob=${sendBusBlob ? sendBusBlob.size + 'B' : 'null (classique)'} selected=${selected ? selected.id : 'NULL'}`);
+    setMasterVocalBlob(vocalBlob); setMasterInstBlob(instBlob); setMasterSendBusBlob(sendBusBlob); setScreen('master');
     breadcrumb(`🎛️ setScreen('master') exécuté`);
   };
   const handleStemReady = async (_blob: Blob, fileName: string) => { if (!selected) return; console.log(`[StudioMobile] Stem vocal transféré : ${fileName}`); };
@@ -1361,7 +1370,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex flex-col items-center justify-center gap-3 px-6 text-center"><p className="text-[40px]">🛑</p><p className="text-white font-bebas text-xl tracking-widest">BOUCLE DÉTECTÉE</p><p className="text-zinc-500 text-[11px]">L'écran de mastering n'arrivait pas à s'afficher correctement. Retour au mixeur — réessaie dans un instant.</p></div></>;
     }
     breadcrumb(`🖼️ Construction JSX écran Master démarrée (vocalBlob=${masterVocalBlob.size}B) [tentative ${w.__masterRenderAttempts.length}]`);
-    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
+    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} sendBusBlob={masterSendBusBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
   }
   if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Comp Editor" onReset={() => setScreen('mixer')}><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {
               // Persister les régions dans les pistes du projet
