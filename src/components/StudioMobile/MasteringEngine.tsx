@@ -1104,24 +1104,31 @@ export default function MasteringEngine({
           setProgressLabel(`Encodage voix… (${remaining}s)`);
         }
       });
-      // FIX "pas de slapback delay" (v7.6.436) / "trop présent" (v7.6.439) :
-      // le slapback s'applique AVANT la reverb courte, réglages resserrés
-      // (70ms, mix 13%) suite au retour Tunee sur le premier résultat.
+      // FIX "repartir de zéro, trop agressif" (v7.6.440) : chaîne complète
+      // resserrée suite au 3e retour Tunee. Ordre imposé : compresseur léger
+      // → EQ → slapback subtil → volume. Aucun autre effet sur le lead.
       if (leadOnlyBlob) {
-        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 70, 0.13);
+        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 70, 0.11);
       }
       // FIX "reverb trop prononcée" (v7.6.435) : même principe que pour le
       // Mode B — la reverb du Bus partagé s'applique APRÈS masterAudio()
       // (donc sur vocalM déjà traitée), jamais avant, pour l'export "voix
-      // seule" aussi.
+      // seule" aussi. (Reverb harmonies/double — non concernée par la
+      // demande "aucun effet supplémentaire" de Tunee, qui porte sur la
+      // chaîne LEAD, voir commentaire détaillé au Mode B plus bas.)
       if (sendBusBlob) {
         vBlob = await studioService.applySharedReverbBus(vBlob, sendBusBlob, 0.12);
       }
-      // FIX "voix trop compressée/forte" (v7.6.439) : EQ + glue doux, même
-      // traitement que Mode B, pour l'export "voix seule" aussi.
       if (sendBusBlob || leadOnlyBlob) {
-        vBlob = await studioService.applyPeakingEQ(vBlob, 2500, -0.75, 1.3);
-        vBlob = await studioService.applyGentleCompressor(vBlob, 2.5, 15, 60, -18);
+        // Compresseur très léger — ne travaille que sur les pics (threshold
+        // haut), garde la dynamique naturelle.
+        vBlob = await studioService.applyGentleCompressor(vBlob, 2.0, 20, 80, -12);
+        // EQ 4 étages : creux 2-3kHz (nasillard) + creux 4-6kHz (métallique)
+        // + boost 200-400Hz (corps) + shelf 8kHz (adoucir l'aigu).
+        vBlob = await studioService.applyPeakingEQ(vBlob, 2500, -2.0, 0.7);
+        vBlob = await studioService.applyPeakingEQ(vBlob, 5000, -1.5, 1.5);
+        vBlob = await studioService.applyPeakingEQ(vBlob, 300, 1.5, 0.7);
+        vBlob = await studioService.applyHighShelf(vBlob, 8000, -0.5);
       }
       vocalUrlRef.current = URL.createObjectURL(vBlob);
       try { (window as any).__breadcrumb?.(`💿 Voix masterisée encodée : ${vBlob.size}B, type=${vBlob.type}`); } catch {}
@@ -1145,20 +1152,20 @@ export default function MasteringEngine({
         // changé, et les harmonies/double devenaient inaudibles, noyés sous
         // la reverb désormais bien plus dense que le reste du groupe voix.
         let vocalForMix: AudioBuffer = vocalRaw!;
-        // FIX "slapback trop présent / voix trop forte" (v7.6.439) — 2e passe
-        // Tunee après écoute du premier résultat : tout resserré.
-        // - Slapback : mix 28%→13%, time 90ms→70ms (subtil, "on l'entend sans y penser")
-        // - EQ voix : léger creux 2.5kHz (-0.75dB) pour désengorger médiums-aigus
-        // - Compression voix : douce (2.5:1, attack 15ms, release 60ms) — glue transparent
-        // - Balance : voix rendue à la place de l'instrumental plutôt que par-dessus
-        //   (même levier que "instrumental +2dB" : les deux se traduisent par le
-        //   même ratio dans mixVocalWithInst, qui normalise la voix à peak fixe —
-        //   TOUT ajustement voix/inst passe forcément par instGainDb ci-dessous)
+        // FIX "repartir de zéro, trop agressif" (v7.6.440) — 3e retour Tunee :
+        // chaîne resserrée dans l'ordre imposé : compresseur léger → EQ →
+        // slapback subtil → volume, aucun autre effet sur le lead. La reverb
+        // courte du bus (harmonies/double, section 4 du doc envoyé à Tunee)
+        // et le glue final (section 7) ne sont PAS retirés : ils répondent à
+        // un besoin différent (cohésion des harmonies, "même espace" du mix
+        // complet) que Tunee a lui-même demandé précédemment et ne conteste
+        // pas ici — sa demande "aucun effet supplémentaire" porte sur la
+        // chaîne LEAD spécifiquement.
         if (leadOnlyBlob) {
           setProgressLabel('Bus partagé — slapback delay...'); setProgress(62);
           await new Promise<void>(r => setTimeout(r, 100));
           const vocalRawBlobForSlap = await audioBufferToBlob(vocalForMix);
-          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 70, 0.13);
+          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 70, 0.11);
           vocalForMix = await decodeBlob(vocalRawWithSlapBlob);
         }
         if (sendBusBlob) {
@@ -1168,15 +1175,21 @@ export default function MasteringEngine({
           const vocalRawWithReverbBlob = await studioService.applySharedReverbBus(vocalRawBlob, sendBusBlob, 0.12);
           vocalForMix = await decodeBlob(vocalRawWithReverbBlob);
         }
-        // FIX (v7.6.439) : EQ + compression douce, uniquement en style Bus
-        // partagé (sendBusBlob/leadOnlyBlob présents) — le style Classique
-        // n'est pas touché.
         if (sendBusBlob || leadOnlyBlob) {
-          setProgressLabel('Bus partagé — EQ + glue...'); setProgress(66);
+          setProgressLabel('Bus partagé — compresseur léger...'); setProgress(65);
           await new Promise<void>(r => setTimeout(r, 100));
           let vBlobTone = await audioBufferToBlob(vocalForMix);
-          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 2500, -0.75, 1.3);
-          vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 2.5, 15, 60, -18);
+          // Compresseur très léger — seuil haut (ne touche que les pics),
+          // garde la dynamique naturelle ("si elle sonne plate, c'est trop").
+          vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 2.0, 20, 80, -12);
+          setProgressLabel('Bus partagé — EQ voix...'); setProgress(66);
+          // Creux 2-3kHz (nasillard) + creux 4-6kHz (métallique) +
+          // boost 200-400Hz (corps) + shelf 8kHz (adoucir l'aigu) —
+          // objectif voix chaude/naturelle plutôt que brillante/agressive.
+          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 2500, -2.0, 0.7);
+          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 5000, -1.5, 1.5);
+          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 300, 1.5, 0.7);
+          vBlobTone = await studioService.applyHighShelf(vBlobTone, 8000, -0.5);
           vocalForMix = await decodeBlob(vBlobTone);
         }
 
@@ -1186,10 +1199,12 @@ export default function MasteringEngine({
         // (voir commentaire plus haut). mixVocalWithInst normalise chaque
         // signal indépendamment à -1dBFS avant mixage, donc utiliser la voix
         // brute ici ne change rien au niveau, seulement à la qualité.
-        // FIX (v7.6.439) : +5dB sur instGainDb en style Bus partagé — combine
-        // "voix -3/4dB" + "instrumental +2dB" demandés par Tunee (un seul
-        // levier existe dans mixVocalWithInst : le ratio inst/voix).
-        const effectiveInstGainDb = (sendBusBlob || leadOnlyBlob) ? instGainDb + 5 : instGainDb;
+        // FIX (v7.6.439→440) : +5dB (retour #2) puis +2.5dB de plus (retour
+        // #3 : "encore -2/-3dB de voix") = +7.5dB net sur instGainDb en
+        // style Bus partagé. Un seul levier existe dans mixVocalWithInst
+        // (le ratio inst/voix) — chaque demande "voix plus basse" ou
+        // "instrumental plus fort" passe forcément par ici.
+        const effectiveInstGainDb = (sendBusBlob || leadOnlyBlob) ? instGainDb + 7.5 : instGainDb;
         let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, effectiveInstGainDb, instOffsetMs);
         instRaw = null; // FIX mémoire : relâché dès que possible
         vocalRaw = null; // FIX mémoire : plus besoin après le mixage, relâché ici

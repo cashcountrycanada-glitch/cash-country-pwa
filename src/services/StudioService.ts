@@ -1945,6 +1945,41 @@ export const studioService = {
     return audioBufferToBlob(outBuf0);
   },
 
+  // Shelf haut (high-shelf) — RBJ standard, distinct du peaking : affecte tout
+  // au-dessus de freqHz au lieu d'une seule bande. Utilisé pour l'adoucissement
+  // large de l'aigu (ex: -0.5dB @ 8kHz) demandé dans la chaîne voix allégée.
+  async applyHighShelf(blob: Blob, freqHz: number, gainDb: number): Promise<Blob> {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    let buf: AudioBuffer;
+    try { buf = await ctx.decodeAudioData(await blob.arrayBuffer()); } finally { await ctx.close(); }
+    const sr = buf.sampleRate, len = buf.length;
+    const A = Math.pow(10, gainDb / 40);
+    const w0 = 2 * Math.PI * freqHz / sr;
+    const cosw0 = Math.cos(w0), sinw0 = Math.sin(w0);
+    const S = 1.0; // slope — 1 = shelf standard
+    const alpha = sinw0 / 2 * Math.sqrt((A + 1 / A) * (1 / S - 1) + 2);
+    const twoSqrtAalpha = 2 * Math.sqrt(A) * alpha;
+    const b0 = A * ((A + 1) + (A - 1) * cosw0 + twoSqrtAalpha);
+    const b1 = -2 * A * ((A - 1) + (A + 1) * cosw0);
+    const b2 = A * ((A + 1) + (A - 1) * cosw0 - twoSqrtAalpha);
+    const a0 = (A + 1) - (A - 1) * cosw0 + twoSqrtAalpha;
+    const a1 = 2 * ((A - 1) - (A + 1) * cosw0);
+    const a2 = (A + 1) - (A - 1) * cosw0 - twoSqrtAalpha;
+    const applyBiquad = (data: Float32Array) => {
+      const out = new Float32Array(data.length);
+      let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+      for (let i = 0; i < data.length; i++) {
+        const x0 = data[i];
+        const y0 = (b0 / a0) * x0 + (b1 / a0) * x1 + (b2 / a0) * x2 - (a1 / a0) * y1 - (a2 / a0) * y2;
+        out[i] = y0; x2 = x1; x1 = x0; y2 = y1; y1 = y0;
+      }
+      return out;
+    };
+    const outBuf0 = new (window.AudioContext || (window as any).webkitAudioContext)().createBuffer(2, len, sr);
+    outBuf0.getChannelData(0).set(applyBiquad(buf.getChannelData(0)));
+    outBuf0.getChannelData(1).set(applyBiquad(buf.numberOfChannels > 1 ? buf.getChannelData(1) : buf.getChannelData(0)));
+    return audioBufferToBlob(outBuf0);
+  },
   // Compresseur "glue" transparent — DynamicsCompressorNode natif (bien plus
   // fiable qu'un compresseur JS écrit à la main pour un résultat propre à
   // ratio faible). Utilisé pour la voix uniquement dans le style Bus partagé,
