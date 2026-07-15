@@ -1108,7 +1108,7 @@ export default function MasteringEngine({
       // resserrée suite au 3e retour Tunee. Ordre imposé : compresseur léger
       // → EQ → slapback subtil → volume. Aucun autre effet sur le lead.
       if (leadOnlyBlob) {
-        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 70, 0.11);
+        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 65, 0.08);
       }
       // FIX "reverb trop prononcée" (v7.6.435) : même principe que pour le
       // Mode B — la reverb du Bus partagé s'applique APRÈS masterAudio()
@@ -1165,7 +1165,7 @@ export default function MasteringEngine({
           setProgressLabel('Bus partagé — slapback delay...'); setProgress(62);
           await new Promise<void>(r => setTimeout(r, 100));
           const vocalRawBlobForSlap = await audioBufferToBlob(vocalForMix);
-          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 70, 0.11);
+          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 65, 0.08);
           vocalForMix = await decodeBlob(vocalRawWithSlapBlob);
         }
         if (sendBusBlob) {
@@ -1206,12 +1206,12 @@ export default function MasteringEngine({
         // (voir commentaire plus haut). mixVocalWithInst normalise chaque
         // signal indépendamment à -1dBFS avant mixage, donc utiliser la voix
         // brute ici ne change rien au niveau, seulement à la qualité.
-        // FIX (v7.6.439→440) : +5dB (retour #2) puis +2.5dB de plus (retour
-        // #3 : "encore -2/-3dB de voix") = +7.5dB net sur instGainDb en
-        // style Bus partagé. Un seul levier existe dans mixVocalWithInst
-        // (le ratio inst/voix) — chaque demande "voix plus basse" ou
-        // "instrumental plus fort" passe forcément par ici.
-        const effectiveInstGainDb = (sendBusBlob || leadOnlyBlob) ? instGainDb + 7.5 : instGainDb;
+        // FIX (v7.6.439→442) : +5dB (retour #2), +2.5dB (retour #3), puis
+        // +1.5dB de plus (retour #4 : "encore -1.5dB de voix") = +9.0dB net
+        // sur instGainDb en style Bus partagé. Un seul levier existe dans
+        // mixVocalWithInst (le ratio inst/voix) — chaque demande "voix plus
+        // basse" ou "instrumental plus fort" passe forcément par ici.
+        const effectiveInstGainDb = (sendBusBlob || leadOnlyBlob) ? instGainDb + 9.0 : instGainDb;
         let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, effectiveInstGainDb, instOffsetMs);
         instRaw = null; // FIX mémoire : relâché dès que possible
         vocalRaw = null; // FIX mémoire : plus besoin après le mixage, relâché ici
