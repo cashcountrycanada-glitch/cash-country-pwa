@@ -1916,7 +1916,83 @@ export const studioService = {
     try { return await audioBufferToBlob(outBuf); } finally { await outCtx.close(); }
   },
 
-  // ── Ajustements "moins agressif" — 2e passe Tunee (v7.6.439) ───────────────
+  // ── Version DÉCOUPÉE (chunked) de applySharedReverbBus — v7.6.442 ──────────
+  // FIX "crash mémoire répétés à la masterisation" : la version ci-dessus
+  // alloue ~8-10 tableaux Float32Array PLEINE LONGUEUR (feed L/R, early
+  // reflections L/R, wet L/R, buffers de delay comb/allpass...) en une seule
+  // passe — sur un mix complet de ~4min stéréo 48kHz, ça représente plusieurs
+  // centaines de Mo simultanément, exactement le pattern qui faisait déjà
+  // crasher l'app ailleurs (OOM iOS) avant d'être corrigé par un rendu
+  // segmenté de 40s. Cette version applique le même principe ici : traite
+  // par blocs de ~40s avec un chevauchement d'1.5s (crossfade linéaire dans
+  // la zone de recouvrement) pour éviter tout clic à la jointure — la queue
+  // de reverb (~700-800ms) tient largement dans ce chevauchement. Chaque
+  // bloc libère sa mémoire avant le suivant (pause GC explicite).
+  async applySharedReverbBusChunked(
+    dryBlob: Blob, sendBusBlob: Blob, wetAmount: number = 0.10,
+    chunkSec: number = 40, overlapSec: number = 1.5
+  ): Promise<Blob> {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    let dryBuf: AudioBuffer, sendBuf: AudioBuffer;
+    try {
+      dryBuf  = await ctx.decodeAudioData(await dryBlob.arrayBuffer());
+      // Si dry et send sont le MÊME blob (cas du "glue final" auto-alimenté),
+      // pas besoin de décoder deux fois — économie mémoire non négligeable
+      // sur le plus gros buffer du pipeline.
+      sendBuf = (sendBusBlob === dryBlob) ? dryBuf : await ctx.decodeAudioData(await sendBusBlob.arrayBuffer());
+    } finally { await ctx.close(); }
+
+    const sr = dryBuf.sampleRate;
+    const len = dryBuf.length;
+    const dL = dryBuf.getChannelData(0), dR = dryBuf.numberOfChannels > 1 ? dryBuf.getChannelData(1) : dL;
+    const sL0 = sendBuf.getChannelData(0), sR0 = sendBuf.numberOfChannels > 1 ? sendBuf.getChannelData(1) : sL0;
+    const n = Math.min(len, sL0.length);
+
+    const wetL = new Float32Array(len), wetR = new Float32Array(len);
+    const chunkLen = Math.max(1, Math.floor(chunkSec * sr));
+    const overlapLen = Math.min(chunkLen - 1, Math.max(1, Math.floor(overlapSec * sr)));
+    const stepLen = chunkLen - overlapLen;
+
+    for (let start = 0; start < len; start += stepLen) {
+      const end = Math.min(start + chunkLen, len);
+      const segLen = end - start;
+      const segEndSrc = Math.min(end, n);
+      const segL = new Float32Array(segLen), segR = new Float32Array(segLen);
+      if (segEndSrc > start) {
+        segL.set(sL0.subarray(start, segEndSrc));
+        segR.set(sR0.subarray(start, segEndSrc));
+      }
+      const segWet = _busPlateReverbWet(segL, segR, sr);
+      for (let i = 0; i < segLen; i++) {
+        const g = (start > 0 && i < overlapLen) ? i / overlapLen : 1;
+        const idx = start + i;
+        if (g >= 1) { wetL[idx] = segWet.L[i]; wetR[idx] = segWet.R[i]; }
+        else {
+          wetL[idx] = wetL[idx] * (1 - g) + segWet.L[i] * g;
+          wetR[idx] = wetR[idx] * (1 - g) + segWet.R[i] * g;
+        }
+      }
+      // Pause GC entre chaque bloc — laisse le moteur JS libérer la mémoire
+      // du bloc précédent avant d'allouer le suivant.
+      await new Promise<void>(r => setTimeout(r, 40));
+      if (end >= len) break;
+    }
+
+    const outL = new Float32Array(len), outR = new Float32Array(len);
+    for (let i = 0; i < len; i++) {
+      outL[i] = dL[i] + wetL[i] * wetAmount;
+      outR[i] = dR[i] + wetR[i] * wetAmount;
+    }
+    let peak = 0;
+    for (let i = 0; i < len; i++) peak = Math.max(peak, Math.abs(outL[i]), Math.abs(outR[i]));
+    if (peak > 0.97) { const g = 0.97 / peak; for (let i = 0; i < len; i++) { outL[i] *= g; outR[i] *= g; } }
+
+    const outCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const outBuf = outCtx.createBuffer(2, len, sr);
+    outBuf.getChannelData(0).set(outL); outBuf.getChannelData(1).set(outR);
+    try { return await audioBufferToBlob(outBuf); } finally { await outCtx.close(); }
+  },
+
   // Léger EQ en cloche (peaking) — coupe 2-3kHz sur la voix pour désengorger
   // les médiums-aigus, sans toucher l'instrumental. Formules RBJ standard.
   async applyPeakingEQ(blob: Blob, freqHz: number, gainDb: number, Q: number = 1.2): Promise<Blob> {

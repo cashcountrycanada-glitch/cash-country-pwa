@@ -1117,7 +1117,7 @@ export default function MasteringEngine({
       // demande "aucun effet supplémentaire" de Tunee, qui porte sur la
       // chaîne LEAD, voir commentaire détaillé au Mode B plus bas.)
       if (sendBusBlob) {
-        vBlob = await studioService.applySharedReverbBus(vBlob, sendBusBlob, 0.12);
+        vBlob = await studioService.applySharedReverbBusChunked(vBlob, sendBusBlob, 0.12);
       }
       if (sendBusBlob || leadOnlyBlob) {
         // Compresseur très léger — ne travaille que sur les pics (threshold
@@ -1172,7 +1172,10 @@ export default function MasteringEngine({
           setProgressLabel('Bus partagé — réverbération courte...'); setProgress(64);
           await new Promise<void>(r => setTimeout(r, 100));
           const vocalRawBlob = await audioBufferToBlob(vocalForMix);
-          const vocalRawWithReverbBlob = await studioService.applySharedReverbBus(vocalRawBlob, sendBusBlob, 0.12);
+          // FIX mémoire (v7.6.442) : version découpée (chunks 40s) — voir
+          // applySharedReverbBusChunked, même principe que pour le glue
+          // final plus bas.
+          const vocalRawWithReverbBlob = await studioService.applySharedReverbBusChunked(vocalRawBlob, sendBusBlob, 0.12);
           vocalForMix = await decodeBlob(vocalRawWithReverbBlob);
         }
         if (sendBusBlob || leadOnlyBlob) {
@@ -1182,13 +1185,17 @@ export default function MasteringEngine({
           // Compresseur très léger — seuil haut (ne touche que les pics),
           // garde la dynamique naturelle ("si elle sonne plate, c'est trop").
           vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 2.0, 20, 80, -12);
+          await new Promise<void>(r => setTimeout(r, 60)); // FIX mémoire (v7.6.441) : pause GC entre chaque passe EQ
           setProgressLabel('Bus partagé — EQ voix...'); setProgress(66);
           // Creux 2-3kHz (nasillard) + creux 4-6kHz (métallique) +
           // boost 200-400Hz (corps) + shelf 8kHz (adoucir l'aigu) —
           // objectif voix chaude/naturelle plutôt que brillante/agressive.
           vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 2500, -2.0, 0.7);
+          await new Promise<void>(r => setTimeout(r, 60));
           vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 5000, -1.5, 1.5);
+          await new Promise<void>(r => setTimeout(r, 60));
           vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 300, 1.5, 0.7);
+          await new Promise<void>(r => setTimeout(r, 60));
           vBlobTone = await studioService.applyHighShelf(vBlobTone, 8000, -0.5);
           vocalForMix = await decodeBlob(vBlobTone);
         }
@@ -1217,17 +1224,22 @@ export default function MasteringEngine({
         // widening qui recolorerait l'instrumental Tunee déjà masterisé (voir
         // commentaire détaillé au-dessus de la fonction).
         let fullM = await finalizeFullMix(fullRaw, settings);
-        // FIX "recoller voix + instru dans le même espace" (v7.6.439) : très
-        // légère reverb room commune (10%) sur le mix COMPLET (voix+instru),
-        // demandée par Tunee — auto-send (le mix lui-même alimente la reverb),
-        // pas de bus séparé nécessaire pour un glue aussi discret.
-        if (sendBusBlob || leadOnlyBlob) {
-          setProgressLabel('Bus partagé — glue final...'); setProgress(82);
-          await new Promise<void>(r => setTimeout(r, 100));
-          const fullMBlobForGlue = await audioBufferToBlob(fullM);
-          const fullMWithGlueBlob = await studioService.applySharedReverbBus(fullMBlobForGlue, fullMBlobForGlue, 0.10);
-          fullM = await decodeBlob(fullMWithGlueBlob);
-        }
+        // FIX "crash mémoire répétés à la masterisation" (v7.6.441→442) :
+        // le "glue final" (v7.6.439, reverb room 10% sur le mix COMPLET
+        // voix+instrumental) avait été retiré en 441 après des crashs OOM —
+        // c'est le plus gros buffer du pipeline (~4min stéréo 48kHz) et
+        // l'ancienne fonction en faisait une passe unique non découpée.
+        // Réintroduit ici avec applySharedReverbBusChunked() : traitement
+        // par blocs de 40s avec chevauchement/crossfade de 1.5s (la queue de
+        // reverb, ~700-800ms, tient largement dedans — pas de clic à la
+        // jointure), et libération mémoire entre chaque bloc. Le "dry" et le
+        // "send" sont le MÊME blob (auto-alimenté) — la fonction ne le
+        // décode qu'une fois dans ce cas, pas deux.
+        setProgressLabel('Bus partagé — glue final...'); setProgress(82);
+        await new Promise<void>(r => setTimeout(r, 150));
+        const fullMBlobForGlue = await audioBufferToBlob(fullM);
+        const fullMWithGlueBlob = await studioService.applySharedReverbBusChunked(fullMBlobForGlue, fullMBlobForGlue, 0.10);
+        fullM = await decodeBlob(fullMWithGlueBlob);
         fullRaw = null; // FIX mémoire : relâché dès que possible, avant l'encodage
         setFullMastered(fullM);
         setOutputFullLufs(Math.round((await analyzeLoudness(fullM)) * 10) / 10);
