@@ -2115,8 +2115,11 @@ export const studioService = {
     // slapback à bande (tape echo) n'est jamais aussi large-bande que le
     // signal direct, ça lui donne son caractère "vintage" plutôt qu'un
     // simple doublon numérique.
-    const tapL = _busLPF(_busHPF(lL, 200, sr), 8000, sr);
-    const tapR = _busLPF(_busHPF(lR, 200, sr), 8000, sr);
+    // FIX v9 Tunee (v7.6.444) : bande resserrée à 300Hz-5kHz (au lieu de
+    // 200Hz-8kHz) — "donne de l'espace sans masquer la voix ni ajouter" de
+    // dureté dans l'écho, même à un mix plus présent (18%).
+    const tapL = _busLPF(_busHPF(lL, 300, sr), 5000, sr);
+    const tapR = _busLPF(_busHPF(lR, 300, sr), 5000, sr);
 
     const delaySamples = Math.round(delayMs * sr / 1000);
     const outL = new Float32Array(len), outR = new Float32Array(len);

@@ -889,90 +889,126 @@ const PRESET_CATEGORIES: { id: string; label: string; keys: string[] }[] = [
 ];
 
 const PRESETS: Record<string, { label: string; emoji: string; description: string; settings: MasterSettings }> = {
+  // FIX "voix source naturellement sombre" (v7.6.446) : tous les presets
+  // ci-dessous ont été revus à la lumière de l'analyse spectrale de la voix
+  // brute (enregistrée en Nissan Kicks) — voir le détail complet dans le
+  // commentaire de cash_country. Logique appliquée : les presets déjà
+  // pensés "brillants/présents" (country_bright, airy, radio, punchy,
+  // youtube, podcast) n'ont pas besoin d'aide, ils compensent déjà. Les
+  // presets neutres ou sombres par accident (country, country_live,
+  // studio_vocal, les 3 broadcast) reçoivent un boost aigus/présence
+  // modéré. Les presets sombres PAR INTENTION esthétique (Velvet = velouté,
+  // Vintage = rétro) sont modérés plutôt qu'inversés — on garde leur
+  // caractère, juste moins sombre qu'avant sur une source déjà sombre.
   // ── Distribution ──
   spotify: {
     label: 'Spotify / Apple Music', emoji: '🎵',
     description: '-14 LUFS · Streaming standard',
-    settings: { lowGain: 1.5, midGain: 0.5, highGain: 1.0, threshold: -18, ratio: 3, attack: 10, release: 150, ceiling: -1.0, targetLufs: -14 },
+    settings: { lowGain: 1.5, midGain: 1.0, highGain: 1.5, threshold: -18, ratio: 3, attack: 10, release: 150, ceiling: -1.0, targetLufs: -14 },
   },
   youtube: {
     label: 'YouTube', emoji: '▶',
     description: '-14 LUFS · Norme officielle YouTube 2026',
-    settings: { lowGain: 2.0, midGain: 0.0, highGain: 1.5, threshold: -16, ratio: 4, attack: 8, release: 120, ceiling: -1.0, targetLufs: -14 },
+    settings: { lowGain: 2.0, midGain: 0.5, highGain: 2.0, threshold: -16, ratio: 4, attack: 8, release: 120, ceiling: -1.0, targetLufs: -14 },
   },
   podcast: {
     label: 'Podcast / Voix', emoji: '🎙',
     description: '-16 LUFS · Clarté maximale voix',
-    settings: { lowGain: -1.0, midGain: 3.0, highGain: 1.5, threshold: -20, ratio: 3, attack: 15, release: 200, ceiling: -1.5, targetLufs: -16 },
+    settings: { lowGain: -1.0, midGain: 3.0, highGain: 2.0, threshold: -20, ratio: 3, attack: 15, release: 200, ceiling: -1.5, targetLufs: -16 },
   },
   // ── Country ──
   cash_country: {
     label: 'Cash Country', emoji: '🖤🤠',
     description: 'Baryton grave - grain analogique Johnny Cash / Elvis',
-    settings: { lowGain: 1.5, midGain: 1.5, highGain: -0.5, threshold: -22, ratio: 3, attack: 25, release: 300, ceiling: -1.5, targetLufs: -14 },
+    // FIX "voix source naturellement sombre" (v7.6.445) : analyse spectrale
+    // de la voix brute (enregistrée en Nissan Kicks) — quasi aucune énergie
+    // naturelle au-dessus de 2kHz, sifflantes/transitoires ~14dB sous le
+    // niveau de crête (attendu : plutôt -6 à -10dB sur une prise de près
+    // bien captée). Cause probable : absorption des aigus par l'habitacle
+    // (matériaux mous, pas de surfaces dures) et/ou timbre vocal naturel —
+    // les deux sont plausibles, pas de test comparatif pour trancher.
+    // highGain -0.5→+1.5 (le shelf 9kHz coupait encore plus une source déjà
+    // sombre) et midGain 1.5→2.0 (un peu plus de présence 3.5kHz, la même
+    // zone que le boost validé côté Bus partagé/Tunee). lowGain inchangé :
+    // le corps (250-500Hz) était déjà bien représenté à la source. Garde
+    // l'esprit "baryton grave" du preset — correction, pas un preset brillant.
+    settings: { lowGain: 1.5, midGain: 2.0, highGain: 1.5, threshold: -22, ratio: 3, attack: 25, release: 300, ceiling: -1.5, targetLufs: -14 },
   },
   country: {
     label: 'Country Warm', emoji: '🤠',
     description: 'Son chaleureux, graves riches',
-    settings: { lowGain: 2.0, midGain: 0.5, highGain: 0.5, threshold: -20, ratio: 3.5, attack: 15, release: 200, ceiling: -1.5, targetLufs: -14 },
+    settings: { lowGain: 2.0, midGain: 1.5, highGain: 2.0, threshold: -20, ratio: 3.5, attack: 15, release: 200, ceiling: -1.5, targetLufs: -14 },
   },
   country_live: {
     label: 'Country Live', emoji: '🎸',
     description: 'Energie scène, présence naturelle',
-    settings: { lowGain: 2.0, midGain: 1.5, highGain: 1.0, threshold: -16, ratio: 4, attack: 8, release: 120, ceiling: -1.0, targetLufs: -12 },
+    settings: { lowGain: 2.0, midGain: 1.5, highGain: 1.8, threshold: -16, ratio: 4, attack: 8, release: 120, ceiling: -1.0, targetLufs: -12 },
   },
   country_bright: {
     label: 'Country Bright', emoji: '☀️',
     description: 'Aigus brillants, voix projetée',
-    settings: { lowGain: 1.0, midGain: 0.5, highGain: 3.5, threshold: -18, ratio: 3, attack: 12, release: 160, ceiling: -1.0, targetLufs: -13 },
+    // Déjà pensé brillant — highGain 3.5 compense déjà largement, pas
+    // touché. Léger plus de présence médium seulement.
+    settings: { lowGain: 1.0, midGain: 1.0, highGain: 3.5, threshold: -18, ratio: 3, attack: 12, release: 160, ceiling: -1.0, targetLufs: -13 },
   },
   // ── Vocal ──
   studio_vocal: {
     label: 'Studio Vocal', emoji: '🎤',
     description: 'Voix présente, son pro',
-    settings: { lowGain: 1.0, midGain: 2.5, highGain: 1.5, threshold: -18, ratio: 3, attack: 10, release: 150, ceiling: -1.0, targetLufs: -14 },
+    settings: { lowGain: 1.0, midGain: 2.5, highGain: 2.0, threshold: -18, ratio: 3, attack: 10, release: 150, ceiling: -1.0, targetLufs: -14 },
   },
   velvet: {
     label: 'Velvet', emoji: '🎼',
     description: 'Son velouté, chaleureux',
-    settings: { lowGain: 2.5, midGain: -0.5, highGain: -1.0, threshold: -22, ratio: 3, attack: 15, release: 250, ceiling: -1.5, targetLufs: -14 },
+    // Sombre PAR INTENTION (velouté) — modéré plutôt qu'inversé : highGain
+    // -1.0→0.0 (neutre, plus de cut) pour ne pas cumuler avec la noirceur
+    // déjà présente à la source, mais pas de boost non plus (garderait
+    // moins le côté "velvet" que si on inversait complètement en positif).
+    settings: { lowGain: 2.5, midGain: -0.5, highGain: 0.0, threshold: -22, ratio: 3, attack: 15, release: 250, ceiling: -1.5, targetLufs: -14 },
   },
   airy: {
     label: 'Airy & Bright', emoji: '✨',
     description: 'Légèreté, aigus cristallins',
+    // Déjà le preset le plus brillant du lot (highGain 4.0) — aucun
+    // changement nécessaire, compense déjà largement la source sombre.
     settings: { lowGain: -1.0, midGain: 0.5, highGain: 4.0, threshold: -20, ratio: 2.5, attack: 20, release: 200, ceiling: -1.0, targetLufs: -14 },
   },
   // ── Broadcast ──
   broadcast_canada: {
     label: 'Radio Canada / USA', emoji: '📡',
     description: '-24 LUFS · Standard ATSC A/85',
-    settings: { lowGain: 1.5, midGain: 0.5, highGain: 0.5, threshold: -28, ratio: 2, attack: 20, release: 300, ceiling: -2.0, targetLufs: -24 },
+    settings: { lowGain: 1.5, midGain: 1.0, highGain: 1.5, threshold: -28, ratio: 2, attack: 20, release: 300, ceiling: -2.0, targetLufs: -24 },
   },
   broadcast_ebu: {
     label: 'Radio Europe / EBU', emoji: '🌍',
     description: '-23 LUFS · Standard EBU R128',
-    settings: { lowGain: 1.5, midGain: 0.5, highGain: 0.5, threshold: -27, ratio: 2, attack: 20, release: 300, ceiling: -1.0, targetLufs: -23 },
+    settings: { lowGain: 1.5, midGain: 1.0, highGain: 1.5, threshold: -27, ratio: 2, attack: 20, release: 300, ceiling: -1.0, targetLufs: -23 },
   },
   broadcast_country: {
     label: 'Radio Country Broadcast', emoji: '🤠📡',
     description: '-23 LUFS · Country pour diffusion',
-    settings: { lowGain: 2.5, midGain: 0.0, highGain: 0.5, threshold: -27, ratio: 2, attack: 20, release: 300, ceiling: -1.5, targetLufs: -23 },
+    settings: { lowGain: 2.5, midGain: 1.0, highGain: 1.5, threshold: -27, ratio: 2, attack: 20, release: 300, ceiling: -1.5, targetLufs: -23 },
   },
   // ── Impact ──
   radio: {
     label: 'Radio / Loud', emoji: '📻',
     description: '-13 LUFS · Fort et percutant',
+    // Déjà brillant (highGain 3.0) — pas touché.
     settings: { lowGain: 0.0, midGain: 1.5, highGain: 3.0, threshold: -15, ratio: 5, attack: 5, release: 100, ceiling: -1.0, targetLufs: -13 },
   },
   punchy: {
     label: 'Punchy', emoji: '💥',
     description: 'Attaque forte, présence mix',
+    // Déjà présent (highGain 2.0, midGain 3.5) — pas touché.
     settings: { lowGain: 0.5, midGain: 3.5, highGain: 2.0, threshold: -15, ratio: 5, attack: 3, release: 80, ceiling: -1.0, targetLufs: -13 },
   },
   vintage: {
     label: 'Vintage', emoji: '📯',
     description: 'Chaleur analogique, son rétro',
-    settings: { lowGain: 4.0, midGain: -2.0, highGain: -1.5, threshold: -22, ratio: 2.5, attack: 20, release: 300, ceiling: -2.0, targetLufs: -16 },
+    // Sombre PAR INTENTION (rétro/lo-fi) — modéré, pas inversé : highGain
+    // -1.5→-0.5 et midGain -2.0→-1.0, garde le creux médium caractéristique
+    // du son "vintage" mais moins sévère sur une source déjà sombre.
+    settings: { lowGain: 4.0, midGain: -1.0, highGain: -0.5, threshold: -22, ratio: 2.5, attack: 20, release: 300, ceiling: -2.0, targetLufs: -16 },
   },
 };
 
@@ -1104,11 +1140,11 @@ export default function MasteringEngine({
           setProgressLabel(`Encodage voix… (${remaining}s)`);
         }
       });
-      // FIX "repartir de zéro, trop agressif" (v7.6.440) : chaîne complète
-      // resserrée suite au 3e retour Tunee. Ordre imposé : compresseur léger
-      // → EQ → slapback subtil → volume. Aucun autre effet sur le lead.
+      // FIX v9 "manque de présence" (v7.6.444) — 5e retour Tunee, cette fois
+      // pour redonner du caractère après 4 rounds consécutifs d'atténuation :
+      // ordre inchangé (compresseur → EQ → slapback → volume).
       if (leadOnlyBlob) {
-        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 65, 0.08);
+        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 80, 0.18);
       }
       // FIX "reverb trop prononcée" (v7.6.435) : même principe que pour le
       // Mode B — la reverb du Bus partagé s'applique APRÈS masterAudio()
@@ -1120,15 +1156,22 @@ export default function MasteringEngine({
         vBlob = await studioService.applySharedReverbBusChunked(vBlob, sendBusBlob, 0.12);
       }
       if (sendBusBlob || leadOnlyBlob) {
-        // Compresseur très léger — ne travaille que sur les pics (threshold
-        // haut), garde la dynamique naturelle.
-        vBlob = await studioService.applyGentleCompressor(vBlob, 2.0, 20, 80, -12);
-        // EQ 4 étages : creux 2-3kHz (nasillard) + creux 4-6kHz (métallique)
-        // + boost 200-400Hz (corps) + shelf 8kHz (adoucir l'aigu).
+        // Compression resserrée mais ciblée — ratio 3:1, attack plus lent
+        // (laisse passer l'attaque), release plus long (naturel), seuil
+        // baissé pour viser ~3-4dB de réduction (estimation ; pas de
+        // mesure de gain reduction en temps réel dans ce pipeline offline,
+        // à confirmer à l'oreille/à l'export).
+        vBlob = await studioService.applyGentleCompressor(vBlob, 3.0, 15, 100, -14);
+        // EQ : creux nasalité (2.5kHz) INCHANGÉ, corps (300Hz) INCHANGÉ.
+        // FIX conflit : l'ancien creux à 5kHz (-1.5dB, round précédent) est
+        // RETIRÉ — il se serait battu avec le nouveau boost 3.5-5kHz demandé
+        // ici, en plein sur la même zone. Boost présence 3.5-5kHz (et non
+        // 2-3kHz, qui reste la zone de nasalité à éviter) + shelf 8kHz
+        // repassé en boost (+1dB, "de l'air") au lieu du léger creux d'avant.
         vBlob = await studioService.applyPeakingEQ(vBlob, 2500, -2.0, 0.7);
-        vBlob = await studioService.applyPeakingEQ(vBlob, 5000, -1.5, 1.5);
         vBlob = await studioService.applyPeakingEQ(vBlob, 300, 1.5, 0.7);
-        vBlob = await studioService.applyHighShelf(vBlob, 8000, -0.5);
+        vBlob = await studioService.applyPeakingEQ(vBlob, 4250, 2.0, 1.5);
+        vBlob = await studioService.applyHighShelf(vBlob, 8000, 1.0);
       }
       vocalUrlRef.current = URL.createObjectURL(vBlob);
       try { (window as any).__breadcrumb?.(`💿 Voix masterisée encodée : ${vBlob.size}B, type=${vBlob.type}`); } catch {}
@@ -1152,20 +1195,16 @@ export default function MasteringEngine({
         // changé, et les harmonies/double devenaient inaudibles, noyés sous
         // la reverb désormais bien plus dense que le reste du groupe voix.
         let vocalForMix: AudioBuffer = vocalRaw!;
-        // FIX "repartir de zéro, trop agressif" (v7.6.440) — 3e retour Tunee :
-        // chaîne resserrée dans l'ordre imposé : compresseur léger → EQ →
-        // slapback subtil → volume, aucun autre effet sur le lead. La reverb
+        // FIX v9 "manque de présence" (v7.6.444) — 5e retour Tunee. La reverb
         // courte du bus (harmonies/double, section 4 du doc envoyé à Tunee)
-        // et le glue final (section 7) ne sont PAS retirés : ils répondent à
-        // un besoin différent (cohésion des harmonies, "même espace" du mix
-        // complet) que Tunee a lui-même demandé précédemment et ne conteste
-        // pas ici — sa demande "aucun effet supplémentaire" porte sur la
-        // chaîne LEAD spécifiquement.
+        // et le glue final (section 7) restent en place, inchangés : ils
+        // répondent à un besoin différent (cohésion des harmonies, "même
+        // espace" du mix complet).
         if (leadOnlyBlob) {
           setProgressLabel('Bus partagé — slapback delay...'); setProgress(62);
           await new Promise<void>(r => setTimeout(r, 100));
           const vocalRawBlobForSlap = await audioBufferToBlob(vocalForMix);
-          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 65, 0.08);
+          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 80, 0.18);
           vocalForMix = await decodeBlob(vocalRawWithSlapBlob);
         }
         if (sendBusBlob) {
@@ -1179,24 +1218,29 @@ export default function MasteringEngine({
           vocalForMix = await decodeBlob(vocalRawWithReverbBlob);
         }
         if (sendBusBlob || leadOnlyBlob) {
-          setProgressLabel('Bus partagé — compresseur léger...'); setProgress(65);
+          setProgressLabel('Bus partagé — compresseur...'); setProgress(65);
           await new Promise<void>(r => setTimeout(r, 100));
           let vBlobTone = await audioBufferToBlob(vocalForMix);
-          // Compresseur très léger — seuil haut (ne touche que les pics),
-          // garde la dynamique naturelle ("si elle sonne plate, c'est trop").
-          vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 2.0, 20, 80, -12);
+          // Compression resserrée mais ciblée — ratio 3:1, attack plus lent,
+          // release plus long, seuil baissé pour viser ~3-4dB de réduction
+          // (estimation ; pas de mesure de gain reduction en temps réel dans
+          // ce pipeline offline, à confirmer à l'oreille/à l'export).
+          vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 3.0, 15, 100, -14);
           await new Promise<void>(r => setTimeout(r, 60)); // FIX mémoire (v7.6.441) : pause GC entre chaque passe EQ
           setProgressLabel('Bus partagé — EQ voix...'); setProgress(66);
-          // Creux 2-3kHz (nasillard) + creux 4-6kHz (métallique) +
-          // boost 200-400Hz (corps) + shelf 8kHz (adoucir l'aigu) —
-          // objectif voix chaude/naturelle plutôt que brillante/agressive.
+          // Creux nasalité (2.5kHz) INCHANGÉ, corps (300Hz) INCHANGÉ.
+          // FIX conflit : l'ancien creux à 5kHz (round précédent) RETIRÉ —
+          // se serait battu avec le nouveau boost 3.5-5kHz ci-dessous, sur
+          // la même zone. Boost présence 3.5-5kHz (pas 2-3kHz, qui reste la
+          // zone de nasalité à éviter) + shelf 8kHz repassé en boost (+1dB,
+          // "de l'air") au lieu du léger creux d'avant.
           vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 2500, -2.0, 0.7);
-          await new Promise<void>(r => setTimeout(r, 60));
-          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 5000, -1.5, 1.5);
           await new Promise<void>(r => setTimeout(r, 60));
           vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 300, 1.5, 0.7);
           await new Promise<void>(r => setTimeout(r, 60));
-          vBlobTone = await studioService.applyHighShelf(vBlobTone, 8000, -0.5);
+          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 4250, 2.0, 1.5);
+          await new Promise<void>(r => setTimeout(r, 60));
+          vBlobTone = await studioService.applyHighShelf(vBlobTone, 8000, 1.0);
           vocalForMix = await decodeBlob(vBlobTone);
         }
 
@@ -1206,12 +1250,12 @@ export default function MasteringEngine({
         // (voir commentaire plus haut). mixVocalWithInst normalise chaque
         // signal indépendamment à -1dBFS avant mixage, donc utiliser la voix
         // brute ici ne change rien au niveau, seulement à la qualité.
-        // FIX (v7.6.439→442) : +5dB (retour #2), +2.5dB (retour #3), puis
-        // +1.5dB de plus (retour #4 : "encore -1.5dB de voix") = +9.0dB net
-        // sur instGainDb en style Bus partagé. Un seul levier existe dans
-        // mixVocalWithInst (le ratio inst/voix) — chaque demande "voix plus
-        // basse" ou "instrumental plus fort" passe forcément par ici.
-        const effectiveInstGainDb = (sendBusBlob || leadOnlyBlob) ? instGainDb + 9.0 : instGainDb;
+        // FIX (v7.6.439→444) : +5dB (retour #2), +2.5dB (retour #3), +1.5dB
+        // (retour #4), puis -1.5dB (retour #5 v9 : "remonter la voix de
+        // 1.5dB, pas autant que la v7, mais assez pour qu'elle soit le point
+        // focal") = +7.5dB net sur instGainDb en style Bus partagé. Un seul
+        // levier existe dans mixVocalWithInst (le ratio inst/voix).
+        const effectiveInstGainDb = (sendBusBlob || leadOnlyBlob) ? instGainDb + 7.5 : instGainDb;
         let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, effectiveInstGainDb, instOffsetMs);
         instRaw = null; // FIX mémoire : relâché dès que possible
         vocalRaw = null; // FIX mémoire : plus besoin après le mixage, relâché ici
