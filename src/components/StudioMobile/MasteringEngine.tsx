@@ -1140,38 +1140,34 @@ export default function MasteringEngine({
           setProgressLabel(`Encodage voix… (${remaining}s)`);
         }
       });
-      // FIX v9 "manque de présence" (v7.6.444) — 5e retour Tunee, cette fois
-      // pour redonner du caractère après 4 rounds consécutifs d'atténuation :
-      // ordre inchangé (compresseur → EQ → slapback → volume).
-      if (leadOnlyBlob) {
-        vBlob = await studioService.applySlapbackDelay(vBlob, leadOnlyBlob, 80, 0.18);
-      }
+      // FIX v10 "trop d'aigus, écho douteux, force perdue" (v7.6.447) — 6e
+      // retour utilisateur : slapback RETIRÉ complètement (doute légitime
+      // que ce soit la bonne référence pour Georges Hamel — le slapback est
+      // plutôt signature Sun Records/rockabilly Cash-Elvis, pas forcément
+      // ce que fait Hamel). Tout le caractère "deuxième voix" repose
+      // maintenant sur le double tracking (voir StudioService.ts, poussé
+      // plus fort en compensation). EQ tirée vers le bas (le boost 3.5-5kHz
+      // + shelf 8kHz du round précédent étaient trop, cumulés avec les
+      // presets déjà corrigés). Compression assouplie pour redonner de la
+      // dynamique/puissance naturelle ("force à la Johnny Cash").
       // FIX "reverb trop prononcée" (v7.6.435) : même principe que pour le
       // Mode B — la reverb du Bus partagé s'applique APRÈS masterAudio()
       // (donc sur vocalM déjà traitée), jamais avant, pour l'export "voix
-      // seule" aussi. (Reverb harmonies/double — non concernée par la
-      // demande "aucun effet supplémentaire" de Tunee, qui porte sur la
-      // chaîne LEAD, voir commentaire détaillé au Mode B plus bas.)
+      // seule" aussi.
       if (sendBusBlob) {
         vBlob = await studioService.applySharedReverbBusChunked(vBlob, sendBusBlob, 0.12);
       }
       if (sendBusBlob || leadOnlyBlob) {
-        // Compression resserrée mais ciblée — ratio 3:1, attack plus lent
-        // (laisse passer l'attaque), release plus long (naturel), seuil
-        // baissé pour viser ~3-4dB de réduction (estimation ; pas de
-        // mesure de gain reduction en temps réel dans ce pipeline offline,
-        // à confirmer à l'oreille/à l'export).
-        vBlob = await studioService.applyGentleCompressor(vBlob, 3.0, 15, 100, -14);
-        // EQ : creux nasalité (2.5kHz) INCHANGÉ, corps (300Hz) INCHANGÉ.
-        // FIX conflit : l'ancien creux à 5kHz (-1.5dB, round précédent) est
-        // RETIRÉ — il se serait battu avec le nouveau boost 3.5-5kHz demandé
-        // ici, en plein sur la même zone. Boost présence 3.5-5kHz (et non
-        // 2-3kHz, qui reste la zone de nasalité à éviter) + shelf 8kHz
-        // repassé en boost (+1dB, "de l'air") au lieu du léger creux d'avant.
+        // Compression assouplie — ratio 2.2:1 (au lieu de 3:1), seuil relevé
+        // (-13dB), garde plus de dynamique naturelle/de punch.
+        vBlob = await studioService.applyGentleCompressor(vBlob, 2.2, 18, 90, -13);
+        // EQ : creux nasalité (2.5kHz) et corps (300Hz) INCHANGÉS — non
+        // contestés. Boost présence 3.5-5kHz réduit (2.0→0.5dB, beaucoup
+        // plus discret) ; shelf 8kHz RETIRÉ (repassé neutre, 0dB — plus de
+        // boost d'air, c'est lui qui ajoutait le plus d'aigus perçus).
         vBlob = await studioService.applyPeakingEQ(vBlob, 2500, -2.0, 0.7);
         vBlob = await studioService.applyPeakingEQ(vBlob, 300, 1.5, 0.7);
-        vBlob = await studioService.applyPeakingEQ(vBlob, 4250, 2.0, 1.5);
-        vBlob = await studioService.applyHighShelf(vBlob, 8000, 1.0);
+        vBlob = await studioService.applyPeakingEQ(vBlob, 4250, 0.5, 1.5);
       }
       vocalUrlRef.current = URL.createObjectURL(vBlob);
       try { (window as any).__breadcrumb?.(`💿 Voix masterisée encodée : ${vBlob.size}B, type=${vBlob.type}`); } catch {}
@@ -1200,13 +1196,12 @@ export default function MasteringEngine({
         // et le glue final (section 7) restent en place, inchangés : ils
         // répondent à un besoin différent (cohésion des harmonies, "même
         // espace" du mix complet).
-        if (leadOnlyBlob) {
-          setProgressLabel('Bus partagé — slapback delay...'); setProgress(62);
-          await new Promise<void>(r => setTimeout(r, 100));
-          const vocalRawBlobForSlap = await audioBufferToBlob(vocalForMix);
-          const vocalRawWithSlapBlob = await studioService.applySlapbackDelay(vocalRawBlobForSlap, leadOnlyBlob, 80, 0.18);
-          vocalForMix = await decodeBlob(vocalRawWithSlapBlob);
-        }
+        // FIX v10 "trop d'aigus, écho douteux, force perdue" (v7.6.447) —
+        // 6e retour utilisateur : slapback RETIRÉ complètement (doute
+        // légitime que ce soit la bonne référence pour Georges Hamel — le
+        // slapback est plutôt signature Sun Records/rockabilly Cash-Elvis).
+        // Tout le caractère "deuxième voix" repose maintenant sur le double
+        // tracking (voir StudioService.ts, poussé plus fort en compensation).
         if (sendBusBlob) {
           setProgressLabel('Bus partagé — réverbération courte...'); setProgress(64);
           await new Promise<void>(r => setTimeout(r, 100));
@@ -1221,26 +1216,21 @@ export default function MasteringEngine({
           setProgressLabel('Bus partagé — compresseur...'); setProgress(65);
           await new Promise<void>(r => setTimeout(r, 100));
           let vBlobTone = await audioBufferToBlob(vocalForMix);
-          // Compression resserrée mais ciblée — ratio 3:1, attack plus lent,
-          // release plus long, seuil baissé pour viser ~3-4dB de réduction
-          // (estimation ; pas de mesure de gain reduction en temps réel dans
-          // ce pipeline offline, à confirmer à l'oreille/à l'export).
-          vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 3.0, 15, 100, -14);
+          // Compression assouplie — ratio 2.2:1 (au lieu de 3:1), seuil
+          // relevé (-13dB), garde plus de dynamique naturelle/de punch
+          // ("force à la Johnny Cash" perdue au round précédent).
+          vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 2.2, 18, 90, -13);
           await new Promise<void>(r => setTimeout(r, 60)); // FIX mémoire (v7.6.441) : pause GC entre chaque passe EQ
           setProgressLabel('Bus partagé — EQ voix...'); setProgress(66);
-          // Creux nasalité (2.5kHz) INCHANGÉ, corps (300Hz) INCHANGÉ.
-          // FIX conflit : l'ancien creux à 5kHz (round précédent) RETIRÉ —
-          // se serait battu avec le nouveau boost 3.5-5kHz ci-dessous, sur
-          // la même zone. Boost présence 3.5-5kHz (pas 2-3kHz, qui reste la
-          // zone de nasalité à éviter) + shelf 8kHz repassé en boost (+1dB,
-          // "de l'air") au lieu du léger creux d'avant.
+          // Creux nasalité (2.5kHz) et corps (300Hz) INCHANGÉS — non
+          // contestés. Boost présence 3.5-5kHz réduit (2.0→0.5dB, beaucoup
+          // plus discret) ; shelf 8kHz RETIRÉ (repassé neutre — c'est lui
+          // qui ajoutait le plus d'aigus perçus, "trop augmenté" signalé).
           vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 2500, -2.0, 0.7);
           await new Promise<void>(r => setTimeout(r, 60));
           vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 300, 1.5, 0.7);
           await new Promise<void>(r => setTimeout(r, 60));
-          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 4250, 2.0, 1.5);
-          await new Promise<void>(r => setTimeout(r, 60));
-          vBlobTone = await studioService.applyHighShelf(vBlobTone, 8000, 1.0);
+          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 4250, 0.5, 1.5);
           vocalForMix = await decodeBlob(vBlobTone);
         }
 

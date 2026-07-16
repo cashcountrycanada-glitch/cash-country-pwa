@@ -1778,14 +1778,12 @@ export const studioService = {
         const gainNode = offline.createGain();
         const tIdx = (m.track as any).trackIndex ?? 0;
         const isHarmonyLayer = tIdx >= 1 && tIdx <= 5;
-        // FIX "on approche mais pas assez" (v7.6.432) : le double tracking
-        // (idx=1, même mélodie à l'unisson) a besoin d'être BEAUCOUP plus
-        // proche du niveau de la voix principale qu'une harmonie classique
-        // (idx 2-5, notes différentes) — deux voix qui chantent la même
-        // ligne doivent sonner à peu près à égalité, alors qu'une harmonie
-        // trop forte peut vite sonner discordante. Plafond distinct et plus
-        // haut (0.95 au lieu de 0.85) et boost plus généreux (×1.6) pour le
-        // double uniquement ; les harmonies 2-5 gardent leur réglage inchangé.
+        // FIX "on mise tout sur le double tracking" (v7.6.447) : le slapback
+        // a été retiré du style Bus partagé (doute légitime que ce soit la
+        // bonne référence pour Georges Hamel) — le double tracking porte
+        // maintenant SEUL le caractère "deuxième voix". Plafond relevé à
+        // 1.0 (parité complète avec le lead, au lieu de 0.95) pour lui
+        // donner autant de poids qu'à la voix principale.
         const isDoubleTrack = tIdx === 1;
         // FIX "harmonies pas assez puissantes" (v7.6.427) : les harmonies
         // étaient si discrètes (gains 0.24-0.34 typiques) qu'on ne les
@@ -1794,7 +1792,7 @@ export const studioService = {
         // "plusieurs chanteurs proches" recherché doit s'entendre clairement,
         // surtout dans les sections denses (refrains).
         const baseGain = isDoubleTrack
-          ? Math.min(0.95, (m.track.gain ?? 1.0) * 1.6)
+          ? Math.min(1.0, (m.track.gain ?? 1.0) * 1.6)
           : isHarmonyLayer
           ? Math.min(0.85, (m.track.gain ?? 1.0) * 1.4)
           : Math.min(1.0, m.track.gain ?? 1.0);
@@ -2298,14 +2296,12 @@ export const studioService = {
 
       // 1. Double tracking — unisson, épaisseur naturelle humaine
       // Cash et Elvis rechanaient systématiquement leurs propres voix
-      // FIX "trop discret" (v7.6.431) : gain 0.34 le laissait plus discret
-      // que les harmonies elles-mêmes après boost mixdown (0.34×1.4=0.48 vs
-      // jusqu'à 0.45 pour les harmonies — proche mais pas dominant), alors
-      // qu'un double doit se sentir au moins autant qu'une harmonie. Monté
-      // à 0.55 (0.55×1.4=0.77, sous le plafond 0.85) — combiné au rééquilibrage
-      // dry/wet dans doubleTrack() (harmony-worker.js), l'effet doit
-      // maintenant clairement s'entendre plutôt que juste épaissir.
-      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.55, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
+      // FIX "on mise tout sur le double tracking" (v7.6.447) : le slapback
+      // a été retiré du style Bus partagé (doute sur la pertinence de cette
+      // référence pour Georges Hamel) — le double tracking porte maintenant
+      // SEUL le caractère "deuxième voix". Gain 0.55→0.65 (0.65×1.6=1.04,
+      // plafonné au nouveau cap 1.0 — parité complète avec le lead).
+      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.65, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
 
       // 2. +2 ST — seconde majeure, signature Alan Jackson (remplace l'ancien +5 ST/quarte,
       // hors zone sûre ±3 ST)
