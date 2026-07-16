@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.449';
+const BUILD_VERSION = 'v7.6.452';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -608,23 +608,31 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       ...t,
       gain: t.gain && t.gain > 1.0 ? 1.0 : t.gain,
     }));
-    // FIX "harmonies 3&5 pas séparées en pan" (v7.6.438) : migration
-    // automatique — l'utilisateur ne devrait pas avoir à régénérer ou
-    // régler un slider à la main juste pour une valeur de panoramique.
-    // Toute piste trackIndex 3 encore à son ANCIEN pan par défaut (0.0,
-    // centre — superposé au lead) passe à -0.55 ; toute piste trackIndex 5
-    // encore à son ancien pan (0.30) passe à +0.55. Ne touche QUE les
-    // pistes encore à la valeur par défaut d'origine — si l'utilisateur a
-    // déjà réglé le pan à la main pour une chanson, ce réglage est respecté
-    // et n'est jamais écrasé.
+    // FIX "panoramique harmonies trop large / mauvais ordre" (v7.6.452) :
+    // migration automatique, comme pour le fix précédent — l'utilisateur ne
+    // devrait pas avoir à régénérer ou régler un slider à la main. Vérifié
+    // par recherche (plusieurs sources convergentes) : les harmonies (même
+    // timing que le lead, notes différentes) doivent rester à 10-40% du
+    // centre, pas plus — au-delà, le "blend" avec le lead se perd. Le
+    // panoramique dur (35-55%, l'ancien réglage) est réservé aux doubles/
+    // parties indépendantes, pas aux harmonies. Le registre compte aussi :
+    // la plus grave (-3 ST) doit rester la PLUS proche du centre, pas la
+    // plus large comme c'était le cas. Cette migration reconnaît soit la
+    // valeur d'origine, soit la valeur du fix précédent (v7.6.438) pour
+    // chaque piste, et les fait toutes converger vers les nouvelles valeurs
+    // — sans jamais écraser un réglage pan fait à la main par l'utilisateur.
+    const PAN_MIGRATIONS: Record<number, { from: number[]; to: number }> = {
+      2: { from: [0.35],        to: 0.30 },
+      3: { from: [0.0, -0.55],  to: -0.25 },
+      4: { from: [-0.35],       to: -0.40 },
+      5: { from: [0.30, 0.55],  to: 0.35 },
+    };
     const repannedTracks = normalizedTracks.map((t: any) => {
-      if (t.trackIndex === 3 && t.isGenerated && Math.abs((t.pan ?? 0) - 0.0) < 0.001) {
-        return { ...t, pan: -0.55 };
-      }
-      if (t.trackIndex === 5 && t.isGenerated && Math.abs((t.pan ?? 0) - 0.30) < 0.001) {
-        return { ...t, pan: 0.55 };
-      }
-      return t;
+      const mig = PAN_MIGRATIONS[t.trackIndex];
+      if (!mig || !t.isGenerated) return t;
+      const currentPan = t.pan ?? 0;
+      const matchesOld = mig.from.some(v => Math.abs(currentPan - v) < 0.001);
+      return matchesOld ? { ...t, pan: mig.to } : t;
     });
     const cleanedProj = { ...proj, tracks: repannedTracks };
     // Toujours sauvegarder pour purger localStorage des doublons

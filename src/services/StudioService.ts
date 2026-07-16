@@ -2307,7 +2307,21 @@ export const studioService = {
 
       // 2. +2 ST — seconde majeure, signature Alan Jackson (remplace l'ancien +5 ST/quarte,
       // hors zone sûre ±3 ST)
-      { trackIndex: 2, trackLabel: 'Layer +2 ST',     pitch: 2,   gain: 0.30, pan: 0.35,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
+      // FIX "panoramique harmonies trop large / mauvais ordre" (v7.6.452) :
+      // recherche vérifiée (plusieurs sources convergentes) — les harmonies
+      // (même timing que le lead, notes différentes, PAS des doubles à
+      // l'unisson) doivent rester à 10-40% du centre, pas plus : au-delà,
+      // elles perdent le "blend" avec le lead qui fait le charme d'une
+      // harmonie. Le panoramique dur (35-55%, ce qu'on avait) est réservé
+      // aux doubles/parties indépendantes. Le registre compte aussi : les
+      // harmonies graves doivent rester PLUS proches du centre que les
+      // aiguës — l'ancien réglage faisait l'inverse (la plus grave, -3 ST,
+      // avait le panoramique le plus large à 55%). Toujours écarté de part
+      // et d'autre au sein de chaque paire de même sens (2&4 au-dessus,
+      // 3&5 en dessous) pour éviter la fusion en cluster (1 demi-ton
+      // d'écart entre elles, contrainte Rubber Band), mais dans une
+      // fourchette de largeur nettement plus modérée.
+      { trackIndex: 2, trackLabel: 'Layer +2 ST',     pitch: 2,   gain: 0.30, pan: 0.30,  emoji: '🎶', isDouble: false, suggestedFxId: 'harmony' },
 
       // 3. -3 ST — tierce grave, couleur Johnny Cash (remplace l'ancienne octave -12ST,
       // le pire cas historique pour les artefacts ET les crashs mémoire iOS)
@@ -2322,13 +2336,13 @@ export const studioService = {
       // dessous ne l'était pas — piste 3 recentrée à -0.55 (gauche dur),
       // hors du centre occupé par le lead, et piste 5 repoussée à +0.55
       // (droite dur), loin de la piste 2 (+0.35) au lieu de la chevaucher.
-      { trackIndex: 3, trackLabel: 'Layer -3 ST',     pitch: -3,  gain: 0.32, pan: -0.55,  emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
+      { trackIndex: 3, trackLabel: 'Layer -3 ST',     pitch: -3,  gain: 0.32, pan: -0.25,  emoji: '🔉', isDouble: false, suggestedFxId: 'octave_deep' },
 
       // 4. +3 ST — tierce, puissance Garth Brooks (remplace l'ancien +7 ST/quinte)
-      { trackIndex: 4, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.24, pan: -0.35, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 4, trackLabel: 'Layer +3 ST',     pitch: 3,   gain: 0.24, pan: -0.40, emoji: '✨', isDouble: false, suggestedFxId: 'harmony' },
 
       // 5. -2 ST — seconde grave, chaleur Elvis (remplace l'ancien -5 ST/quarte grave)
-      { trackIndex: 5, trackLabel: 'Layer -2 ST',     pitch: -2,  gain: 0.25, pan: 0.55,  emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
+      { trackIndex: 5, trackLabel: 'Layer -2 ST',     pitch: -2,  gain: 0.25, pan: 0.35,  emoji: '🎼', isDouble: false, suggestedFxId: 'harmony' },
     ];
     // Si targetTrackIndex spécifié → générer seulement cette harmonie
     const layers = targetTrackIndex !== undefined

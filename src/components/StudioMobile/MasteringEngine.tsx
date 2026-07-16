@@ -1140,31 +1140,13 @@ export default function MasteringEngine({
           setProgressLabel(`Encodage voix… (${remaining}s)`);
         }
       });
-      // FIX "unifier Classique et Bus partagé sauf la reverb" (v7.6.449) :
-      // EQ + compression + rééquilibrage voix/instrumental (plus bas) sont
-      // maintenant TOUJOURS appliqués, peu importe le style — seule la
-      // reverb partagée (juste en dessous) reste exclusive à "Bus partagé".
-      // C'est la distinction voulue : "la différence entre les deux styles,
-      // c'est la façon de jouer avec le bus partagé ou non", rien d'autre.
-      // FIX "reverb trop prononcée" (v7.6.435) : même principe que pour le
-      // Mode B — la reverb du Bus partagé s'applique APRÈS masterAudio()
-      // (donc sur vocalM déjà traitée), jamais avant, pour l'export "voix
-      // seule" aussi.
-      if (sendBusBlob) {
-        vBlob = await studioService.applySharedReverbBusChunked(vBlob, sendBusBlob, 0.12);
-      }
-      {
-        // Compression assouplie — ratio 2.2:1 (au lieu de 3:1), seuil relevé
-        // (-13dB), garde plus de dynamique naturelle/de punch.
-        vBlob = await studioService.applyGentleCompressor(vBlob, 2.2, 18, 90, -13);
-        // EQ : creux nasalité (2.5kHz) et corps (300Hz) INCHANGÉS — non
-        // contestés. Boost présence 3.5-5kHz réduit (2.0→0.5dB, beaucoup
-        // plus discret) ; shelf 8kHz RETIRÉ (repassé neutre, 0dB — plus de
-        // boost d'air, c'est lui qui ajoutait le plus d'aigus perçus).
-        vBlob = await studioService.applyPeakingEQ(vBlob, 2500, -2.0, 0.7);
-        vBlob = await studioService.applyPeakingEQ(vBlob, 300, 1.5, 0.7);
-        vBlob = await studioService.applyPeakingEQ(vBlob, 4250, 0.5, 1.5);
-      }
+      // FIX "on revient à la base" (v7.6.450) : toute la chaîne custom
+      // (reverb bus, compresseur, EQ 3-étages) construite au fil des rounds
+      // Tunee est RETIRÉE ici. Retour à masterAudio() seul (le mastering
+      // "voix seule" existant, plus ancien et déjà éprouvé) — pas de couche
+      // supplémentaire par-dessus. La voix brute (ou le backup) est la
+      // meilleure base selon le retour direct de l'utilisateur ; on arrête
+      // d'empiler des correctifs dessus.
       vocalUrlRef.current = URL.createObjectURL(vBlob);
       try { (window as any).__breadcrumb?.(`💿 Voix masterisée encodée : ${vBlob.size}B, type=${vBlob.type}`); } catch {}
       setProgress(55);
@@ -1178,50 +1160,18 @@ export default function MasteringEngine({
         // la reverb du Bus partagé est appliquée ICI, juste avant le mixage
         // avec l'instrumental — jamais avant, au niveau du Mixage (voir
         // commentaire sur sendBusBlob plus haut). Wet amount aussi réduit
-        // (0.22→0.12) : à 0.22 la reverb remplissait les silences entre les
-        // phrases avec une énergie continue qui, une fois vocalRaw
-        // peak-normalisé contre l'instrumental dans mixVocalWithInst,
-        // gonflait la présence globale de la voix (peak identique mais RMS
-        // bien plus haut à cause de la queue continue) — l'instrumental
-        // semblait "faible" alors que son propre traitement n'avait pas
-        // changé, et les harmonies/double devenaient inaudibles, noyés sous
-        // la reverb désormais bien plus dense que le reste du groupe voix.
         let vocalForMix: AudioBuffer = vocalRaw!;
-        // FIX "unifier Classique et Bus partagé sauf la reverb" (v7.6.449) :
-        // EQ + compression + rééquilibrage voix/instrumental sont maintenant
-        // TOUJOURS appliqués, peu importe le style — seule la reverb courte
-        // ci-dessous (harmonies/double) reste exclusive à "Bus partagé".
-        if (sendBusBlob) {
-          setProgressLabel('Bus partagé — réverbération courte...'); setProgress(64);
-          await new Promise<void>(r => setTimeout(r, 100));
-          const vocalRawBlob = await audioBufferToBlob(vocalForMix);
-          // FIX mémoire (v7.6.442) : version découpée (chunks 40s) — voir
-          // applySharedReverbBusChunked, même principe que pour le glue
-          // final plus bas.
-          const vocalRawWithReverbBlob = await studioService.applySharedReverbBusChunked(vocalRawBlob, sendBusBlob, 0.12);
-          vocalForMix = await decodeBlob(vocalRawWithReverbBlob);
-        }
-        {
-          setProgressLabel('Compresseur...'); setProgress(65);
-          await new Promise<void>(r => setTimeout(r, 100));
-          let vBlobTone = await audioBufferToBlob(vocalForMix);
-          // Compression assouplie — ratio 2.2:1 (au lieu de 3:1), seuil
-          // relevé (-13dB), garde plus de dynamique naturelle/de punch
-          // ("force à la Johnny Cash" perdue au round précédent).
-          vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 2.2, 18, 90, -13);
-          await new Promise<void>(r => setTimeout(r, 60)); // FIX mémoire (v7.6.441) : pause GC entre chaque passe EQ
-          setProgressLabel('EQ voix...'); setProgress(66);
-          // Creux nasalité (2.5kHz) et corps (300Hz) INCHANGÉS — non
-          // contestés. Boost présence 3.5-5kHz réduit (2.0→0.5dB, beaucoup
-          // plus discret) ; shelf 8kHz RETIRÉ (repassé neutre — c'est lui
-          // qui ajoutait le plus d'aigus perçus, "trop augmenté" signalé).
-          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 2500, -2.0, 0.7);
-          await new Promise<void>(r => setTimeout(r, 60));
-          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 300, 1.5, 0.7);
-          await new Promise<void>(r => setTimeout(r, 60));
-          vBlobTone = await studioService.applyPeakingEQ(vBlobTone, 4250, 0.5, 1.5);
-          vocalForMix = await decodeBlob(vBlobTone);
-        }
+        // FIX "on revient à la base" (v7.6.450) : toute la chaîne custom
+        // construite au fil des rounds Tunee (reverb courte, compresseur,
+        // EQ 3-étages, glue final) est RETIRÉE ici — y compris le glue
+        // final qui, suite à un oubli lors de l'unification Classique/Bus
+        // partagé (v7.6.449), continuait de tourner INCONDITIONNELLEMENT
+        // sur les DEUX styles. C'est très probablement la cause principale
+        // du "reverb/écho horrible" signalé — même en pensant avoir retiré
+        // le slapback et calmé la reverb courte, cette étape restait active
+        // sur 100% des mix complets. Retour à la voix brute (ou le backup)
+        // + instrumental, sans couche de traitement supplémentaire — c'est
+        // ce que l'utilisateur a validé comme sonnant mieux à l'oreille.
 
         setProgressLabel('Mixage vocal + instrumental...'); setProgress(70);
         // FIX "voix horrible" (v7.6.428) : mixer avec vocalRaw (voix NON
@@ -1229,13 +1179,12 @@ export default function MasteringEngine({
         // (voir commentaire plus haut). mixVocalWithInst normalise chaque
         // signal indépendamment à -1dBFS avant mixage, donc utiliser la voix
         // brute ici ne change rien au niveau, seulement à la qualité.
-        // FIX (v7.6.439→449) : +5dB, +2.5dB, +1.5dB, -1.5dB à travers les
-        // rounds Tunee = +7.5dB net sur instGainDb — désormais appliqué à
-        // TOUS les styles (v7.6.449 : "se baser sur Bus partagé pour
-        // Classique"), pas seulement Bus partagé. Un seul levier existe
-        // dans mixVocalWithInst (le ratio inst/voix).
-        const effectiveInstGainDb = instGainDb + 7.5;
-        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, effectiveInstGainDb, instOffsetMs);
+        // FIX "on revient à la base" (v7.6.450) : le +7.5dB caché sur
+        // instGainDb (accumulé sur 4 rounds Tunee) est RETIRÉ — la balance
+        // voix/instrumental repasse entièrement sous le contrôle du slider
+        // visible dans l'interface (Balance Voix/Instrumental), sans offset
+        // invisible superposé.
+        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, instGainDb, instOffsetMs);
         instRaw = null; // FIX mémoire : relâché dès que possible
         vocalRaw = null; // FIX mémoire : plus besoin après le mixage, relâché ici
 
@@ -1244,25 +1193,10 @@ export default function MasteringEngine({
         // FIX "on remasterise l'instrumental déjà masterisé" (v7.6.429) :
         // finalizeFullMix() ne fait QUE l'ajustement de loudness + le
         // limiteur True Peak de sécurité — pas d'EQ/compression/de-esser/
-        // widening qui recolorerait l'instrumental Tunee déjà masterisé (voir
-        // commentaire détaillé au-dessus de la fonction).
-        let fullM = await finalizeFullMix(fullRaw, settings);
-        // FIX "crash mémoire répétés à la masterisation" (v7.6.441→442) :
-        // le "glue final" (v7.6.439, reverb room 10% sur le mix COMPLET
-        // voix+instrumental) avait été retiré en 441 après des crashs OOM —
-        // c'est le plus gros buffer du pipeline (~4min stéréo 48kHz) et
-        // l'ancienne fonction en faisait une passe unique non découpée.
-        // Réintroduit ici avec applySharedReverbBusChunked() : traitement
-        // par blocs de 40s avec chevauchement/crossfade de 1.5s (la queue de
-        // reverb, ~700-800ms, tient largement dedans — pas de clic à la
-        // jointure), et libération mémoire entre chaque bloc. Le "dry" et le
-        // "send" sont le MÊME blob (auto-alimenté) — la fonction ne le
-        // décode qu'une fois dans ce cas, pas deux.
-        setProgressLabel('Bus partagé — glue final...'); setProgress(82);
-        await new Promise<void>(r => setTimeout(r, 150));
-        const fullMBlobForGlue = await audioBufferToBlob(fullM);
-        const fullMWithGlueBlob = await studioService.applySharedReverbBusChunked(fullMBlobForGlue, fullMBlobForGlue, 0.10);
-        fullM = await decodeBlob(fullMWithGlueBlob);
+        // widening qui recolorerait l'instrumental déjà masterisé (voir
+        // commentaire détaillé au-dessus de la fonction). C'est la SEULE
+        // étape qui reste sur le mix complet — aucune reverb, aucun glue.
+        const fullM = await finalizeFullMix(fullRaw, settings);
         fullRaw = null; // FIX mémoire : relâché dès que possible, avant l'encodage
         setFullMastered(fullM);
         setOutputFullLufs(Math.round((await analyzeLoudness(fullM)) * 10) / 10);

@@ -463,7 +463,15 @@ export default function MixerScreen({
       if (currentTracks.length === 0) { alert('Aucune piste à exporter.'); return; }
       dbg(`[ExportPreview] ${currentTracks.length}/${rawTracks.length} piste(s) retenue(s)`);
 
-      const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 9, 3: 12, 4: 14, 5: 7 };
+      // FIX cohérence (v7.6.451) : ces valeurs (9/12/14/7ms) étaient les
+      // ANCIENNES, avant le fix v7.6.430 qui les avait mises à 0 partout
+      // ailleurs (le délai différencié par harmonie est déjà cuit dans
+      // l'audio à la génération — voir harmony-worker.js/timingMs). Cette
+      // fonction est un export de DEBUG séparé (bouton "Exporter le Preview
+      // (debug)"), pas le chemin réel des masters (studioService.mixProject,
+      // déjà correct) — mais laisser des valeurs différentes ici est une
+      // source de confusion/incohérence si jamais on compare les deux exports.
+      const PRE_DELAYS: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
       const probeCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       type Item = { label: string; buffer: AudioBuffer; gainVal: number; panVal: number; delaySec: number; isInst: boolean; offsetSec: number; isHarmony: boolean };
       const items: Item[] = [];
