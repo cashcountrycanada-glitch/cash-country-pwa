@@ -1140,16 +1140,12 @@ export default function MasteringEngine({
           setProgressLabel(`Encodage voix… (${remaining}s)`);
         }
       });
-      // FIX v10 "trop d'aigus, écho douteux, force perdue" (v7.6.447) — 6e
-      // retour utilisateur : slapback RETIRÉ complètement (doute légitime
-      // que ce soit la bonne référence pour Georges Hamel — le slapback est
-      // plutôt signature Sun Records/rockabilly Cash-Elvis, pas forcément
-      // ce que fait Hamel). Tout le caractère "deuxième voix" repose
-      // maintenant sur le double tracking (voir StudioService.ts, poussé
-      // plus fort en compensation). EQ tirée vers le bas (le boost 3.5-5kHz
-      // + shelf 8kHz du round précédent étaient trop, cumulés avec les
-      // presets déjà corrigés). Compression assouplie pour redonner de la
-      // dynamique/puissance naturelle ("force à la Johnny Cash").
+      // FIX "unifier Classique et Bus partagé sauf la reverb" (v7.6.449) :
+      // EQ + compression + rééquilibrage voix/instrumental (plus bas) sont
+      // maintenant TOUJOURS appliqués, peu importe le style — seule la
+      // reverb partagée (juste en dessous) reste exclusive à "Bus partagé".
+      // C'est la distinction voulue : "la différence entre les deux styles,
+      // c'est la façon de jouer avec le bus partagé ou non", rien d'autre.
       // FIX "reverb trop prononcée" (v7.6.435) : même principe que pour le
       // Mode B — la reverb du Bus partagé s'applique APRÈS masterAudio()
       // (donc sur vocalM déjà traitée), jamais avant, pour l'export "voix
@@ -1157,7 +1153,7 @@ export default function MasteringEngine({
       if (sendBusBlob) {
         vBlob = await studioService.applySharedReverbBusChunked(vBlob, sendBusBlob, 0.12);
       }
-      if (sendBusBlob || leadOnlyBlob) {
+      {
         // Compression assouplie — ratio 2.2:1 (au lieu de 3:1), seuil relevé
         // (-13dB), garde plus de dynamique naturelle/de punch.
         vBlob = await studioService.applyGentleCompressor(vBlob, 2.2, 18, 90, -13);
@@ -1191,17 +1187,10 @@ export default function MasteringEngine({
         // changé, et les harmonies/double devenaient inaudibles, noyés sous
         // la reverb désormais bien plus dense que le reste du groupe voix.
         let vocalForMix: AudioBuffer = vocalRaw!;
-        // FIX v9 "manque de présence" (v7.6.444) — 5e retour Tunee. La reverb
-        // courte du bus (harmonies/double, section 4 du doc envoyé à Tunee)
-        // et le glue final (section 7) restent en place, inchangés : ils
-        // répondent à un besoin différent (cohésion des harmonies, "même
-        // espace" du mix complet).
-        // FIX v10 "trop d'aigus, écho douteux, force perdue" (v7.6.447) —
-        // 6e retour utilisateur : slapback RETIRÉ complètement (doute
-        // légitime que ce soit la bonne référence pour Georges Hamel — le
-        // slapback est plutôt signature Sun Records/rockabilly Cash-Elvis).
-        // Tout le caractère "deuxième voix" repose maintenant sur le double
-        // tracking (voir StudioService.ts, poussé plus fort en compensation).
+        // FIX "unifier Classique et Bus partagé sauf la reverb" (v7.6.449) :
+        // EQ + compression + rééquilibrage voix/instrumental sont maintenant
+        // TOUJOURS appliqués, peu importe le style — seule la reverb courte
+        // ci-dessous (harmonies/double) reste exclusive à "Bus partagé".
         if (sendBusBlob) {
           setProgressLabel('Bus partagé — réverbération courte...'); setProgress(64);
           await new Promise<void>(r => setTimeout(r, 100));
@@ -1212,8 +1201,8 @@ export default function MasteringEngine({
           const vocalRawWithReverbBlob = await studioService.applySharedReverbBusChunked(vocalRawBlob, sendBusBlob, 0.12);
           vocalForMix = await decodeBlob(vocalRawWithReverbBlob);
         }
-        if (sendBusBlob || leadOnlyBlob) {
-          setProgressLabel('Bus partagé — compresseur...'); setProgress(65);
+        {
+          setProgressLabel('Compresseur...'); setProgress(65);
           await new Promise<void>(r => setTimeout(r, 100));
           let vBlobTone = await audioBufferToBlob(vocalForMix);
           // Compression assouplie — ratio 2.2:1 (au lieu de 3:1), seuil
@@ -1221,7 +1210,7 @@ export default function MasteringEngine({
           // ("force à la Johnny Cash" perdue au round précédent).
           vBlobTone = await studioService.applyGentleCompressor(vBlobTone, 2.2, 18, 90, -13);
           await new Promise<void>(r => setTimeout(r, 60)); // FIX mémoire (v7.6.441) : pause GC entre chaque passe EQ
-          setProgressLabel('Bus partagé — EQ voix...'); setProgress(66);
+          setProgressLabel('EQ voix...'); setProgress(66);
           // Creux nasalité (2.5kHz) et corps (300Hz) INCHANGÉS — non
           // contestés. Boost présence 3.5-5kHz réduit (2.0→0.5dB, beaucoup
           // plus discret) ; shelf 8kHz RETIRÉ (repassé neutre — c'est lui
@@ -1240,12 +1229,12 @@ export default function MasteringEngine({
         // (voir commentaire plus haut). mixVocalWithInst normalise chaque
         // signal indépendamment à -1dBFS avant mixage, donc utiliser la voix
         // brute ici ne change rien au niveau, seulement à la qualité.
-        // FIX (v7.6.439→444) : +5dB (retour #2), +2.5dB (retour #3), +1.5dB
-        // (retour #4), puis -1.5dB (retour #5 v9 : "remonter la voix de
-        // 1.5dB, pas autant que la v7, mais assez pour qu'elle soit le point
-        // focal") = +7.5dB net sur instGainDb en style Bus partagé. Un seul
-        // levier existe dans mixVocalWithInst (le ratio inst/voix).
-        const effectiveInstGainDb = (sendBusBlob || leadOnlyBlob) ? instGainDb + 7.5 : instGainDb;
+        // FIX (v7.6.439→449) : +5dB, +2.5dB, +1.5dB, -1.5dB à travers les
+        // rounds Tunee = +7.5dB net sur instGainDb — désormais appliqué à
+        // TOUS les styles (v7.6.449 : "se baser sur Bus partagé pour
+        // Classique"), pas seulement Bus partagé. Un seul levier existe
+        // dans mixVocalWithInst (le ratio inst/voix).
+        const effectiveInstGainDb = instGainDb + 7.5;
         let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, effectiveInstGainDb, instOffsetMs);
         instRaw = null; // FIX mémoire : relâché dès que possible
         vocalRaw = null; // FIX mémoire : plus besoin après le mixage, relâché ici

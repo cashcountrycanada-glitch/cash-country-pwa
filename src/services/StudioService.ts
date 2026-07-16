@@ -1778,12 +1778,14 @@ export const studioService = {
         const gainNode = offline.createGain();
         const tIdx = (m.track as any).trackIndex ?? 0;
         const isHarmonyLayer = tIdx >= 1 && tIdx <= 5;
-        // FIX "on mise tout sur le double tracking" (v7.6.447) : le slapback
-        // a été retiré du style Bus partagé (doute légitime que ce soit la
-        // bonne référence pour Georges Hamel) — le double tracking porte
-        // maintenant SEUL le caractère "deuxième voix". Plafond relevé à
-        // 1.0 (parité complète avec le lead, au lieu de 0.95) pour lui
-        // donner autant de poids qu'à la voix principale.
+        // FIX "voix fantôme / chuchotement" (v7.6.448) : le plafond 1.0
+        // (parité complète, v7.6.447) est très probablement la cause d'un
+        // nouvel artefact rapporté — le double tracking à volume égal au
+        // lead, avec son détune (8 cents) et son délai (17-31ms), a basculé
+        // de "épaississement" à "on entend une deuxième voix distincte".
+        // Jamais signalé sur 7+ rounds de tests avec le plafond précédent
+        // (0.95) — retour à cette valeur, seule variable qui a changé entre
+        // le dernier test propre et celui-ci.
         const isDoubleTrack = tIdx === 1;
         // FIX "harmonies pas assez puissantes" (v7.6.427) : les harmonies
         // étaient si discrètes (gains 0.24-0.34 typiques) qu'on ne les
@@ -1792,7 +1794,7 @@ export const studioService = {
         // "plusieurs chanteurs proches" recherché doit s'entendre clairement,
         // surtout dans les sections denses (refrains).
         const baseGain = isDoubleTrack
-          ? Math.min(1.0, (m.track.gain ?? 1.0) * 1.6)
+          ? Math.min(0.95, (m.track.gain ?? 1.0) * 1.6)
           : isHarmonyLayer
           ? Math.min(0.85, (m.track.gain ?? 1.0) * 1.4)
           : Math.min(1.0, m.track.gain ?? 1.0);
@@ -2296,12 +2298,12 @@ export const studioService = {
 
       // 1. Double tracking — unisson, épaisseur naturelle humaine
       // Cash et Elvis rechanaient systématiquement leurs propres voix
-      // FIX "on mise tout sur le double tracking" (v7.6.447) : le slapback
-      // a été retiré du style Bus partagé (doute sur la pertinence de cette
-      // référence pour Georges Hamel) — le double tracking porte maintenant
-      // SEUL le caractère "deuxième voix". Gain 0.55→0.65 (0.65×1.6=1.04,
-      // plafonné au nouveau cap 1.0 — parité complète avec le lead).
-      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.65, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
+      // FIX "voix fantôme / chuchotement" (v7.6.448) : le gain 0.65 (poussé
+      // en v7.6.447 pour atteindre la parité complète avec le lead) est
+      // très probablement responsable d'un artefact de "deuxième voix
+      // distincte" plutôt que d'épaississement — jamais signalé avec 0.55
+      // sur 7+ rounds de tests précédents. Retour à cette valeur.
+      { trackIndex: 1, trackLabel: 'Double tracking', pitch: 0,   gain: 0.55, pan: -0.25, emoji: '🎵', isDouble: true,  suggestedFxId: 'double_epic' },
 
       // 2. +2 ST — seconde majeure, signature Alan Jackson (remplace l'ancien +5 ST/quarte,
       // hors zone sûre ±3 ST)
