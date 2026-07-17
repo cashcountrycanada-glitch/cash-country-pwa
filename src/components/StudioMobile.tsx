@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.463';
+const BUILD_VERSION = 'v7.6.464';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1396,7 +1396,27 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // FIX même bug que hasInst dans MixerScreen (v7.6.412) : audio.instUrl reflète
   // l'état du lecteur, pas la présence réelle du fichier. On vérifie l'IDB direct.
   const getInstBlob = async (): Promise<Blob | null> => { try { return await studioOfflineDB.getAudio(`inst_${selected?.id}`); } catch { return null; } };
-  const getVocalGuideBlob = async (): Promise<Blob | null> => { try { return await studioOfflineDB.getAudio(`vocal_${selected?.id}`); } catch { return null; } };
+  // FIX "case Guide vocal toujours désactivée" (v7.6.464, repéré par Cash sur
+  // capture d'écran) : cette fonction ne regardait QUE le cache hors-ligne
+  // local (IndexedDB, clé vocal_<id>), jamais rempli automatiquement pour
+  // toutes les chansons — contrairement à l'instrumental qui a son propre
+  // useEffect de téléchargement à la demande. Résultat : la case restait
+  // désactivée même quand le fichier était bel et bien accessible par le
+  // réseau (la preuve : Auto Sync, qui utilise CETTE autre source, marchait).
+  // Fallback ajouté : si absent du cache local, on va chercher directement
+  // audio.vocalGuideUrl — exactement la même source que l'Auto Sync utilise
+  // déjà avec succès, donc les deux fonctionnalités sont maintenant cohérentes.
+  const getVocalGuideBlob = async (): Promise<Blob | null> => {
+    try {
+      const cached = await studioOfflineDB.getAudio(`vocal_${selected?.id}`);
+      if (cached) return cached;
+    } catch {}
+    if (audio.vocalGuideUrl) {
+      try { return await fetch(audio.vocalGuideUrl).then(r => r.blob()); }
+      catch (e: any) { breadcrumb(`⚠️ getVocalGuideBlob fallback réseau a échoué: ${e?.message}`); }
+    }
+    return null;
+  };
 
   // FIX "instrumental introuvable" (v7.6.421) : charge l'instrumental dès la
   // sélection d'une chanson. Si absent du cache local, le télécharge à la
