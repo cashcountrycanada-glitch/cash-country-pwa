@@ -1798,14 +1798,12 @@ export const studioService = {
         // trop fort partout") : boost réduit de 40% → 25%, plafond 0.85 →
         // 0.76 (~-1dB). Le Double tracking (piste 1) n'est pas concerné —
         // seules les harmonies pitchées (2-5) sont ajustées.
-        // AJUSTEMENT DOUX (v7.6.456, conseil Cash — "on entend double trop",
-        // encore un peu présent après v7.6.455) : nouvelle petite baisse,
-        // plus marquée sur le Double (la plainte spécifique) que sur les
-        // harmonies pitchées.
+        // AJUSTEMENT DOUX (v7.6.460, conseil Cash — encore un peu fort) :
+        // nouvelle petite baisse, même répartition que v7.6.456.
         const baseGain = isDoubleTrack
-          ? Math.min(0.72, (m.track.gain ?? 1.0) * 1.20)
+          ? Math.min(0.65, (m.track.gain ?? 1.0) * 1.10)
           : isHarmonyLayer
-          ? Math.min(0.70, (m.track.gain ?? 1.0) * 1.15)
+          ? Math.min(0.63, (m.track.gain ?? 1.0) * 1.05)
           : Math.min(1.0, m.track.gain ?? 1.0);
 
         if (isHarmonyLayer && sections.length > 0) {

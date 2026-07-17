@@ -171,27 +171,59 @@ export function useStudioAudio(selected: Song | null): AudioResult {
         return env;
       };
 
-      // Corrélation normalisée
+      // Corrélation normalisée — retourne aussi la valeur de corrélation au
+      // meilleur lag ET aux lags voisins (nécessaire pour l'interpolation
+      // parabolique ci-dessous)
+      const corrAtLag = (envA: Float32Array, envB: Float32Array, lag: number, meanA: number, meanB: number, stdA: number, stdB: number): number => {
+        let corr = 0, n = 0;
+        for (let i = 0; i < envA.length; i++) {
+          const j = i - lag;
+          if (j >= 0 && j < envB.length) {
+            corr += ((envA[i]-meanA)/stdA) * ((envB[j]-meanB)/stdB);
+            n++;
+          }
+        }
+        return n > 0 ? corr / n : -Infinity;
+      };
       const crossCorr = (envA: Float32Array, envB: Float32Array, minLag: number, maxLag: number): number => {
         let bestLag = minLag, bestCorr = -Infinity;
-        // Normalisation des enveloppes
         const meanA = envA.reduce((a,b)=>a+b,0)/envA.length;
         const meanB = envB.reduce((a,b)=>a+b,0)/envB.length;
         const stdA  = Math.sqrt(envA.reduce((a,b)=>a+(b-meanA)**2,0)/envA.length) || 1;
         const stdB  = Math.sqrt(envB.reduce((a,b)=>a+(b-meanB)**2,0)/envB.length) || 1;
         for (let lag = minLag; lag <= maxLag; lag++) {
-          let corr = 0, n = 0;
-          for (let i = 0; i < envA.length; i++) {
-            const j = i - lag;
-            if (j >= 0 && j < envB.length) {
-              corr += ((envA[i]-meanA)/stdA) * ((envB[j]-meanB)/stdB);
-              n++;
-            }
-          }
-          if (n > 0) corr /= n;
+          const corr = corrAtLag(envA, envB, lag, meanA, meanB, stdA, stdB);
           if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
         }
         return bestLag;
+      };
+      // Version qui renvoie le lag affiné par interpolation parabolique
+      // (précision sub-bloc, au lieu d'être limitée à la taille du bloc —
+      // ex: passe fine à blocs de 5ms → résolution ~1ms au lieu de 5ms)
+      const crossCorrRefined = (envA: Float32Array, envB: Float32Array, minLag: number, maxLag: number, blockMs: number): number => {
+        const meanA = envA.reduce((a,b)=>a+b,0)/envA.length;
+        const meanB = envB.reduce((a,b)=>a+b,0)/envB.length;
+        const stdA  = Math.sqrt(envA.reduce((a,b)=>a+(b-meanA)**2,0)/envA.length) || 1;
+        const stdB  = Math.sqrt(envB.reduce((a,b)=>a+(b-meanB)**2,0)/envB.length) || 1;
+        let bestLag = minLag, bestCorr = -Infinity;
+        for (let lag = minLag; lag <= maxLag; lag++) {
+          const corr = corrAtLag(envA, envB, lag, meanA, meanB, stdA, stdB);
+          if (corr > bestCorr) { bestCorr = corr; bestLag = lag; }
+        }
+        // Interpolation parabolique autour du pic entier trouvé, avec ses
+        // deux voisins directs — affine la position réelle du pic entre les
+        // blocs. Formule standard (peak parabolic interpolation).
+        if (bestLag > minLag && bestLag < maxLag) {
+          const cL = corrAtLag(envA, envB, bestLag - 1, meanA, meanB, stdA, stdB);
+          const cC = bestCorr;
+          const cR = corrAtLag(envA, envB, bestLag + 1, meanA, meanB, stdA, stdB);
+          const denom = (cL - 2 * cC + cR);
+          if (Math.abs(denom) > 1e-9) {
+            const delta = 0.5 * (cL - cR) / denom; // entre -0.5 et +0.5 bloc
+            if (Math.abs(delta) <= 0.5) return (bestLag + delta) * blockMs;
+          }
+        }
+        return bestLag * blockMs;
       };
 
       // PASSE 1 : grossière — blocs 50ms, ±5s
@@ -201,17 +233,17 @@ export function useStudioAudio(selected: Song | null): AudioResult {
       const bestLag50   = crossCorr(env50_voice, env50_stem, -maxLag50, maxLag50);
       const coarseMs    = bestLag50 * 50; // ms
 
-      // PASSE 2 : fine — blocs 5ms, ±300ms autour du résultat grossier
+      // PASSE 2 : fine — blocs 5ms, ±300ms autour du résultat grossier,
+      // affinée par interpolation parabolique → précision sub-5ms (~1ms)
       const env5_voice  = extractEnv(voiceBuf, 5);
       const env5_stem   = extractEnv(stemBuf,  5);
       const fineCenter  = Math.round(coarseMs / 5); // en blocs 5ms
       const fineRange   = 60; // ±300ms en blocs 5ms
       const minLag5     = Math.max(-env5_voice.length>>1, fineCenter - fineRange);
       const maxLag5     = Math.min( env5_voice.length>>1, fineCenter + fineRange);
-      const bestLag5    = crossCorr(env5_voice, env5_stem, minLag5, maxLag5);
-      const fineMs      = bestLag5 * 5; // ms
+      const fineMs      = Math.round(crossCorrRefined(env5_voice, env5_stem, minLag5, maxLag5, 5));
 
-      console.log('[autoDetectOffset] grossier:', coarseMs, 'ms → fin:', fineMs, 'ms');
+      console.log('[autoDetectOffset] grossier:', coarseMs, 'ms → fin (affiné):', fineMs, 'ms');
       return fineMs;
     } catch (e) {
       console.warn('[autoDetectOffset]', e);

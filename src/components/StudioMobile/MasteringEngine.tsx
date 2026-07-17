@@ -63,6 +63,10 @@ export interface MasteringProps {
   // uniquement sur le lead, sans écho parasite sur le reste du groupe voix.
   leadOnlyBlob?: Blob | null;
   // L'instrumental à mixer pour l'export publication (null si non disponible)
+  // Stem vocal guide original (référence utilisée pour chanter) — pour le
+  // remplir en fond très bas dans le mix (v7.6.461, idée Cash : comble les
+  // trous de l'instrumental + repère d'écoute pour vérifier la synchro)
+  vocalGuideBlob?: Blob | null;
   instBlob:     Blob | null;
   // Décalage Auto Sync détecté dans le mixer (ms) — appliqué entre la voix
   // déjà masterisée et l'instrumental au moment de la fusion finale.
@@ -286,6 +290,16 @@ async function mixVocalWithInst(
   instBuf:  AudioBuffer,
   instGainDb: number = -3,
   instOffsetMs: number = 0,
+  // IDÉE CASH (v7.6.461) : le stem vocal guide original (celui utilisé pour
+  // chanter par-dessus) mixé très bas — ça comble le "trou" laissé dans
+  // l'instrumental (piste dont la voix a été retirée à la source) ET sert de
+  // repère à l'oreille pour vérifier la synchro : s'il colle bien à la voix
+  // principale, c'est synchro ; s'il traîne ou devance, ça se remarque.
+  // Décalé avec le MÊME instOffsetMs que l'instrumental, puisque le guide
+  // vocal et l'instrumental proviennent du même split — même ligne de temps
+  // d'origine.
+  guideBuf: AudioBuffer | null = null,
+  guideGainDb: number = -20,
 ): Promise<AudioBuffer> {
   // FIX "instrumental silencieux en début de piste / semble ne jouer qu'avec
   // la voix" (v7.6.426) : un instOffsetMs anormalement grand (ex: plusieurs
@@ -303,9 +317,13 @@ async function mixVocalWithInst(
   } else {
     try { (window as any).__breadcrumb?.(`🎚️ mixVocalWithInst : instOffsetMs=${instOffsetMs}ms, vocal=${vocalBuf.duration.toFixed(1)}s, inst=${instBuf.duration.toFixed(1)}s`); } catch {}
   }
-  const sr       = Math.max(vocalBuf.sampleRate, instBuf.sampleRate);
+  const sr       = Math.max(vocalBuf.sampleRate, instBuf.sampleRate, guideBuf?.sampleRate ?? 0);
   const offsetSec = instOffsetMs / 1000;
-  const duration = Math.max(vocalBuf.duration, instBuf.duration + Math.abs(offsetSec));
+  const duration = Math.max(
+    vocalBuf.duration,
+    instBuf.duration + Math.abs(offsetSec),
+    (guideBuf?.duration ?? 0) + Math.abs(offsetSec),
+  );
 
   // Mesurer les peaks des deux signaux
   const peakOf = async (buf: AudioBuffer): Promise<number> => {
@@ -354,6 +372,25 @@ async function mixVocalWithInst(
     iSrc.start(offsetSec);
   } else {
     iSrc.start(0, Math.min(-offsetSec, instBuf.duration));
+  }
+
+  // Guide vocal (optionnel) — même décalage que l'instrumental, très bas
+  // dans le mix. Sert à combler les trous ET de repère d'écoute pour la
+  // synchro (voir commentaire sur le paramètre plus haut).
+  if (guideBuf) {
+    const guidePeak = await peakOf(guideBuf);
+    const guideRatio = Math.pow(10, guideGainDb / 20); // -20dB par défaut → très discret
+    const guideGain = guidePeak > 0.001 ? (targetPeak / guidePeak) * guideRatio : guideRatio;
+    const gSrc = offline.createBufferSource();
+    gSrc.buffer = guideBuf;
+    const gGain = offline.createGain();
+    gGain.gain.value = guideGain;
+    gSrc.connect(gGain); gGain.connect(offline.destination);
+    if (offsetSec >= 0) {
+      gSrc.start(offsetSec);
+    } else {
+      gSrc.start(0, Math.min(-offsetSec, guideBuf.duration));
+    }
   }
 
   const mixed = await offline.startRendering();
@@ -1068,7 +1105,7 @@ function db(v: number) { return v >= 0 ? `+${v.toFixed(1)} dB` : `${v.toFixed(1)
 // ── Composant principal ───────────────────────────────────────────────────────
 
 export default function MasteringEngine({
-  vocalBlob, sendBusBlob = null, leadOnlyBlob = null, instBlob, instOffsetMs = 0, songTitle, songId, onBack, onStemReady, isOnline,
+  vocalBlob, sendBusBlob = null, leadOnlyBlob = null, instBlob, vocalGuideBlob = null, instOffsetMs = 0, songTitle, songId, onBack, onStemReady, isOnline,
 }: MasteringProps) {
   // FIX DIAGNOSTIC (v7.6.415) : trace synchrone à l'instant précis où React
   // commence à exécuter le rendu de ce composant — avant tout hook, avant tout
@@ -1082,6 +1119,8 @@ export default function MasteringEngine({
   const [settings, setSettings]           = useState<MasterSettings>(PRESETS.cash_country.settings);
   // De-esser dynamique (v7.6.459) — désactivé par défaut, Cash l'active lui-même
   const [deEsserOn, setDeEsserOn]          = useState<boolean>(false);
+  // Guide vocal en fond (v7.6.461) — désactivé par défaut, Cash teste avant
+  const [includeVocalGuide, setIncludeVocalGuide] = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced]   = useState(false);
   const [instGainDb, setInstGainDb]       = useState(-3); // niveau instrumental en dB relatif à la voix
 
@@ -1208,6 +1247,12 @@ export default function MasteringEngine({
       if (instBlob) {
         setProgressLabel("Chargement de l'instrumental..."); setProgress(60);
         let instRaw: AudioBuffer | null = await decodeBlob(instBlob);
+        // Guide vocal (v7.6.461) — décodé seulement si la case est cochée
+        let guideRaw: AudioBuffer | null = null;
+        if (includeVocalGuide && vocalGuideBlob) {
+          try { guideRaw = await decodeBlob(vocalGuideBlob); }
+          catch (e: any) { try { (window as any).__breadcrumb?.(`⚠️ décodage guide vocal échoué: ${e?.message}`); } catch {} }
+        }
 
         // FIX "reverb trop prononcée / instrumental écrasé" (v7.6.435) :
         // la reverb du Bus partagé est appliquée ICI, juste avant le mixage
@@ -1237,9 +1282,10 @@ export default function MasteringEngine({
         // voix/instrumental repasse entièrement sous le contrôle du slider
         // visible dans l'interface (Balance Voix/Instrumental), sans offset
         // invisible superposé.
-        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, instGainDb, instOffsetMs);
+        let fullRaw: AudioBuffer | null = await mixVocalWithInst(vocalForMix, instRaw, instGainDb, instOffsetMs, guideRaw);
         instRaw = null; // FIX mémoire : relâché dès que possible
         vocalRaw = null; // FIX mémoire : plus besoin après le mixage, relâché ici
+        guideRaw = null;
 
         setProgressLabel('Finalisation du mix complet...'); setProgress(80);
         await new Promise<void>(r => setTimeout(r, 150)); // pause GC avant la 2e passe lourde
@@ -1669,6 +1715,15 @@ export default function MasteringEngine({
                   className="w-4 h-4 rounded accent-red-500 shrink-0"/>
                 <span className="text-[10px] text-zinc-400 font-black flex-1">
                   De-esser dynamique <span className="text-zinc-600 font-normal normal-case">(réduit les "s" seulement, jamais le reste)</span>
+                </span>
+              </label>
+              <label className="flex items-center gap-3 mt-2 cursor-pointer active:opacity-70">
+                <input type="checkbox" checked={includeVocalGuide}
+                  onChange={e => setIncludeVocalGuide(e.target.checked)}
+                  disabled={!vocalGuideBlob}
+                  className="w-4 h-4 rounded accent-red-500 shrink-0"/>
+                <span className="text-[10px] text-zinc-400 font-black flex-1">
+                  Guide vocal en fond (-20dB) <span className="text-zinc-600 font-normal normal-case">{vocalGuideBlob ? '(comble les trous + test synchro)' : '(indisponible pour cette chanson)'}</span>
                 </span>
               </label>
             </div>

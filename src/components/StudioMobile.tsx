@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.459';
+const BUILD_VERSION = 'v7.6.463';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -220,6 +220,9 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const [debugLog, setDebugLog] = useState<string[]>([]);
   const [masterVocalBlob, setMasterVocalBlob] = useState<Blob | null>(null);
   const [masterInstBlob, setMasterInstBlob] = useState<Blob | null>(null);
+  // Stem vocal guide original — pour le remplir en fond très bas dans le mix
+  // masterisé (v7.6.461, idée Cash : comble les trous + test synchro)
+  const [masterVocalGuideBlob, setMasterVocalGuideBlob] = useState<Blob | null>(null);
   // FIX "reverb Bus partagé écrase le mix" (v7.6.435) : bus d'envoi SEC
   // (lead+double+harmonies, sans reverb), transmis à MasteringEngine
   // uniquement si le style "Bus partagé" est sélectionné dans le Mixer —
@@ -645,7 +648,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     // couplet peut finir plus fort qu'un refrain si le boost global change.
     const COUPLET_FACTOR = 0.75; // ≈ -2.5 dB sous le baseGain du refrain
     const baseGainFor = (trackIndex: number, gain: number) =>
-      trackIndex === 1 ? Math.min(0.72, gain * 1.20) : Math.min(0.70, gain * 1.15);
+      trackIndex === 1 ? Math.min(0.65, gain * 1.10) : Math.min(0.63, gain * 1.05);
     const sectionsWithSofterCouplets = (proj.sections ?? []).map((s: any) => {
       if (s.label !== 'Couplet' || !s.activeHarmonies?.length) return s;
       const hv = { ...(s.harmonyVolumes ?? {}) };
@@ -1374,6 +1377,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   const handleMasterize = (vocalBlob: Blob, instBlob: Blob | null, sendBusBlob: Blob | null = null) => {
     breadcrumb(`🎛️ handleMasterize appelé : vocalBlob=${vocalBlob ? vocalBlob.size + 'B' : 'NULL'} instBlob=${instBlob ? instBlob.size + 'B' : 'null'} sendBusBlob=${sendBusBlob ? sendBusBlob.size + 'B' : 'null (classique)'} selected=${selected ? selected.id : 'NULL'}`);
     setMasterVocalBlob(vocalBlob); setMasterInstBlob(instBlob); setMasterSendBusBlob(sendBusBlob); setScreen('master');
+    getVocalGuideBlob().then(setMasterVocalGuideBlob).catch(() => setMasterVocalGuideBlob(null));
     breadcrumb(`🎛️ setScreen('master') exécuté`);
   };
   const handleStemReady = async (_blob: Blob, fileName: string) => { if (!selected) return; console.log(`[StudioMobile] Stem vocal transféré : ${fileName}`); };
@@ -1392,6 +1396,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // FIX même bug que hasInst dans MixerScreen (v7.6.412) : audio.instUrl reflète
   // l'état du lecteur, pas la présence réelle du fichier. On vérifie l'IDB direct.
   const getInstBlob = async (): Promise<Blob | null> => { try { return await studioOfflineDB.getAudio(`inst_${selected?.id}`); } catch { return null; } };
+  const getVocalGuideBlob = async (): Promise<Blob | null> => { try { return await studioOfflineDB.getAudio(`vocal_${selected?.id}`); } catch { return null; } };
 
   // FIX "instrumental introuvable" (v7.6.421) : charge l'instrumental dès la
   // sélection d'une chanson. Si absent du cache local, le télécharge à la
@@ -1449,7 +1454,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
       return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><div className="fixed inset-0 bg-[#020202] flex flex-col items-center justify-center gap-3 px-6 text-center"><p className="text-[40px]">🛑</p><p className="text-white font-bebas text-xl tracking-widest">BOUCLE DÉTECTÉE</p><p className="text-zinc-500 text-[11px]">L'écran de mastering n'arrivait pas à s'afficher correctement. Retour au mixeur — réessaie dans un instant.</p></div></>;
     }
     breadcrumb(`🖼️ Construction JSX écran Master démarrée (vocalBlob=${masterVocalBlob.size}B) [tentative ${w.__masterRenderAttempts.length}]`);
-    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} sendBusBlob={masterSendBusBlob} instBlob={masterInstBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
+    return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Masteriser & Exporter" onReset={() => setScreen('mixer')}><MasteringEngine vocalBlob={masterVocalBlob} sendBusBlob={masterSendBusBlob} instBlob={masterInstBlob} vocalGuideBlob={masterVocalGuideBlob} instOffsetMs={audio.instOffsetMs} songTitle={selected.title} songId={selected.id} onBack={() => setScreen('mixer')} onStemReady={handleStemReady} isOnline={offline.isOnline} /></ScreenErrorBoundary></>;
   }
   if (screen === 'comp' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><ScreenErrorBoundary screenName="Comp Editor" onReset={() => setScreen('mixer')}><CompEditor song={selected} takes={compTakes} onBack={() => setScreen('mixer')} isOnline={offline.isOnline} onTakesChange={(updatedTakes) => {
               // Persister les régions dans les pistes du projet
@@ -1473,14 +1478,14 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     }
   };
   const [autoSyncing, setAutoSyncing] = useState(false);
-  const handleAutoSync = async () => {
+  const handleAutoSync = async (silent: boolean = false) => {
     if (!project || autoSyncing) return;
     const mainTrack = project.tracks.find((t: any) => t.trackIndex === 0 && !t.isGenerated);
-    if (!mainTrack) { alert('Voix principale introuvable'); return; }
+    if (!mainTrack) { if (!silent) alert('Voix principale introuvable'); return; }
     setAutoSyncing(true);
     try {
       const blob = await studioService.resolveBlobAsync(mainTrack.dataUrl, mainTrack.id);
-      if (!blob) { alert('Voix principale introuvable en mémoire'); setAutoSyncing(false); return; }
+      if (!blob) { if (!silent) alert('Voix principale introuvable en mémoire'); setAutoSyncing(false); return; }
       const url = URL.createObjectURL(blob);
       const detectedMs = await audio.autoDetectOffset(url);
       URL.revokeObjectURL(url);
@@ -1489,19 +1494,37 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
         const delta = detectedMs - (audio.instOffsetMs ?? 0);
         if (Math.abs(delta) > 10) {
           applyInstOffset(delta);
-          alert(`Sync automatique : ${detectedMs > 0 ? '+' : ''}${detectedMs}ms appliqué`);
-        } else {
+          if (!silent) alert(`Sync automatique : ${detectedMs > 0 ? '+' : ''}${detectedMs}ms appliqué`);
+          else breadcrumb(`🔄 Auto Sync (auto, silencieux) : ${detectedMs > 0 ? '+' : ''}${detectedMs}ms appliqué pour piste ${mainTrack.id}`);
+        } else if (!silent) {
           alert('Sync déjà optimal (< 10ms de décalage)');
         }
-      } else {
+      } else if (!silent) {
         alert('Stem vocal non disponible pour la détection automatique');
       }
     } catch (e: any) {
-      alert('Erreur auto-sync : ' + e.message);
+      if (!silent) alert('Erreur auto-sync : ' + e.message);
+      else breadcrumb(`⚠️ Auto Sync (auto, silencieux) a échoué : ${e?.message}`);
     } finally {
       setAutoSyncing(false);
     }
   };
+
+  // ACTIVATION PAR DÉFAUT (v7.6.463, demandé par Cash) : Auto Sync se
+  // déclenche automatiquement, sans clic, dès qu'une piste voix principale
+  // ET le guide vocal sont tous deux disponibles pour la chanson ouverte.
+  // Une seule fois par piste (via la ref) — ne re-déclenche pas à chaque
+  // re-render, et n'écrase pas un réglage manuel fait ensuite à la main.
+  const autoSyncedTrackIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!project || !audio.vocalGuideUrl || autoSyncing) return;
+    const mainTrack = project.tracks.find((t: any) => t.trackIndex === 0 && !t.isGenerated);
+    if (!mainTrack) return;
+    if (autoSyncedTrackIdRef.current === mainTrack.id) return;
+    autoSyncedTrackIdRef.current = mainTrack.id;
+    handleAutoSync(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.tracks?.find((t: any) => t.trackIndex === 0 && !t.isGenerated)?.id, audio.vocalGuideUrl]);
 
   if (screen === 'mixer' && selected && project) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><MixerScreen selected={selected} project={project} playingId={audio.playingId} isMixing={isMixing} mixProgress={mixProgress} mixLabel={mixLabel} mixDone={mixDone} isOnline={offline.isOnline} uploading={uploading} uploadDone={uploadDone} playRef={audio.playRef} instBlob={mixerInstBlob} hasInst={!!mixerInstBlob} instOffsetMs={audio.instOffsetMs} takeSlot={takeSlot} previewInstVol={audio.previewInstVol} onPreviewInstVol={audio.setPreviewInstVol} onInstOffset={applyInstOffset} onAutoSync={handleAutoSync} autoSyncing={autoSyncing} onBack={() => setScreen('record')} onGoSongs={() => setScreen('songs')} onAddTrack={() => setScreen('record')} onPlay={audio.playRecording} onMute={handleMuteTrack} onSolo={handleSoloTrack} onVolume={handleVolumeTrack} onPan={handlePanTrack} onDelete={handleDeleteTrack} onMix={(ids) => handleMix(ids)} onPlayMix={() => project?.mixedDataUrl && audio.playMix(project.mixedDataUrl)} onMasterize={async (vocalBlob, _) => { const ib = await getInstBlob(); handleMasterize(vocalBlob, ib); }} onUploadMix={handleUploadMix} onGoComp={(takes) => { setCompTakes(takes); setScreen('comp'); }} onProjectUpdate={(up) => { setProject(up); studioService.saveProject(up); const needsReload = up.tracks.some(t => !t.dataUrl && !String(t.dataUrl ?? '').startsWith('opfs:')); if (needsReload) reloadRecordings(); }} /></>;
   if (screen === 'record' && selected) return <><DebugPanel debugLog={debugLog} onClear={() => setDebugLog([])} /><RecordScreen selected={selected} project={project} currentPreset={currentPreset} reverb={reverb} isRecording={recorder.isRecording} isSaving={recorder.isSaving} duration={recorder.duration} analyser={recorder.analyser} vuLevel={recorder.vuLevel} monitoring={recorder.monitoring} permError={recorder.permError} httpsUrl={offline.httpsUrl} inputGain={recorder.inputGain} onInputGainChange={recorder.setInputGain} monitorVol={recorder.monitorVol} onMonitorVolChange={recorder.setMonitorVol} recInstVol={recorder.recInstVol} onRecInstVolChange={recorder.setRecInstVol} instUrl={audio.instUrl} instLoading={audio.instLoading} instCached={audio.instCached} vocalGuideUrl={audio.vocalGuideUrl} vocalLoading={audio.vocalLoading} vocalCached={audio.vocalCached} vocalGuideVol={audio.vocalGuideVol} showLyrics={showLyrics} instRef={audio.instRef} vocalGuideRef={audio.vocalGuideRef} getInstPlaybackTime={audio.getInstPlaybackTime} onRefreshSong={handleRefreshSong} onPreWarmMic={recorder.preWarmMic} onBack={() => { if (isPreviewingRef.current) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); try { (window as any).__instBufSrc?.stop(); } catch {} (window as any).__instBufSrc = null; (window as any).__instCtxActive = false; try { (window as any).__vocalBufSrc?.stop(); } catch {} (window as any).__vocalBufSrc = null; isPreviewingRef.current = false; setIsPreviewing(false); } setScreen('songs'); clearSongMemory(); setSelected(null); }} onGoMixer={() => { if (isPreviewingRef.current) { audio.instRef.current?.pause(); audio.vocalGuideRef.current?.pause(); try { (window as any).__instBufSrc?.stop(); } catch {} (window as any).__instBufSrc = null; (window as any).__instCtxActive = false; try { (window as any).__vocalBufSrc?.stop(); } catch {} (window as any).__vocalBufSrc = null; isPreviewingRef.current = false; setIsPreviewing(false); } setScreen('mixer'); }} onPresetChange={setCurrentPreset} onReverbChange={setReverb} takeSlot={takeSlot} onTakeSlotChange={handleTakeSlotChange} slotTakes={slotTakes} onSlotGuide={handleSlotGuide} slotGuideActive={slotGuideActive}
