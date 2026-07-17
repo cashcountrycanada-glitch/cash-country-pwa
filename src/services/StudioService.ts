@@ -146,6 +146,7 @@ export interface TrackProject {
   tracks: MobileRecording[]; takes?: Take[]; compRegions?: Region[];
   mixedDataUrl?: string; sections?: any[]; suggestedKey?: string;
   activeManualSlots?: Record<number, 'A'|'B'|'C'>; // slot actif par trackIndex pour harmonies manuelles (2-5)
+  instOffsetMs?: number; // décalage sync instrumental/voix — persisté pour ne pas se perdre au rechargement
 }
 const STORAGE_KEY = 'cash_studio_recordings';
 
@@ -1793,10 +1794,18 @@ export const studioService = {
         // plafonné pour ne jamais dépasser la voix principale — l'effet
         // "plusieurs chanteurs proches" recherché doit s'entendre clairement,
         // surtout dans les sections denses (refrains).
+        // AJUSTEMENT DOUX (v7.6.454, conseil Tunee — "harmonies légèrement
+        // trop fort partout") : boost réduit de 40% → 25%, plafond 0.85 →
+        // 0.76 (~-1dB). Le Double tracking (piste 1) n'est pas concerné —
+        // seules les harmonies pitchées (2-5) sont ajustées.
+        // AJUSTEMENT DOUX (v7.6.455, conseil Cash — "Double tracking
+        // légèrement trop fort aussi") : boost réduit de 60% → 45%,
+        // plafond 0.95 → 0.85 (~-1dB), même ampleur que l'ajustement
+        // harmonies (v7.6.454) juste au-dessus.
         const baseGain = isDoubleTrack
-          ? Math.min(0.95, (m.track.gain ?? 1.0) * 1.6)
+          ? Math.min(0.85, (m.track.gain ?? 1.0) * 1.45)
           : isHarmonyLayer
-          ? Math.min(0.85, (m.track.gain ?? 1.0) * 1.4)
+          ? Math.min(0.76, (m.track.gain ?? 1.0) * 1.25)
           : Math.min(1.0, m.track.gain ?? 1.0);
 
         if (isHarmonyLayer && sections.length > 0) {

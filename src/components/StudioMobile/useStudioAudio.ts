@@ -75,6 +75,7 @@ interface AudioResult {
   setPreviewInstVol: (v: number) => void;
   adjustInstOffset: (ms: number) => void;
   instOffsetMs: number;
+  setInstOffsetMs: (ms: number) => void;
   autoDetectOffset: (voiceDataUrl: string) => Promise<number | null>;
   playRecording:    (rec: MobileRecording) => Promise<void>;
   stopPlayback:     () => void;
@@ -699,7 +700,7 @@ export function useStudioAudio(selected: Song | null): AudioResult {
     instCached, vocalCached,
     instRef, vocalGuideRef, playRef, vocalVolRef,
     setVocalGuideVol: updateVocalVol,
-    previewInstVol, setPreviewInstVol, adjustInstOffset, instOffsetMs, autoDetectOffset,
+    previewInstVol, setPreviewInstVol, adjustInstOffset, instOffsetMs, setInstOffsetMs, autoDetectOffset,
     playRecording, stopPlayback, playMix,
     getInstPlaybackTime,
   };
