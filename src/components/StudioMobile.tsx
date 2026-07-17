@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.455';
+const BUILD_VERSION = 'v7.6.459';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -645,7 +645,7 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
     // couplet peut finir plus fort qu'un refrain si le boost global change.
     const COUPLET_FACTOR = 0.75; // ≈ -2.5 dB sous le baseGain du refrain
     const baseGainFor = (trackIndex: number, gain: number) =>
-      trackIndex === 1 ? Math.min(0.85, gain * 1.45) : Math.min(0.76, gain * 1.25);
+      trackIndex === 1 ? Math.min(0.72, gain * 1.20) : Math.min(0.70, gain * 1.15);
     const sectionsWithSofterCouplets = (proj.sections ?? []).map((s: any) => {
       if (s.label !== 'Couplet' || !s.activeHarmonies?.length) return s;
       const hv = { ...(s.harmonyVolumes ?? {}) };

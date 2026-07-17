@@ -402,6 +402,52 @@ async function mixVocalWithInst(
   return mixed;
 }
 
+// VRAI de-esser dynamique (v7.6.459, demandé par Cash après le refus de la
+// coupe EQ statique v7.6.457/458 — "je ne veux pas briser ma voix").
+// Contrairement à une coupe EQ fixe, celui-ci ne touche QUE la bande
+// sibilante (~5.5kHz+) et SEULEMENT quand son énergie dépasse un seuil —
+// le reste de la voix (corps, présence, articulation) n'est jamais touché.
+// Méthode : filtre passe-bas un pôle → soustraction = bande haute isolée →
+// enveloppe (attaque 2ms très rapide, release 60ms doux, évite le pompage)
+// → réduction proportionnelle (ratio doux) UNIQUEMENT sur la bande haute,
+// plafonnée à -7dB max pour ne jamais étouffer la voix même sur un pic.
+async function applyDeEsser(data: Float32Array, sr: number = 44100): Promise<Float32Array> {
+  const fc = 5500; // coupure de la bande sibilante — sous ça, jamais touché
+  const rc = 1 / (2 * Math.PI * fc);
+  const dt = 1 / sr;
+  const alphaLP = dt / (rc + dt);
+
+  const attackSamp  = Math.max(1, Math.floor(0.002 * sr)); // 2ms — réagit vite au "s"
+  const releaseSamp = Math.max(1, Math.floor(0.06  * sr)); // 60ms — relâche en douceur
+  const alphaAttack  = 1 - Math.exp(-1 / attackSamp);
+  const alphaRelease = 1 - Math.exp(-1 / releaseSamp);
+
+  const threshold = Math.pow(10, -24 / 20); // seuil en amplitude linéaire
+  const ratio = 3.5;                         // doux, pas un hard-clip des aigus
+  const minGain = Math.pow(10, -7 / 20);     // plancher -7dB — jamais plus bas
+
+  let lowPrev = 0, env = 0;
+  const out = new Float32Array(data.length);
+  for (let i = 0; i < data.length; i++) {
+    const x = data[i];
+    lowPrev = lowPrev + alphaLP * (x - lowPrev);   // bande basse (jamais touchée)
+    const high = x - lowPrev;                       // bande sibilante isolée
+    const rectified = Math.abs(high);
+    const alphaEnv = rectified > env ? alphaAttack : alphaRelease;
+    env = env + alphaEnv * (rectified - env);
+
+    let gain = 1.0;
+    if (env > threshold) {
+      const overDb = 20 * Math.log10(env / threshold);
+      const reducedDb = overDb - overDb / ratio; // ce qu'on retire (ratio doux)
+      gain = Math.max(minGain, Math.pow(10, -reducedDb / 20));
+    }
+    out[i] = lowPrev + high * gain; // seule la bande haute est réduite
+    if (i % CHUNK_YIELD_SAMPLES === 0 && i > 0) await yieldToMain();
+  }
+  return out;
+}
+
 // Tape saturation douce — signature chaleur analogique
 // Applique une distorsion asymétrique légère qui enrichit les harmoniques
 async function applySaturation(data: Float32Array, drive: number = 0.3): Promise<Float32Array> {
@@ -523,7 +569,7 @@ async function stereoWiden(buf: AudioBuffer, widthGain: number = 1.3): Promise<A
 // traitement ici, et l'instrumental FLAC est déjà masterisé (Tunee) avant
 // d'être séparé de la voix, donc il n'a pas besoin (et ne doit pas recevoir)
 // une deuxième couche d'EQ/compression/de-esser/élargissement stéréo.
-async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBuffer> {
+async function masterAudio(buf: AudioBuffer, s: MasterSettings, deEsserOn: boolean = false): Promise<AudioBuffer> {
 
   // ── ÉTAPE 1 : Traitement canal par canal (noise gate + saturation) ──────────
   const sr  = buf.sampleRate;
@@ -539,6 +585,7 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
     data = await applyNoiseGate(data, -65, 150, sr);
     const driveAmt = 0.12 + Math.abs(s.lowGain) * 0.01;
     data = await applySaturation(data, driveAmt);
+    if (deEsserOn) data = await applyDeEsser(data, sr);
     step1Buf.getChannelData(c).set(data);
   }
   const s1src = offline1.createBufferSource(); s1src.buffer = step1Buf;
@@ -554,9 +601,13 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   const eq3 = offline1.createBiquadFilter(); eq3.type = 'peaking';   eq3.frequency.value = 3500; eq3.Q.value = 0.8; eq3.gain.value = s.midGain * 0.7; // présence voix
   const eq4 = offline1.createBiquadFilter(); eq4.type = 'highshelf'; eq4.frequency.value = 9000; eq4.gain.value = s.highGain;
 
-  // De-esser dynamique simulé — double compresseur sur les sibilantes
-  const deEss  = offline1.createBiquadFilter(); deEss.type = 'peaking'; deEss.frequency.value = 7500; deEss.Q.value = 3.0; deEss.gain.value = -3.0;
-  const deEss2 = offline1.createBiquadFilter(); deEss2.type = 'peaking'; deEss2.frequency.value = 9500; deEss2.Q.value = 2.0; deEss2.gain.value = -1.5;
+  // De-esser RETIRÉ (v7.6.458, refus catégorique de Cash — "je ne veux pas
+  // briser ma voix"). Ce n'était pas un vrai de-esser dynamique, juste une
+  // coupe EQ fixe sur toute la voix à 7.5/9.5kHz — ça enlevait de l'air et
+  // du naturel en continu, pas seulement sur les sibilantes. Retiré tant
+  // qu'un vrai de-esser dynamique (détection d'énergie HF + réduction de
+  // gain conditionnelle, sur le même principe qu'applyNoiseGate) n'est pas
+  // construit et validé séparément.
 
   // Compression douce (glue, avant la séparation en bandes) — ratio bas,
   // attaque lente, garde les transitoires tout en collant légèrement le mix
@@ -567,7 +618,7 @@ async function masterAudio(buf: AudioBuffer, s: MasterSettings): Promise<AudioBu
   comp1.release.value   = s.release / 1000; comp1.knee.value = 10;
 
   s1src.connect(hpf); hpf.connect(eq1); eq1.connect(eq2); eq2.connect(eq3); eq3.connect(eq4);
-  eq4.connect(deEss); deEss.connect(deEss2); deEss2.connect(comp1);
+  eq4.connect(comp1); // de-esser retiré (v7.6.458) — eq4 va direct au compresseur
 
   // ── COMPRESSION MULTIBANDE (basse/médium/aigu) ──────────────────────────
   // La vraie différence entre un moteur "single-band" et un mastering
@@ -1029,6 +1080,8 @@ export default function MasteringEngine({
   const [preset, setPreset]               = useState('cash_country');
   const [activeCategory, setActiveCategory] = useState('country');
   const [settings, setSettings]           = useState<MasterSettings>(PRESETS.cash_country.settings);
+  // De-esser dynamique (v7.6.459) — désactivé par défaut, Cash l'active lui-même
+  const [deEsserOn, setDeEsserOn]          = useState<boolean>(false);
   const [showAdvanced, setShowAdvanced]   = useState(false);
   const [instGainDb, setInstGainDb]       = useState(-3); // niveau instrumental en dB relatif à la voix
 
@@ -1110,7 +1163,7 @@ export default function MasteringEngine({
 
       // 2. Masteriser la voix seule (Mode A)
       setProgressLabel('Masterisation voix...'); setProgress(30);
-      const vocalM = await masterAudio(vocalRaw, settings);
+      const vocalM = await masterAudio(vocalRaw, settings, deEsserOn);
       // FIX "voix horrible" (v7.6.428) : vocalRaw n'est PLUS libéré ici. Avant
       // ce correctif, le Mode B (mix complet) réutilisait vocalM — la voix
       // DÉJÀ masterisée (EQ + de-esser + saturation + compression multibande +
@@ -1610,6 +1663,14 @@ export default function MasteringEngine({
                   className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer accent-red-500"/>
                 <span className="text-[10px] text-red-400 font-black w-14 text-right shrink-0">{db(settings.ceiling)}</span>
               </div>
+              <label className="flex items-center gap-3 mt-3 pt-3 border-t border-white/5 cursor-pointer active:opacity-70">
+                <input type="checkbox" checked={deEsserOn}
+                  onChange={e => setDeEsserOn(e.target.checked)}
+                  className="w-4 h-4 rounded accent-red-500 shrink-0"/>
+                <span className="text-[10px] text-zinc-400 font-black flex-1">
+                  De-esser dynamique <span className="text-zinc-600 font-normal normal-case">(réduit les "s" seulement, jamais le reste)</span>
+                </span>
+              </label>
             </div>
           )}
         </div>
