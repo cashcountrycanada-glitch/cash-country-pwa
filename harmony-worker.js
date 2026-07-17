@@ -339,6 +339,31 @@ function applyTimbreColor(signal,fcHz,gainDB,Q,sr){
   return signal; // in-place
 }
 
+// ═══════════════════════════════════════════════════════════════
+// PASSE-HAUT PAR HARMONIE (v7.6.467, recherche + retour Cash — "quand on
+// les entend elles nuisent, quand on ne les entend pas elles ne renforcent
+// pas"). Cause identifiée : les harmonies occupaient les MÊMES basses/bas-
+// médiums que la voix lead, donc dès qu'elles étaient assez fortes pour
+// s'entendre, elles floutaient la voix au lieu de l'épaissir — au lieu de
+// se loger dans leur propre espace fréquentiel. Ce passe-haut retire le
+// grave inutile de chaque harmonie (elle n'a pas besoin de porter le corps
+// grave — la voix lead s'en charge déjà), pour qu'elle reste un vrai
+// "renfort" au lieu d'un concurrent. Biquad RBJ standard, in-place.
+function applyHighpass(signal, fcHz, Q, sr) {
+  if (fcHz <= 0) return signal;
+  const w0 = 2 * Math.PI * fcHz / sr;
+  const cosW = Math.cos(w0), sinW = Math.sin(w0), alpha = sinW / (2 * Q);
+  const b0 = (1 + cosW) / 2, b1 = -(1 + cosW), b2 = (1 + cosW) / 2;
+  const a0 = 1 + alpha, a1 = -2 * cosW, a2 = 1 - alpha;
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < signal.length; i++) {
+    const x0 = signal[i] || 0;
+    const y0 = (b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
+    signal[i] = y0; x2 = x1; x1 = x0; y2 = y1; y1 = y0;
+  }
+  return signal; // in-place
+}
+
 // FIX OOM : in-place (zéro allocation)
 function applyTimingOffset(signal,offsetMs,sr){
   if(offsetMs<=0) return signal;
@@ -584,10 +609,10 @@ function doubleTrack(mono,sr){
 // reverbWet : réduit — le signal a déjà 861ms de reverb naturelle, évite la boue
 // chorusDepth : réduit — idem, la reverb fait déjà le travail de widening
 const LAYER_PROFILES={
-  2:{pitchVar:1.5,timingMs:18,timbreHz:2800,timbreDb:+1.2,pan:-0.30,chorusRate:0.95,chorusDepth:0.003,reverbWet:0.08},
-  3:{pitchVar:2.5,timingMs:32,timbreHz:3400,timbreDb:-0.8,pan:+0.35,chorusRate:1.10,chorusDepth:0.004,reverbWet:0.10},
-  4:{pitchVar:1.2,timingMs:12,timbreHz:250, timbreDb:+1.8,pan:+0.10,chorusRate:0.80,chorusDepth:0.002,reverbWet:0.06},
-  5:{pitchVar:2.0,timingMs:26,timbreHz:1800,timbreDb:+0.6,pan:-0.15,chorusRate:1.25,chorusDepth:0.003,reverbWet:0.09},
+  2:{pitchVar:1.5,timingMs:18,timbreHz:2800,timbreDb:+1.2,pan:-0.30,chorusRate:0.95,chorusDepth:0.003,reverbWet:0.08,hpfHz:190},
+  3:{pitchVar:2.5,timingMs:32,timbreHz:3400,timbreDb:-0.8,pan:+0.35,chorusRate:1.10,chorusDepth:0.004,reverbWet:0.10,hpfHz:130},
+  4:{pitchVar:1.2,timingMs:12,timbreHz:250, timbreDb:+1.8,pan:+0.10,chorusRate:0.80,chorusDepth:0.002,reverbWet:0.06,hpfHz:210},
+  5:{pitchVar:2.0,timingMs:26,timbreHz:1800,timbreDb:+0.6,pan:-0.15,chorusRate:1.25,chorusDepth:0.003,reverbWet:0.09,hpfHz:140},
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -694,6 +719,7 @@ function processSingle(mono, semitones, sampleRate, trackIndex) {
   applyPhraseVariation(sig, sampleRate, profile.pitchVar, seed);
   applyOrganicJitter(sig, sampleRate, seed ^ 0xABCD1234);
   applyTimbreColor(sig, profile.timbreHz, profile.timbreDb, 1.3, sampleRate);
+  applyHighpass(sig, profile.hpfHz, 0.707, sampleRate);
   applyTimingOffset(sig, profile.timingMs, sampleRate);
   applyPlateReverb(sig, sampleRate, profile.reverbWet);
 

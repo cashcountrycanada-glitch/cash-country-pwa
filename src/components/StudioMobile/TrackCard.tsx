@@ -43,6 +43,12 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
   const activeFx   = FX_PRESETS.find(f => f.id === activeFxId) ?? null;
   const [showFxPanel, setShowFxPanel]   = useState(false);
   const [reverbOverrides, setReverbOverrides] = useState<Record<string, number>>({});
+  // Niveau d'auto-tune ajustable par preset (v7.6.466, demandé par Cash) —
+  // même mécanisme que reverbOverrides : réglable sans être coincé sur la
+  // valeur fixe du preset. Défaut 0.30/slow (= "Correction Douce") pour tous
+  // les presets qui n'ont pas encore d'auto-tune — c'est le niveau jugé
+  // naturel-mais-pro dans le preset dédié existant.
+  const [autotuneOverrides, setAutotuneOverrides] = useState<Record<string, number>>({});
   const [applyingFx, setApplyingFx]     = useState(false);
   const [downloadingTrack, setDownloadingTrack] = useState(false);
 
@@ -577,6 +583,39 @@ export default function TrackCard({ track, allTracks, playingId, onPlay, onMute,
                           )}
                         </div>
                       )}
+                      {/* Slider Auto-Tune ajustable (v7.6.466) — disponible sur
+                          TOUS les presets, pas seulement ceux qui en ont déjà
+                          un de base. Défaut 0.30/slow si le preset n'en a pas
+                          encore — c'est le niveau "Correction Douce", jugé
+                          naturel-mais-pro. */}
+                      <div className="pt-1">
+                        <div className="flex justify-between mb-1">
+                          <span className="text-[9px] text-zinc-600 font-black uppercase">🎯 Auto-Tune</span>
+                          <span className="text-[9px] font-black" style={{ color: fx.color }}>
+                            {Math.round((autotuneOverrides[fx.id] ?? fx.autotune ?? 0.30) * 100)}%
+                          </span>
+                        </div>
+                        <input type="range" min="0" max="0.7" step="0.05"
+                          value={autotuneOverrides[fx.id] ?? fx.autotune ?? 0.30}
+                          onChange={e => setAutotuneOverrides(prev => ({ ...prev, [fx.id]: parseFloat(e.target.value) }))}
+                          className="w-full h-1 rounded-full appearance-none cursor-pointer"
+                          style={{ accentColor: fx.color }}/>
+                        <div className="flex justify-between mt-0.5">
+                          <span className="text-[7px] text-zinc-700">0% = voix brute</span>
+                          <span className="text-[7px] text-zinc-700">70% = très serré</span>
+                        </div>
+                        {(() => {
+                          const currentVal = autotuneOverrides[fx.id] ?? fx.autotune ?? 0.30;
+                          const changed = currentVal !== (fx.autotune ?? 0.30);
+                          return changed ? (
+                            <button onClick={() => handleApplyFx({ ...fx, autotune: currentVal, autotuneSpeed: fx.autotuneSpeed ?? 'slow' })}
+                              className="mt-1.5 w-full py-1 rounded-lg text-[9px] font-black uppercase"
+                              style={{ background: fx.color + '20', color: fx.color }}>
+                              Appliquer avec cet Auto-Tune
+                            </button>
+                          ) : null;
+                        })()}
+                      </div>
                     </div>
                   )}
                 </div>

@@ -9,7 +9,7 @@ CORRECTIFS MAJEURS :
 import React, { useState, useEffect, useRef } from 'react';
 import { studioService, ReverbType, MobileRecording, TrackProject, Take } from '../services/StudioService';
 import { studioOfflineDB } from '../services/StudioOfflineDB';
-import { Song, SongType } from '../types';
+import { Song, SongType, TrackType } from '../types';
 import { Screen, TRACK_PRESETS, TrackPreset } from './StudioMobile/studio.types';
 import { useStudioAudio }    from './StudioMobile/useStudioAudio';
 import { useStudioOffline }  from './StudioMobile/useStudioOffline';
@@ -22,7 +22,7 @@ import CompEditor      from './StudioMobile/CompEditor';
 import MasteringEngine, { MasteringProps } from './StudioMobile/MasteringEngine';
 
 interface Props { songs?: Song[]; }
-const BUILD_VERSION = 'v7.6.464';
+const BUILD_VERSION = 'v7.6.469';
 
 function ModeToggleButton() {
   const [autonomous, setAutonomous] = React.useState<boolean>(
@@ -1396,24 +1396,29 @@ export default function StudioMobile({ songs: propSongs = [] }: Props) {
   // FIX même bug que hasInst dans MixerScreen (v7.6.412) : audio.instUrl reflète
   // l'état du lecteur, pas la présence réelle du fichier. On vérifie l'IDB direct.
   const getInstBlob = async (): Promise<Blob | null> => { try { return await studioOfflineDB.getAudio(`inst_${selected?.id}`); } catch { return null; } };
-  // FIX "case Guide vocal toujours désactivée" (v7.6.464, repéré par Cash sur
-  // capture d'écran) : cette fonction ne regardait QUE le cache hors-ligne
-  // local (IndexedDB, clé vocal_<id>), jamais rempli automatiquement pour
-  // toutes les chansons — contrairement à l'instrumental qui a son propre
-  // useEffect de téléchargement à la demande. Résultat : la case restait
-  // désactivée même quand le fichier était bel et bien accessible par le
-  // réseau (la preuve : Auto Sync, qui utilise CETTE autre source, marchait).
-  // Fallback ajouté : si absent du cache local, on va chercher directement
-  // audio.vocalGuideUrl — exactement la même source que l'Auto Sync utilise
-  // déjà avec succès, donc les deux fonctionnalités sont maintenant cohérentes.
+  // FIX v7.6.465 (toujours indisponible après le fix précédent) : mon fetch()
+  // direct sur vocalGuideUrl était fragile — probablement le même souci de
+  // redirection cross-origin iOS Safari que le reste de l'app contourne déjà
+  // via le proxy serveur (voir downloadStem/tryUrls dans useStudioOffline.ts).
+  // Cette fois, j'utilise le VRAI mécanisme de téléchargement de stems déjà
+  // éprouvé (cacheSongForOffline → downloadStem → tryUrls avec fallbacks),
+  // le même qui télécharge l'instrumental avec succès, plutôt que de refaire
+  // un fetch() maison.
   const getVocalGuideBlob = async (): Promise<Blob | null> => {
+    if (!selected) return null;
     try {
-      const cached = await studioOfflineDB.getAudio(`vocal_${selected?.id}`);
+      const cached = await studioOfflineDB.getAudio(`vocal_${selected.id}`);
       if (cached) return cached;
     } catch {}
-    if (audio.vocalGuideUrl) {
-      try { return await fetch(audio.vocalGuideUrl).then(r => r.blob()); }
-      catch (e: any) { breadcrumb(`⚠️ getVocalGuideBlob fallback réseau a échoué: ${e?.message}`); }
+    const hasVocalVersion = selected.versions?.some((v: any) => v.trackType === TrackType.STEM_VOCAL);
+    if (!hasVocalVersion) { breadcrumb(`⚠️ getVocalGuideBlob : aucun stem vocal référencé pour ${selected.id}`); return null; }
+    if (!offline.cachingId) {
+      try {
+        breadcrumb(`⬇️ getVocalGuideBlob : téléchargement du guide vocal manquant pour ${selected.id}`);
+        await offline.cacheSongForOffline(selected, apiSongs, false);
+        const nowCached = await studioOfflineDB.getAudio(`vocal_${selected.id}`);
+        if (nowCached) return nowCached;
+      } catch (e: any) { breadcrumb(`⚠️ getVocalGuideBlob téléchargement a échoué: ${e?.message}`); }
     }
     return null;
   };

@@ -285,6 +285,96 @@ async function decodeBlob(blob: Blob): Promise<AudioBuffer> {
 
 // Mixer vocal + instrumental avec balance pro
 // Approche : normaliser les deux séparément, puis mixer avec ratio fixe voix/inst
+// PLATE REVERB — portée depuis harmony-worker.js (même algorithme, même
+// "pièce" acoustique que les harmonies) — v7.6.467, pour donner à la voix
+// lead une touche de la MÊME reverb que les harmonies, sans reconstruire le
+// système de bus partagé abandonné (voir historique v7.6.435/449/450).
+// In-place, mix dry/wet directement dans le signal.
+function applyPlateReverb(signal: Float32Array, sr: number, dryWet: number): Float32Array {
+  if (dryWet <= 0) return signal;
+  const len = signal.length;
+  const erTaps = [
+    {d:0.0043,g:0.55},{d:0.0079,g:-0.48},{d:0.0120,g:0.42},
+    {d:0.0178,g:-0.36},{d:0.0235,g:0.30},{d:0.0302,g:-0.25},
+    {d:0.0378,g:0.20},{d:0.0441,g:-0.16},{d:0.0520,g:0.12},
+    {d:0.0601,g:-0.09}
+  ].map(t=>({d:Math.max(1,Math.floor(t.d*sr)),g:t.g}));
+  const maxER = Math.max(...erTaps.map(t=>t.d))+1;
+  const erBuf = new Float32Array(maxER);
+  let erPtr = 0;
+  const combD = [0.0307,0.0379,0.0421,0.0451].map(d=>Math.max(1,Math.floor(d*sr)));
+  const combG = [0.805,0.827,0.783,0.764];
+  const combBufs = combD.map(d=>new Float32Array(d));
+  const combPtrs = new Int32Array(4);
+  const apD = [0.0127,0.0093].map(d=>Math.max(1,Math.floor(d*sr)));
+  const apG = [0.7,0.7];
+  const apBufs = apD.map(d=>new Float32Array(d));
+  const apPtrs = new Int32Array(2);
+  const preD = Math.max(1,Math.floor(0.010*sr));
+  const preBuf = new Float32Array(preD);
+  let prePtr = 0;
+  const dw = Math.min(0.35, Math.max(0, dryWet));
+  const dry = 1 - dw;
+  for (let i = 0; i < len; i++) {
+    const x = signal[i]||0;
+    const pre = preBuf[prePtr];
+    preBuf[prePtr] = x;
+    prePtr = (prePtr+1)%preD;
+    erBuf[erPtr%maxER] = pre;
+    let er = 0;
+    for (const t of erTaps) er += erBuf[(erPtr-t.d+maxER*2)%maxER]*t.g;
+    erPtr = (erPtr+1)%maxER;
+    let late = 0;
+    for (let c = 0; c < 4; c++) {
+      const buf=combBufs[c], ptr=combPtrs[c], d=combD[c];
+      const out=buf[ptr];
+      buf[ptr]=er+out*combG[c];
+      combPtrs[c]=(ptr+1)%d;
+      late+=out*0.25;
+    }
+    for (let a = 0; a < 2; a++) {
+      const buf=apBufs[a], ptr=apPtrs[a], d=apD[a];
+      const stored=buf[ptr];
+      const inp=a===0?late:stored;
+      const fwd=inp-apG[a]*stored;
+      buf[ptr]=fwd+apG[a]*stored;
+      apPtrs[a]=(ptr+1)%d;
+      late=stored+apG[a]*fwd;
+    }
+    signal[i] = x*dry + (er*0.4+late*0.6)*dw;
+  }
+  return signal; // in-place
+}
+
+// Ajoute une TOUCHE de reverb (même pièce que les harmonies) à la voix lead,
+// SANS dupliquer son signal sec déjà présent dans le mix vocal complet.
+// Principe : on calcule ce que le passage par la reverb CHANGE (delta),
+// et on ajoute seulement ce delta au mix existant — pas besoin de connaître
+// le gain exact utilisé au mixage d'origine, et ça n'affecte pas le niveau
+// du reste du mix (harmonies déjà traitées, elles, à la génération).
+async function applyLeadReverbTouch(vocalMixBuf: AudioBuffer, leadOnlyBuf: AudioBuffer, wetAmount: number = 0.05): Promise<AudioBuffer> {
+  const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  try {
+    const nCh = vocalMixBuf.numberOfChannels;
+    const len = vocalMixBuf.length;
+    const out = ctx.createBuffer(nCh, len, vocalMixBuf.sampleRate);
+    for (let c = 0; c < nCh; c++) {
+      const mixData = new Float32Array(vocalMixBuf.getChannelData(Math.min(c, vocalMixBuf.numberOfChannels-1)));
+      const leadCh  = Math.min(c, leadOnlyBuf.numberOfChannels-1);
+      const leadDry = leadOnlyBuf.getChannelData(leadCh);
+      const leadLen = Math.min(len, leadDry.length);
+      const leadWet = new Float32Array(leadDry.slice(0, leadLen));
+      applyPlateReverb(leadWet, vocalMixBuf.sampleRate, wetAmount);
+      const result = mixData; // copie déjà faite via new Float32Array(...)
+      for (let i = 0; i < leadLen; i++) {
+        result[i] += leadWet[i] - leadDry[i]; // seulement le delta introduit par la reverb
+      }
+      out.getChannelData(c).set(result);
+    }
+    return out;
+  } finally { try { ctx.close(); } catch {} }
+}
+
 async function mixVocalWithInst(
   vocalBuf: AudioBuffer,
   instBuf:  AudioBuffer,
@@ -1259,6 +1349,27 @@ export default function MasteringEngine({
         // avec l'instrumental — jamais avant, au niveau du Mixage (voir
         // commentaire sur sendBusBlob plus haut). Wet amount aussi réduit
         let vocalForMix: AudioBuffer = vocalRaw!;
+        // TOUCHE DE REVERB PARTAGÉE SUR LA VOIX LEAD (v7.6.467, demandé par
+        // Cash après vérification des pratiques pro) : les harmonies ont déjà
+        // leur reverb cuite à la génération, mais la voix lead était
+        // complètement sèche depuis le retrait du bus partagé (v7.6.450) —
+        // ce décalage ("lead dans une pièce différente des harmonies") est
+        // une cause plausible de "les harmonies ne collent pas". On ajoute
+        // ici une TOUCHE très légère (même algorithme de reverb que les
+        // harmonies, ~5% wet) — pas le système de bus complet qui avait
+        // causé l'écho horrible, juste de quoi rapprocher les deux espaces.
+        // N'affecte QUE la voix lead (delta ajouté, pas de duplication —
+        // voir applyLeadReverbTouch plus haut) ; s'il n'y a pas de piste lead
+        // séparée disponible, on continue sans (dégradation silencieuse).
+        if (leadOnlyBlob) {
+          try {
+            const leadRaw = await decodeBlob(leadOnlyBlob);
+            vocalForMix = await applyLeadReverbTouch(vocalForMix, leadRaw, 0.05);
+            try { (window as any).__breadcrumb?.(`🎤 Touche de reverb ajoutée sur la voix lead (5%, même pièce que les harmonies)`); } catch {}
+          } catch (e: any) {
+            try { (window as any).__breadcrumb?.(`⚠️ applyLeadReverbTouch a échoué, voix lead reste sèche: ${e?.message}`); } catch {}
+          }
+        }
         // FIX "on revient à la base" (v7.6.450) : toute la chaîne custom
         // construite au fil des rounds Tunee (reverb courte, compresseur,
         // EQ 3-étages, glue final) est RETIRÉE ici — y compris le glue
