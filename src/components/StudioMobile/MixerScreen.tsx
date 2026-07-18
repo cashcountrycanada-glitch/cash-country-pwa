@@ -1039,6 +1039,26 @@ export default function MixerScreen({
       // fraîche de masterisation ira chercher exactement cette clé.
       await studioOfflineDB.saveAudio(`master_pending_${project.id}`, masterBlob, { type: 'master_pending', savedAt: Date.now() });
       if (instBlob) await studioOfflineDB.saveAudio(`master_pending_inst_${project.id}`, instBlob, { type: 'master_pending_inst', savedAt: Date.now() });
+      // FIX "case guide vocal non cochable dans le Mastering" (v7.6.470) :
+      // le guide vocal fonctionnait dans RecordScreen mais jamais dans
+      // Mastering, pour une raison structurelle simple : le VRAI chemin de
+      // navigation vers Mastering est une page fraîche (index.tsx
+      // MasteringStandalone, via window.location.href juste plus bas) —
+      // PAS le rendu <MasteringEngine> présent dans StudioMobile.tsx (qui,
+      // lui, récupère bien vocalGuideBlob via getVocalGuideBlob(), mais
+      // n'est en réalité jamais affiché puisque handleMasterize navigue
+      // ailleurs avant que ce rendu ne serve). MasteringStandalone ne
+      // récupérait jamais le guide vocal du tout → vocalGuideBlob toujours
+      // null → case à cocher toujours désactivée (disabled={!vocalGuideBlob}
+      // dans MasteringEngine.tsx). Même clé IDB que RecordScreen/
+      // getVocalGuideBlob (`vocal_${songId}`), sauvegardée ici sous une clé
+      // dédiée que MasteringStandalone va chercher (voir index.tsx).
+      try {
+        const guideBlob = await studioOfflineDB.getAudio(`vocal_${selected.id}`).catch(() => null);
+        if (guideBlob && guideBlob.size > 100) {
+          await studioOfflineDB.saveAudio(`master_pending_guide_${project.id}`, guideBlob, { type: 'master_pending_guide', savedAt: Date.now() });
+        }
+      } catch {}
       // FIX "reverb Bus partagé écrase le mix" (v7.6.435) : si le style
       // "Bus partagé" est sélectionné, on sauvegarde AUSSI le bus d'envoi
       // SEC (sans reverb — voir vocalStyle plus haut) sous sa propre clé.

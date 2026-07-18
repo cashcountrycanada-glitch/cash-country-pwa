@@ -138,7 +138,7 @@ function StudioMobileWithSongs() {
 // stockage permanent puis navigue ici via URL (?master=...) — cette page
 // démarre à zéro : aucun état hérité, aucun risque d'interférence.
 function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs, vocalStyle }: { projectId: string; songId: string; hasInst: boolean; instOffsetMs: number; vocalStyle: 'classic' | 'bus' }) {
-  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'error'; vocalBlob?: Blob; instBlob?: Blob | null; sendBusBlob?: Blob | null; leadOnlyBlob?: Blob | null; songTitle?: string; error?: string }>({ status: 'loading' });
+  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'error'; vocalBlob?: Blob; instBlob?: Blob | null; sendBusBlob?: Blob | null; leadOnlyBlob?: Blob | null; vocalGuideBlob?: Blob | null; songTitle?: string; error?: string }>({ status: 'loading' });
 
   useEffect(() => {
     (async () => {
@@ -161,12 +161,18 @@ function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs, vocalSt
         const leadOnlyBlob = vocalStyle === 'bus'
           ? await studioOfflineDB.getAudio(`master_pending_leadonly_${projectId}`).catch(() => null)
           : null;
+        // FIX "case guide vocal non cochable dans le Mastering" (v7.6.470) :
+        // ce chemin (la vraie navigation vers Mastering) ne récupérait
+        // jamais le guide vocal — c'est pour ça que la case restait
+        // toujours grisée (disabled={!vocalGuideBlob} dans MasteringEngine).
+        // Indépendant du style choisi, contrairement aux deux ci-dessus.
+        const vocalGuideBlob = await studioOfflineDB.getAudio(`master_pending_guide_${projectId}`).catch(() => null);
         let songTitle = 'Chanson';
         try {
           const r = await fetch(`/api/songs/${encodeURIComponent(songId)}`);
           if (r.ok) { const s = await r.json(); songTitle = s?.title || s?.name || songTitle; }
         } catch {}
-        setState({ status: 'ready', vocalBlob, instBlob, sendBusBlob, leadOnlyBlob, songTitle });
+        setState({ status: 'ready', vocalBlob, instBlob, sendBusBlob, leadOnlyBlob, vocalGuideBlob, songTitle });
       } catch (e: any) {
         setState({ status: 'error', error: e?.message || String(e) });
       }
@@ -199,6 +205,7 @@ function MasteringStandalone({ projectId, songId, hasInst, instOffsetMs, vocalSt
       vocalBlob={state.vocalBlob!}
       sendBusBlob={state.sendBusBlob ?? null}
       leadOnlyBlob={state.leadOnlyBlob ?? null}
+      vocalGuideBlob={state.vocalGuideBlob ?? null}
       instBlob={state.instBlob ?? null}
       instOffsetMs={instOffsetMs}
       songTitle={state.songTitle || 'Chanson'}

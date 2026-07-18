@@ -1800,10 +1800,15 @@ export const studioService = {
         // seules les harmonies pitchées (2-5) sont ajustées.
         // AJUSTEMENT DOUX (v7.6.460, conseil Cash — encore un peu fort) :
         // nouvelle petite baisse, même répartition que v7.6.456.
+        // AJUSTEMENT (v7.6.470) : mesure précise de l'utilisateur — encore
+        // 3dB de trop. -3dB = ×0.708 en linéaire, appliqué au multiplicateur
+        // ET au plafond des harmonies (1.05→0.74, 0.63→0.45). Double
+        // tracking non touché — non mentionné, seules les harmonies
+        // pitchées (2-5) sont concernées par ce retour.
         const baseGain = isDoubleTrack
           ? Math.min(0.65, (m.track.gain ?? 1.0) * 1.10)
           : isHarmonyLayer
-          ? Math.min(0.63, (m.track.gain ?? 1.0) * 1.05)
+          ? Math.min(0.45, (m.track.gain ?? 1.0) * 0.74)
           : Math.min(1.0, m.track.gain ?? 1.0);
 
         if (isHarmonyLayer && sections.length > 0) {
